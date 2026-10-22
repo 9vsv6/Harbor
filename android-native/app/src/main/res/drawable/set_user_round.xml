@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's user-round settings icon (src/assets/settings-icons/user-round.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M5.5 8a6.5 6.5 0 0 1 13 0c0 4-2.5 6.5-6.5 6.5S5.5 12 5.5 8ZM1.5 22v-2l5-4M22.5 22v-2l-5-4M5.5 22h13" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

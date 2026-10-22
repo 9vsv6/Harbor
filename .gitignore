@@ -78,11 +78,6 @@ src-tauri/gen/android/**/.gradle/
 src-tauri/gen/android/local.properties
 src-tauri/gen/android/.idea/
 
-# Android native shell (Kotlin/Compose, local dev). Not committed yet per
-# direction. Excluded wholesale: ~13k source + Gradle cache files (checksums,
-# executionHistory, build/) were flooding the tree. Remove this line when ready
-# to start tracking the source; the Gradle caches below stay ignored regardless.
-android-native/
 **/.gradle/
 **/gradle/*.lock
 **/*-checksums.bin

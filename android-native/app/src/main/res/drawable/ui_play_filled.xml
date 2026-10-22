@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's play-filled icon (src/assets/ui-icons/play-filled.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="512" android:viewportHeight="512">
+    <path android:fillColor="#FFFFFFFF" android:pathData="m443.166,179.045L157.335,12.378c-27.512-16.032-60.412-16.143-88.007-.279-27.602,15.857-44.087,44.331-44.087,76.164v335.474c0,31.938,16.561,60.453,44.303,76.29,13.676,7.807,28.62,11.703,43.557,11.703,15.356,0,30.711-4.126,44.652-12.358l285.831-168.8c27.121-16.018,43.258-44.387,43.167-75.886-.084-31.492-16.38-59.77-43.585-75.642Z" />
+</vector>

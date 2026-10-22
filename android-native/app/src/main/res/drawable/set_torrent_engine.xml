@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's torrent-engine settings icon (src/assets/settings-icons/torrent-engine.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M2.5,2h4 c0.552,0,1,0.448,1,1v3c0,0.552-0.448,1-1,1h-4c-0.552,0-1-0.448-1-1V3C1.5,2.448,1.948,2,2.5,2z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M17.5,2h4 c0.552,0,1,0.448,1,1v3c0,0.552-0.448,1-1,1h-4c-0.552,0-1-0.448-1-1V3C16.5,2.448,16.948,2,17.5,2z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M10,17h4 c0.552,0,1,0.448,1,1v3c0,0.552-0.448,1-1,1h-4c-0.552,0-1-0.448-1-1v-3C9,17.448,9.448,17,10,17z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M4.5,7v5h15V7 M12,12v5 M9,9h6" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

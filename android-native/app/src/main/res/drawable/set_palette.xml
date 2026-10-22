@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's palette settings icon (src/assets/settings-icons/palette.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M12 2.5a9.5 9.5 0 1 0 0 19h1a2.5 2.5 0 0 0 1.8-4.2 1.6 1.6 0 0 1 1.2-2.8h2a3.5 3.5 0 0 0 3.5-3.5A8.9 8.9 0 0 0 12 2.5Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M6.55,10a0.65,0.65 0 1,0 1.3,0a0.65,0.65 0 1,0 -1.3,0Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M10.35,6.8a0.65,0.65 0 1,0 1.3,0a0.65,0.65 0 1,0 -1.3,0Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M15.35,8a0.65,0.65 0 1,0 1.3,0a0.65,0.65 0 1,0 -1.3,0Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M6.85,15a0.65,0.65 0 1,0 1.3,0a0.65,0.65 0 1,0 -1.3,0Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

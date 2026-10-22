@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's gauge settings icon (src/assets/settings-icons/gauge.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M3.5 21a11 11 0 1 1 17 0h-17ZM12 3v3M4.2 7l2 2M19.8 7l-2 2M2 14h3M19 14h3M12 16l5-5" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M10.5,16a1.5,1.5 0 1,0 3,0a1.5,1.5 0 1,0 -3,0Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

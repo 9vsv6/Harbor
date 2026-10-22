@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's waves settings icon (src/assets/settings-icons/waves.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M1.5 5c3.5-5 7 5 10.5 0s7 5 10.5 0M1.5 12c3.5-5 7 5 10.5 0s7 5 10.5 0M1.5 19c3.5-5 7 5 10.5 0s7 5 10.5 0" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

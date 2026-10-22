@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's torrent-server settings icon (src/assets/settings-icons/torrent-server.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M3.5,2h17 C21.328,2,22,2.672,22,3.5v6c0,0.828-0.672,1.5-1.5,1.5h-17C2.672,11,2,10.328,2,9.5v-6C2,2.672,2.672,2,3.5,2z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M6,6.5h5 M17,6.5h1 M12,11v5 M4,20v-4h16v4 M12,16v4" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

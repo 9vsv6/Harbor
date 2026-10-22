@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's theme-swatches settings icon (src/assets/settings-icons/theme-swatches.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M9,20l10.9-6.3 c0.707-0.395,0.973-1.281,0.6-2l-2-3.5c-0.395-0.707-1.281-0.973-2-0.6L10,11.4 M10,16h11c0.552,0,1,0.448,1,1v4 c0,0.552-0.448,1-1,1H6" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M3.5,2h5 C9.328,2,10,2.672,10,3.5v17c0,0.828-0.672,1.5-1.5,1.5h-5C2.672,22,2,21.328,2,20.5v-17C2,2.672,2.672,2,3.5,2z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M2,8h8 M2,14h8" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

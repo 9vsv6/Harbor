@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's server settings icon (src/assets/settings-icons/server.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M3,2h18a1.5,1.5 0 0 1 1.5,1.5v5a1.5,1.5 0 0 1 -1.5,1.5h-18a1.5,1.5 0 0 1 -1.5,-1.5v-5a1.5,1.5 0 0 1 1.5,-1.5Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M3,14h18a1.5,1.5 0 0 1 1.5,1.5v5a1.5,1.5 0 0 1 -1.5,1.5h-18a1.5,1.5 0 0 1 -1.5,-1.5v-5a1.5,1.5 0 0 1 1.5,-1.5Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M6 6h6M6 18h6" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M17.15,6a0.85,0.85 0 1,0 1.7,0a0.85,0.85 0 1,0 -1.7,0Z" android:fillColor="#FFFFFFFF" />
+    <path android:pathData="M17.15,18a0.85,0.85 0 1,0 1.7,0a0.85,0.85 0 1,0 -1.7,0Z" android:fillColor="#FFFFFFFF" />
+</vector>

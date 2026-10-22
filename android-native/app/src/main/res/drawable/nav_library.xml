@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Harbor's nav glyph (src/assets/nav-icons/library.svg). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="512" android:viewportHeight="512">
+    <path android:fillColor="#FFFFFFFF" android:pathData="m492.768,512c-8.368,0-16.066-5.499-18.48-13.944l-118.392-414.357c-2.91-10.21,2.994-20.85,13.204-23.767,10.245-2.917,20.853,3.001,23.77,13.201l118.392,414.357c2.91,10.21-2.994,20.853-13.204,23.77-1.766.502-3.545.74-5.29.74Z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="m255.999,512c-10.615,0-19.227-8.612-19.227-19.227V78.416c0-10.619,8.612-19.224,19.227-19.224s19.227,8.605,19.227,19.224v414.357c0,10.615-8.612,19.227-19.227,19.227Z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="m137.614,512c-10.615,0-19.227-8.612-19.227-19.227V137.608c0-10.619,8.612-19.224,19.227-19.224s19.227,8.605,19.227,19.224v355.165c0,10.615-8.612,19.227-19.227,19.227Z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="m19.222,512C8.607,512-.005,503.388-.005,492.773V19.224C-.005,8.605,8.607,0,19.222,0s19.227,8.605,19.227,19.224v473.549c0,10.615-8.612,19.227-19.227,19.227Z"/>
+</vector>
