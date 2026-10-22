@@ -76,7 +76,7 @@ import kotlinx.coroutines.launch
 
 /** Harbor's library tabs (views/library.tsx); the tracker ones show only when you're signed in. */
 private enum class LibTab(val label: String) {
-    Library("Library"), Watchlist("Watchlist"), History("History"), Lists("My Lists"), Favorites("Favorites"),
+    Library("Library"), Watchlist("Watchlist"), History("History"), TorBox("TorBox"), Lists("My Lists"), Groups("My Groups"), Favorites("Favorites"),
     Trakt("Trakt"), AniList("AniList"), Simkl("Simkl"), Mal("MyAnimeList"), Letterboxd("Letterboxd"),
 }
 
@@ -88,7 +88,13 @@ private data class Entry(val meta: Meta, val at: Long)
 
 /** Harbor's "My library · Your collection." page. */
 @Composable
-fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNUSED_PARAMETER") onResume: (CwItem) -> Unit) {
+fun LibraryScreen(
+    repository: Repository,
+    onOpen: (Meta) -> Unit,
+    @Suppress("UNUSED_PARAMETER") onResume: (CwItem) -> Unit,
+    onConnectTorbox: () -> Unit = {},
+    onPlayFile: (url: String, id: String, title: String) -> Unit = { _, _, _ -> },
+) {
     val library by repository.library.collectAsState()
     val myList by repository.myList.collectAsState()
     val shelves by repository.shelves.collectAsState()
@@ -102,8 +108,14 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
         if (trackers.mal?.accessToken != null) add(LibTab.Mal)
         if (settings.letterboxd.enabled && (settings.letterboxd.username.isNotBlank() || trackers.letterboxd != null)) add(LibTab.Letterboxd)
     }
-    val tabs = listOf(LibTab.Library, LibTab.Watchlist, LibTab.History, LibTab.Lists, LibTab.Favorites) + connected
+    val tabs = listOf(LibTab.Library, LibTab.Watchlist, LibTab.History, LibTab.TorBox, LibTab.Lists, LibTab.Groups, LibTab.Favorites) + connected
     if (tab !in tabs) tab = LibTab.Library
+    // Home's My Groups row opens a group here.
+    var selectedGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    val groupRequest by app.harbor.android.data.LibraryGroups.openRequest.collectAsState()
+    LaunchedEffect(groupRequest) {
+        groupRequest?.let { tab = LibTab.Groups; selectedGroup = it; app.harbor.android.data.LibraryGroups.openRequest.value = null }
+    }
 
     fun time(s: String?) = s?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
     val watchedIds = HarborDisplay.watchedIds
@@ -123,7 +135,9 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
                     .map { Entry(it.toMeta(), time(it.state?.lastWatched ?: it.mtime)) },
                 onOpen, inList = { repository.inMyList(it) }, groupByYear = false,
             )
+            LibTab.TorBox -> TorboxTab(repository, onConnectTorbox, onPlayFile)
             LibTab.Lists -> ListsTab(repository, onOpen)
+            LibTab.Groups -> MyGroupsTab(repository, selectedGroup, { selectedGroup = it }, onOpen)
             LibTab.Favorites -> MetaTab(shelves.favorites.map { Entry(it, 0L) }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.Trakt -> SectionsGrid(
                 sectionsFor(tab) {
@@ -183,7 +197,7 @@ private fun Header(tab: LibTab, tabs: List<LibTab>, onTab: (LibTab) -> Unit) {
             Column(Modifier.clickable { onTab(t) }.padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     val icon = tabIcon(t)
-                    if (t.ordinal >= LibTab.Trakt.ordinal) Image(icon, null, Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)))
+                    if (t == LibTab.TorBox || t.ordinal >= LibTab.Trakt.ordinal) Image(icon, null, Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)))
                     else Icon(icon, null, tint = if (on) HarborColors.Ink else HarborColors.InkMuted, modifier = Modifier.size(16.dp))
                     Text(t.label, color = if (on) HarborColors.Ink else HarborColors.InkMuted, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium)
                 }
@@ -199,7 +213,9 @@ private fun tabIcon(t: LibTab): Painter = when (t) {
     LibTab.Library -> painterResource(R.drawable.nav_library)
     LibTab.Watchlist -> rememberVectorPainter(Icons.Rounded.BookmarkBorder)
     LibTab.History -> rememberVectorPainter(Icons.Rounded.Schedule)
+    LibTab.TorBox -> painterResource(R.drawable.logo_torbox)
     LibTab.Lists -> rememberVectorPainter(Icons.AutoMirrored.Rounded.PlaylistPlay)
+    LibTab.Groups -> painterResource(R.drawable.ui_list)
     LibTab.Favorites -> rememberVectorPainter(Icons.Rounded.StarBorder)
     LibTab.Trakt -> painterResource(R.drawable.logo_trakt)
     LibTab.AniList -> painterResource(R.drawable.logo_anilist)

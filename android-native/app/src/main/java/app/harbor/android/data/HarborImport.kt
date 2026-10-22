@@ -218,6 +218,7 @@ class HarborImport(private val repository: Repository, private val context: Cont
                 showDubBadge = s.bool("showDubBadge") ?: a.showDubBadge,
                 showAwardBadge = s.bool("awardTabs") ?: a.showAwardBadge,
                 showRatingBadge = s.bool("showImdbBadge") ?: a.showRatingBadge,
+                libraryGroups = (s["libraryGroups"] as? JsonArray)?.let { LibraryGroups.normalize(it) } ?: a.libraryGroups,
                 showEpisodeRating = s.bool("showEpisodeRating") ?: a.showEpisodeRating,
                 showEpisodeDescription = s.bool("showEpisodeDescription") ?: a.showEpisodeDescription,
                 hidePosterTitles = s.bool("hidePosterTitles") ?: a.hidePosterTitles,
