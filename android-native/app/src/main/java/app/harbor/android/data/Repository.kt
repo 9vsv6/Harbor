@@ -771,7 +771,9 @@ class Repository(private val context: Context) {
         val root = Net.json.parseToJsonElement(json) as? JsonObject ?: error("That file isn't a backup")
         val format = (root["format"] as? kotlinx.serialization.json.JsonPrimitive)?.content
         if (format == "harbor-backup") return importHarbor(root)
-        if ((root["app"] as? kotlinx.serialization.json.JsonPrimitive)?.content != "harbor-android") error("That file isn't a Harbor or Harbor backup")
+        // This app's own backups, and Lart's (the name it shipped under before), carry the same data.
+        val app = (root["app"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        if (app != "harbor-android" && app != "lart-native") error("That file isn't a Harbor backup")
         importNative(root)
         return "Backup restored"
     }
