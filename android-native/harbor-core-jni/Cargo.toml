@@ -1,0 +1,23 @@
+[package]
+name = "harbor-core-jni"
+version = "0.1.0"
+edition = "2021"
+description = "Harbor's shared core (../../harbor-core) for the Android app, over JNI."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The same crate the desktop app links (src-tauri) and runs as wasm in the WebView.
+harbor-core = { path = "../../harbor-core" }
+jni = { version = "0.21", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "unwind"

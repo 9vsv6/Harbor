@@ -19,3 +19,6 @@
 -dontwarn javax.script.**
 -dontwarn org.mozilla.javascript.tools.**
 -dontwarn jdk.dynalink.**
+
+# harbor-core over JNI: the native methods and the class that holds them.
+-keep class app.harbor.android.data.HarborCore { native <methods>; }

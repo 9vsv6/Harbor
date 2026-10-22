@@ -18,6 +18,49 @@ val keyProperties = Properties().apply {
 val abis = listOf("arm64-v8a", "x86_64")
 val splitAbis = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 
+// ---- Harbor's shared core (../../harbor-core), built for Android through harbor-core-jni ----
+// The same Rust crate the desktop app links, so ranking matches it exactly. Needs rustup with
+// the aarch64-linux-android and x86_64-linux-android targets, and the NDK below.
+val ndkVersionUsed = "27.2.12479018"
+val sdkDir: String = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: ""
+val rustTargets = mapOf("arm64-v8a" to "aarch64-linux-android", "x86_64" to "x86_64-linux-android")
+val coreJniDir = rootProject.file("harbor-core-jni")
+val coreLibsDir = layout.buildDirectory.dir("harborCoreJniLibs")
+
+val buildHarborCore by tasks.registering {
+    description = "Builds harbor-core for Android (libharbor_core_jni.so per ABI)."
+    inputs.dir(coreJniDir.resolve("src"))
+    inputs.file(coreJniDir.resolve("Cargo.toml"))
+    inputs.dir(rootProject.file("../harbor-core/src"))
+    outputs.dir(coreLibsDir)
+    doLast {
+        val windows = System.getProperty("os.name").lowercase().contains("windows")
+        val host = when {
+            windows -> "windows-x86_64"
+            System.getProperty("os.name").lowercase().contains("mac") -> "darwin-x86_64"
+            else -> "linux-x86_64"
+        }
+        val clangDir = File(sdkDir, "ndk/$ndkVersionUsed/toolchains/llvm/prebuilt/$host/bin")
+        val cargoHome = File(System.getProperty("user.home"), ".cargo/bin")
+        val cargo = File(cargoHome, if (windows) "cargo.exe" else "cargo").takeIf { it.exists() }?.path ?: "cargo"
+        rustTargets.forEach { (abi, triple) ->
+            val linker = File(clangDir, "${triple}26-clang" + if (windows) ".cmd" else "")
+            providers.exec {
+                workingDir = coreJniDir
+                commandLine(cargo, "build", "--release", "--target", triple)
+                environment("CARGO_TARGET_${triple.uppercase().replace('-', '_')}_LINKER", linker.path)
+                environment("PATH", cargoHome.path + File.pathSeparator + System.getenv("PATH"))
+            }.result.get()
+            val so = coreJniDir.resolve("target/$triple/release/libharbor_core_jni.so")
+            so.copyTo(coreLibsDir.get().asFile.resolve("$abi/libharbor_core_jni.so"), overwrite = true)
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(buildHarborCore) }
+
 android {
     namespace = "app.harbor.android"
     compileSdk = 36
@@ -63,6 +106,9 @@ android {
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
+
+    // harbor-core's library (buildHarborCore above) ships beside mpv's.
+    sourceSets["main"].jniLibs.srcDir(coreLibsDir)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

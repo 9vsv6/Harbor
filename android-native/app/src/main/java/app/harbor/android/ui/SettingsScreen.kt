@@ -1450,7 +1450,11 @@ private fun AboutSection() {
     val uriHandler = LocalUriHandler.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() }
     HarborHeading("Report a bug", "Something broken? Open an issue on GitHub with what you did and what happened.")
-    SettingsSection("Harbor native", "Version ${version ?: "?"}. A native rebuild of Harbor (a Harbor fork) for Android, installed beside the regular Harbor app while features are rebuilt.") {
+    val core = remember { app.harbor.android.data.HarborCore.version }
+    SettingsSection(
+        "Harbor for Android",
+        "Version ${version ?: "?"}. Harbor's Android app, built natively, with the PC app's own core (${core ?: "not loaded"}) ranking your sources.",
+    ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             HButton(onClick = { uriHandler.openUri("https://github.com/9vsv6/Harbor/issues/new") }) { Text("Report a problem") }
             HGhostButton(onClick = { uriHandler.openUri("https://github.com/9vsv6/Harbor") }) { Text("Source code") }

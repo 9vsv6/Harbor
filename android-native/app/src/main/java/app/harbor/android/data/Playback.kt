@@ -28,7 +28,14 @@ object Playback {
         val all = groups.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
         val kept = all.filter { allowed(it.stream, settings) }
         val playable = { s: Stream -> s.playable(debrid != null) }
-        val ordered = if (settings.streamSort == "addon") {
+        // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
+        val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service))
+        val ordered = if (core != null && core.order.isNotEmpty()) {
+            val top = core.primary?.let { kept[it] }
+            val list = core.order.map { kept[it] }
+            // The desktop opens on its top pick; then playable sources before ones that can't play here.
+            (listOfNotNull(top) + (list - setOfNotNull(top))).sortedByDescending { playable(it.stream) }
+        } else if (settings.streamSort == "addon") {
             // As the addons list them, addons in your order; ones that can't play go last.
             kept.sortedByDescending { playable(it.stream) }
         } else {
