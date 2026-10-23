@@ -507,8 +507,11 @@ private fun GroupDetail(
     @Composable
     fun ListControls(list: GroupList) {
         val index = group.lists.indexOf(list)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
-            Text(LibraryGroups.parseListUrl(list.url)?.source?.label ?: "MDBList", color = HarborColors.InkSubtle, fontSize = 12.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                LibraryGroups.parseListUrl(list.url)?.source?.label ?: "MDBList", color = HarborColors.InkSubtle, fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            )
             GroupButton("Edit list") {
                 adding = true
                 editList = list.id
