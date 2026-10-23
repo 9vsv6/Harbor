@@ -79,7 +79,7 @@ object AnimeInfo {
     private val roles = mapOf("MAIN" to "Main", "SUPPORTING" to "Supporting", "BACKGROUND" to "Background")
 
     /** The ids every anime site uses for a title (relations.yuna.moe), by one of them. */
-    data class Ids(val anilist: Int?, val mal: Int?, val kitsu: Int?, val imdb: String?)
+    data class Ids(val anilist: Int?, val mal: Int?, val kitsu: Int?, val imdb: String?, val tvdb: Int? = null)
 
     private val idCache = mutableMapOf<String, Ids?>()
 
@@ -110,6 +110,7 @@ object AnimeInfo {
         mal = this["myanimelist"]?.jsonPrimitive?.intOrNull,
         kitsu = this["kitsu"]?.jsonPrimitive?.intOrNull,
         imdb = this["imdb"]?.jsonPrimitive?.contentOrNull,
+        tvdb = this["thetvdb"]?.jsonPrimitive?.intOrNull,
     )
 
     private val extraCache = mutableMapOf<Int, AnimeExtra?>()
