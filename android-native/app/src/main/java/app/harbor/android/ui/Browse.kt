@@ -446,7 +446,16 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                // A card from a tracker shows its logo where Play goes (continue-card.tsx).
+                val sourceLogo = when (item.source) {
+                    app.harbor.android.data.PublicMetaDb.SOURCE -> app.harbor.android.R.drawable.logo_publicmetadb
+                    "Trakt" -> app.harbor.android.R.drawable.logo_trakt
+                    else -> null
+                }
+                if (sourceLogo != null) androidx.compose.foundation.Image(
+                    androidx.compose.ui.res.painterResource(sourceLogo), "Paused on ${item.source}",
+                    Modifier.size(14.dp).clip(RoundedCornerShape(3.dp)),
+                ) else Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(12.dp))
                 Text(
                     listOfNotNull(episode, remaining).joinToString("  ·  ").ifEmpty { "Resume" },
                     color = Color.White,

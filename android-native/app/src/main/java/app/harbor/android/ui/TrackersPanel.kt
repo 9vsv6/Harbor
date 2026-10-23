@@ -75,6 +75,7 @@ private enum class Tracker(val label: String, val logo: Int, val blurb: String, 
     AniList("AniList", R.drawable.logo_anilist, "Shows your anime lists as rails and keeps episode progress up to date.", "https://anilist.co"),
     Mal("MyAnimeList", R.drawable.logo_mal, "Syncs anime progress and lets you browse your MAL list inside Harbor.", "https://myanimelist.net"),
     Letterboxd("Letterboxd", R.drawable.logo_letterboxd, "Brings your watchlist, diary, likes and lists in through the Stremboxd bridge.", "https://letterboxd.com"),
+    PublicMetaDb("PublicMetaDB", R.drawable.logo_publicmetadb, "Tracks watch history, syncs resume points and keeps a watchlist on PublicMetaDB.", "https://publicmetadb.com"),
 }
 
 @Composable
@@ -85,9 +86,14 @@ fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSetti
         Tracker.Simkl -> trackers.simkl
         Tracker.AniList -> trackers.anilist
         Tracker.Mal -> trackers.mal
-        Tracker.Letterboxd -> null
+        Tracker.Letterboxd, Tracker.PublicMetaDb -> null
     }
-    fun connected(t: Tracker) = if (t == Tracker.Letterboxd) settings.letterboxd.enabled && settings.letterboxd.username.isNotBlank() else authOf(t)?.accessToken != null
+    val pmdb by repository.accounts.pmdb.collectAsState()
+    fun connected(t: Tracker) = when (t) {
+        Tracker.Letterboxd -> settings.letterboxd.enabled && settings.letterboxd.username.isNotBlank()
+        Tracker.PublicMetaDb -> pmdb != null
+        else -> authOf(t)?.accessToken != null
+    }
     var active by rememberSaveable { mutableStateOf(Tracker.Trakt) }
 
     TrackerTabs(active, ::connected) { active = it }
@@ -101,6 +107,7 @@ fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSetti
             Tracker.AniList -> AniListPage(repository, settings, set, authOf(Tracker.AniList))
             Tracker.Mal -> MalPage(repository, settings, set, authOf(Tracker.Mal))
             Tracker.Letterboxd -> LetterboxdPage(repository, settings, set)
+            Tracker.PublicMetaDb -> PublicMetaDbPage(repository, settings, set)
         }
     }
     Text("Sign-ins belong to the current profile.", color = HarborColors.InkSubtle, fontSize = 13.5.sp, modifier = Modifier.padding(top = 4.dp))
@@ -171,7 +178,7 @@ private fun signOut(repository: Repository, t: Tracker, auth: TrackerAuth) {
             Tracker.Simkl -> it.copy(simkl = signedOut)
             Tracker.AniList -> it.copy(anilist = signedOut)
             Tracker.Mal -> it.copy(mal = signedOut)
-            Tracker.Letterboxd -> it.copy(letterboxd = null)
+            Tracker.Letterboxd, Tracker.PublicMetaDb -> it.copy(letterboxd = null)
         }
     }
 }

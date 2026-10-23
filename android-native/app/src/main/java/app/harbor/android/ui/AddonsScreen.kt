@@ -197,6 +197,8 @@ fun AddonsScreen(repository: Repository, onBack: () -> Unit) {
                         isProtected = repository::isProtected,
                         onOpen = { installedDetail = it },
                         onMove = { addon, delta -> act { repository.moveAddon(addon, delta); "Moved ${addon.manifest.name}" } },
+                        nuvio = repository.accounts.nuvioActive,
+                        origin = { AccountOriginBadge(repository, it.transportUrl) },
                     )
                 }
             }
@@ -479,12 +481,15 @@ private fun InstalledPane(
     isProtected: (Addon) -> Boolean,
     onOpen: (Addon) -> Unit,
     onMove: (Addon, Int) -> Unit,
+    nuvio: Boolean = false,
+    origin: @Composable (Addon) -> Unit = {},
 ) {
     val uri = LocalUriHandler.current
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Text(
-                if (signedIn) "Synced with your Stremio account. Addons higher in the list answer first."
+                if (nuvio) "From your Nuvio profile. Addons higher in the list answer first."
+                else if (signedIn) "Synced with your Stremio account. Addons higher in the list answer first."
                 else "On this device. Sign in to Stremio in Settings to use your account's addons.",
                 color = HarborColors.InkSubtle,
                 fontSize = 12.5.sp,
@@ -500,7 +505,10 @@ private fun InstalledPane(
             ) {
                 AddonLogo(addon.manifest, 44)
                 Column(Modifier.weight(1f)) {
-                    Text(addon.manifest.name, color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(addon.manifest.name, color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        origin(addon)
+                    }
                     Text(
                         listOfNotNull(addon.manifest.version.takeIf { it.isNotBlank() }?.let { "v$it" }, resourceSummary(addon.manifest), if (isProtected(addon)) "Protected" else null)
                             .joinToString("  ·  "),

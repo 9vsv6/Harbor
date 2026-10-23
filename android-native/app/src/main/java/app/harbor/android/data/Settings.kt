@@ -204,6 +204,10 @@ data class AppSettings(
     /** "top-left", "top-right", "bottom-left", "bottom-right", "bottom-center". */
     val syncIndicatorPosition: String = "top-right",
     val letterboxd: LetterboxdSettings = LetterboxdSettings(),
+    /** PublicMetaDB: save resume points and finished titles as you watch (publicmetadbScrobbleEnabled). */
+    val pmdbScrobble: Boolean = true,
+    /** PMDB's resume points in Continue watching (cwSources.publicmetadb, off by default as in Harbor). */
+    val pmdbInContinueWatching: Boolean = false,
     /** Harbor's X-Ray in the player: who's in it, the crew and the facts. */
     val xrayEnabled: Boolean = false,
     // ---- More of Harbor's options ----

@@ -47,11 +47,16 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
             }
         }
         main.launch { repository.rpdbKey.collect { HarborDisplay.rpdbKey = it } }
-        main.launch { repository.myList.collect { list -> HarborDisplay.myListIds = list.map { it.id }.toSet() } }
         main.launch {
-            // Watched: the Stremio library's, plus films marked watched on their page.
-            kotlinx.coroutines.flow.combine(repository.library, repository.shelves) { items, shelves ->
-                items.filter { !it.removed && ((it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0) }.map { it.id }.toSet() + shelves.watched
+            // In Nuvio mode My List is the Nuvio profile's library.
+            kotlinx.coroutines.flow.combine(repository.myList, repository.accounts.nuvioLibrary, repository.accounts.nuvio, repository.accounts.shared) { list, nuvio, _, _ ->
+                (if (repository.accounts.nuvioActive) nuvio else list).map { it.id }.toSet()
+            }.collect { HarborDisplay.myListIds = it }
+        }
+        main.launch {
+            // Watched: the Stremio library's, films marked watched on their page, and PublicMetaDB's history.
+            kotlinx.coroutines.flow.combine(repository.library, repository.shelves, repository.accounts.pmdbWatched) { items, shelves, pmdb ->
+                items.filter { !it.removed && ((it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0) }.map { it.id }.toSet() + shelves.watched + pmdb
             }.collect { HarborDisplay.watchedIds = it }
         }
         main.launch { repository.providerKeys.collect { app.harbor.android.data.SkipSegments.theIntroDbKey = it[app.harbor.android.data.ProviderKey.THEINTRODB] } }

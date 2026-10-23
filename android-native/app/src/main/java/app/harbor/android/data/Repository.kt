@@ -149,12 +149,15 @@ class Repository(private val context: Context) {
     /** This profile's tracker sign-ins. */
     val trackers: StateFlow<TrackerSettings> = _trackers.asStateFlow()
     private val _dismissed = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The Harbor account, the account provider (Stremio or Nuvio) and PublicMetaDB. */
+    val accounts = Accounts(this)
     private val resumeSerializer = MapSerializer(String.serializer(), Resume.serializer())
     private val metaListSerializer = ListSerializer(Meta.serializer())
     private val stringSet = SetSerializer(String.serializer())
 
     /** Newest first; one card per title. */
-    val continueWatching: StateFlow<List<CwItem>> = combine(_resume, _library, _dismissed, _traktCw) { resume, library, dismissed, trakt ->
+    val continueWatching: StateFlow<List<CwItem>> = combine(_resume, _library, _dismissed, _traktCw, accounts.externalCw) { resume, library, dismissed, trakt, external ->
         val local = resume.mapNotNull { (videoId, r) ->
             val metaId = r.metaId ?: return@mapNotNull null
             CwItem(
@@ -177,7 +180,7 @@ class Repository(private val context: Context) {
                 parseTime(state.lastWatched ?: item.mtime),
             )
         }
-        (local + remote + trakt).sortedByDescending { it.updatedAt }
+        (local + remote + trakt + external).sortedByDescending { it.updatedAt }
             .distinctBy { it.meta.id }
             .filter { "${it.meta.id}@${it.videoId}" !in dismissed }
             .take(60)
@@ -197,6 +200,7 @@ class Repository(private val context: Context) {
         _settings.value = prefs[keySettings]?.let { runCatching { Net.json.decodeFromString(AppSettings.serializer(), it) }.getOrNull() } ?: AppSettings()
         _lastStreams.value = prefs[keyLastStreams]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
         scope.launch { refreshTrackers() }
+        accounts.load(prefs)
         profileLoaded.forEach { it(prefs) }
     }
 
@@ -346,7 +350,13 @@ class Repository(private val context: Context) {
     /** Reloads the addon collection and the library for the current account. */
     suspend fun refresh() {
         val account = _account.value
-        val remote = account?.let { runCatching { StremioApi.addonsRaw(it.authKey) }.getOrNull() }
+        // With Nuvio as the account provider, the Nuvio profile's addons are the collection.
+        val nuvio = if (accounts.nuvioActive) accounts.nuvioAddons()?.filter { it.enabled }?.let { list ->
+            kotlinx.coroutines.coroutineScope {
+                list.map { a -> async { runCatching { entry(a.url, AddonClient.manifestJson(a.url)) }.getOrNull() } }.awaitAll().filterNotNull()
+            }
+        } else null
+        val remote = nuvio ?: account?.let { runCatching { StremioApi.addonsRaw(it.authKey) }.getOrNull() }
         val fetched = when {
             !remote.isNullOrEmpty() -> remote
             account == null -> localCollection() ?: defaultCollection()
@@ -394,7 +404,8 @@ class Repository(private val context: Context) {
     private suspend fun saveCollection(next: List<JsonObject>) {
         require(next.isNotEmpty()) { "Keep at least one addon" }
         val previous = rawCollection
-        val account = _account.value
+        // In Nuvio mode, changes stay on this device rather than rewriting the cloud profile.
+        val account = _account.value.takeUnless { accounts.nuvioActive }
         if (account != null) StremioApi.setAddonsRaw(account.authKey, next)
         else context.store.edit { it[KEY_LOCAL_ADDONS] = kotlinx.serialization.json.JsonArray(next).toString() }
         rawCollection = next
@@ -460,6 +471,7 @@ class Repository(private val context: Context) {
         val next = change(before)
         _settings.value = next
         if (before.traktInContinueWatching != next.traktInContinueWatching) scope.launch { refreshTrackers() }
+        if (before.pmdbInContinueWatching != next.pmdbInContinueWatching) scope.launch { accounts.refreshPmdb() }
         scope.launch { context.store.edit { it[keySettings] = Net.json.encodeToString(AppSettings.serializer(), next) } }
     }
 
@@ -631,7 +643,7 @@ class Repository(private val context: Context) {
 
     // ---- My List (Harbor's watchlist), kept on this device ----
 
-    fun inMyList(id: String): Boolean = _myList.value.any { it.id == id }
+    fun inMyList(id: String): Boolean = if (accounts.nuvioActive) accounts.inNuvioLibrary(id) else _myList.value.any { it.id == id }
 
     // ---- Favourites, lists, ratings and watched marks (Harbor's hero actions) ----
 
@@ -680,6 +692,7 @@ class Repository(private val context: Context) {
     fun toggleWatched(meta: Meta) {
         val on = meta.id !in _shelves.value.watched
         editShelves { s -> s.copy(watched = if (on) s.watched + meta.id else s.watched - meta.id) }
+        accounts.markWatched(meta, on)
         val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return
         val trackers = _trackers.value
         scope.launch {
@@ -689,6 +702,8 @@ class Repository(private val context: Context) {
     }
 
     fun toggleMyList(meta: Meta) {
+        // Nuvio mode: My List is the Nuvio profile's library.
+        if (accounts.nuvioActive) return accounts.toggleNuvioLibrary(meta.copy(videos = null))
         val current = _myList.value
         val next = if (current.any { it.id == meta.id }) current.filterNot { it.id == meta.id }
         else listOf(meta.copy(videos = null, description = null)) + current
@@ -725,6 +740,7 @@ class Repository(private val context: Context) {
             )
         )
         _resume.value = next
+        accounts.playbackSaved(videoId, positionMs, durationMs, meta, video)
         // Watching it again brings a dismissed card back.
         meta?.let { m -> _dismissed.value = _dismissed.value.filterNot { it.startsWith(m.id + "@") }.toSet() }
         scope.launch { context.store.edit { it[keyResume] = Net.json.encodeToString(resumeSerializer, next) } }

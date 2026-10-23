@@ -77,7 +77,7 @@ import kotlinx.coroutines.launch
 /** Harbor's library tabs (views/library.tsx); the tracker ones show only when you're signed in. */
 private enum class LibTab(val label: String) {
     Library("Library"), Watchlist("Watchlist"), History("History"), Lists("My Lists"), Favorites("Favorites"),
-    Trakt("Trakt"), AniList("AniList"), Simkl("Simkl"), Mal("MyAnimeList"), Letterboxd("Letterboxd"),
+    Trakt("Trakt"), AniList("AniList"), Simkl("Simkl"), Mal("MyAnimeList"), Letterboxd("Letterboxd"), PublicMetaDb("PMDB"),
 }
 
 private enum class Kind { All, Movies, Shows }
@@ -94,6 +94,8 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
     val shelves by repository.shelves.collectAsState()
     val trackers by repository.trackers.collectAsState()
     val settings by repository.settings.collectAsState()
+    val pmdb by repository.accounts.pmdb.collectAsState()
+    val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
     var tab by rememberSaveable { mutableStateOf(LibTab.Library) }
     val connected = buildList {
         if (trackers.trakt?.accessToken != null) add(LibTab.Trakt)
@@ -101,6 +103,7 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
         if (trackers.simkl?.accessToken != null) add(LibTab.Simkl)
         if (trackers.mal?.accessToken != null) add(LibTab.Mal)
         if (settings.letterboxd.enabled && (settings.letterboxd.username.isNotBlank() || trackers.letterboxd != null)) add(LibTab.Letterboxd)
+        if (pmdb != null) add(LibTab.PublicMetaDb)
     }
     val tabs = listOf(LibTab.Library, LibTab.Watchlist, LibTab.History, LibTab.Lists, LibTab.Favorites) + connected
     if (tab !in tabs) tab = LibTab.Library
@@ -108,9 +111,10 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
     fun time(s: String?) = s?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
     val watchedIds = HarborDisplay.watchedIds
     // Library: Stremio's library (what you added or played) and your watchlist on this device.
-    val all = remember(library, myList) {
+    // In Nuvio mode the watchlist is the Nuvio profile's library.
+    val all = remember(library, myList, nuvioLibrary) {
         (library.filter { !it.removed || it.temp }.map { Entry(it.toMeta(), maxOf(time(it.state?.lastWatched), time(it.mtime))) } +
-            myList.map { Entry(it, 0L) }).distinctBy { it.meta.id }
+            (if (repository.accounts.nuvioActive) nuvioLibrary else myList).map { Entry(it, 0L) }).distinctBy { it.meta.id }
     }
 
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
@@ -145,6 +149,9 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
                 sectionsFor(tab) { Letterboxd.homeRows(settings.letterboxd, trackers.letterboxd).map { it.title to it.metas } },
                 onOpen,
             )
+            LibTab.PublicMetaDb -> PmdbLibraryTab(repository) { metas ->
+                MetaTab(metas.map { Entry(it, 0L) }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
+            }
             LibTab.AniList -> EntriesTab(
                 tab,
                 load = { trackers.anilist?.let { AniListLibrary.entries(it) }.orEmpty() },
@@ -206,6 +213,7 @@ private fun tabIcon(t: LibTab): Painter = when (t) {
     LibTab.Simkl -> painterResource(R.drawable.logo_simkl)
     LibTab.Mal -> painterResource(R.drawable.logo_mal)
     LibTab.Letterboxd -> painterResource(R.drawable.logo_letterboxd)
+    LibTab.PublicMetaDb -> painterResource(R.drawable.logo_publicmetadb)
 }
 
 /** Harbor's controls: All / Movies / Shows with counts, search, Recent / A-Z / Year, Grouped / One list. */
