@@ -72,6 +72,10 @@ import app.harbor.android.data.AwardType
 import app.harbor.android.data.Awards
 import app.harbor.android.data.CastMember
 import app.harbor.android.data.Meta
+import app.harbor.android.data.Net
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import app.harbor.android.data.Omdb
 import app.harbor.android.data.Fanart
 import app.harbor.android.data.Keyless
@@ -155,6 +159,21 @@ fun DetailScreen(
         val imdb = meta?.id?.substringBefore(':')?.takeIf { it.startsWith("tt") } ?: return@LaunchedEffect
         scores = runCatching { Omdb.scores(key, imdb) }.getOrDefault(emptyList())
     }
+    // Harbor's detail IMDb rating (detail-imdb-rating.ts): Harbor's IMDb service, OMDb, Cinemeta, then the addon's own.
+    var harborImdb by remember { mutableStateOf<String?>(null) }
+    var cinemetaImdb by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(meta?.id, full) {
+        val current = meta?.takeIf { full } ?: return@LaunchedEffect
+        val imdb = current.id.substringBefore(':').takeIf { Regex("""^tt\d+$""").matches(it) } ?: return@LaunchedEffect
+        harborImdb = runCatching {
+            Net.json.parseToJsonElement(Net.get("https://harborcommunity.site/api/imdb/title/$imdb")).jsonObject["rating"]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()?.let(::validImdbRating)
+        val isCinemeta = repository.metaAddons().firstOrNull()?.manifest?.id == AddonClient.CINEMETA_ID
+        if (harborImdb == null && (current.imdbRating?.let(::validImdbRating) == null || !isCinemeta)) {
+            val cinemeta = repository.metaAddons().filter { it.manifest.id == AddonClient.CINEMETA_ID }
+            if (cinemeta.isNotEmpty()) cinemetaImdb = runCatching { AddonClient.meta(cinemeta, current.type, imdb) }.getOrNull()?.imdbRating?.let(::validImdbRating)
+        }
+    }
     // Harbor's other providers, each with the user's own key.
     LaunchedEffect(meta?.id, details?.tvdbId, providerKeys, full) {
         val current = meta?.takeIf { full } ?: return@LaunchedEffect
@@ -172,10 +191,16 @@ fun DetailScreen(
             if (episodes.isNotEmpty()) {
                 meta = current.copy(videos = current.videos?.map { v ->
                     val e = episodes[(v.season ?: -1) to (v.episode ?: -1)] ?: return@map v
+                    // Harbor's episode text rules: no "TBA" placeholders, nothing in another language's script.
+                    val device = java.util.Locale.getDefault().language
+                    val tvdbName = app.harbor.android.data.EpisodeText.accept(e.name, device)
+                    val addonName = app.harbor.android.data.EpisodeText.specificTitle(v.title ?: v.name, v.episode)
                     v.copy(
-                        // The description language is for stories: episode names stay as the addon has them.
-                        title = (if (HarborDisplay.settings.metadataLanguage.isEmpty()) e.name?.takeIf { it.isNotBlank() } else null) ?: v.title,
-                        overview = e.overview?.takeIf { it.isNotBlank() } ?: v.overview,
+                        // The description language is for stories: episode names stay as the addon has them,
+                        // unless the addon only has a placeholder.
+                        title = (if (HarborDisplay.settings.metadataLanguage.isEmpty() || addonName == null) tvdbName else null) ?: v.title,
+                        overview = app.harbor.android.data.EpisodeText.accept(e.overview, lang)
+                            ?: v.overview?.takeIf { !app.harbor.android.data.EpisodeText.isPlaceholder(it) },
                         thumbnail = v.thumbnail ?: e.image,
                     )
                 })
@@ -218,7 +243,12 @@ fun DetailScreen(
         when {
             current != null -> DetailBody(
                 repository,
-                current.copy(logo = current.logo ?: art?.logo, background = current.background ?: art?.backdrop),
+                current.copy(
+                    logo = current.logo ?: art?.logo,
+                    background = current.background ?: art?.backdrop,
+                    imdbRating = harborImdb ?: scores.firstOrNull { it.source == "IMDb" }?.value?.let(::validImdbRating) ?: cinemetaImdb
+                        ?: current.imdbRating?.takeIf { current.id.startsWith("tt") }?.let(::validImdbRating),
+                ),
                 details?.let { d -> d.copy(logo = d.logo ?: art?.logo, backdrop = d.backdrop ?: art?.backdrop, networks = d.networks.ifEmpty { listOfNotNull(network) }) },
                 awards,
                 scores + mdblistScores(mdblist) + listOfNotNull(simklScore),
@@ -331,6 +361,17 @@ private fun DetailBody(
         if (isSeries) next?.let { onStreams(it.id, "${meta.name} · ${episodeLabel(it)}") } else onStreams(meta.id, meta.name)
     }
 
+    // Harbor's Season Explorer: with a TVDB or TMDB key, or Harbor's TVDB service for anime.
+    val providerKeys by repository.providerKeys.collectAsState()
+    val tvdbKey = providerKeys[ProviderKey.TVDB]
+    val animeId = meta.id.substringBefore(':') in setOf("kitsu", "mal", "anilist")
+    // An anime entry's own seasons only line up with TheTVDB's when the addon numbers them that way.
+    val allowProxy = animeId && seasons.count { it >= 1 } >= 2
+    val showExplorer = isSeries && HarborDisplay.settings.tvdbSeasonExplorer && seasons.any { it >= 1 } &&
+        (tvdbKey != null || (tmdbKey != null && details?.tmdbId?.let { it > 0 } == true) || allowProxy)
+    val explorer = rememberSeasonExplorer(meta, details, seasons, season, showExplorer, tvdbKey, tmdbKey, allowProxy)
+    val seasonList = seasonItems(seasons, videos, details, if (showExplorer) explorer else null)
+
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
         val side = if (wide) 48.dp else 20.dp
@@ -384,6 +425,11 @@ private fun DetailBody(
             }
             val crew = crewOf(meta, details)
             if (crew.isNotEmpty()) item(key = "crew") { CrewGrid(crew, if (wide) 3 else 2, side) }
+            if (showExplorer) {
+                item(key = "season-explorer") {
+                    SeasonExplorer(seasonList, explorer, season, meta.background, side, wide) { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() }
+                }
+            }
             if (isSeries && seasons.isNotEmpty()) {
                 // Harbor's episode section: the season's tools, then each episode as a row of this list.
                 episodesSection(
@@ -396,6 +442,7 @@ private fun DetailBody(
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
                     set = repository::updateSettings,
                     listGap = 30.dp,
+                    seasonItems = seasonList,
                 )
             }
             val cast = details?.cast?.takeIf { it.isNotEmpty() } ?: meta.castNames.map { CastMember(it, null, null) }
@@ -493,7 +540,7 @@ private fun Hero(
 
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 meta.year?.let { Fact(it) }
-                (scores.firstOrNull { it.source == "IMDb" }?.value ?: meta.imdbRating)?.takeIf { it.isNotBlank() }?.let { rating ->
+                meta.imdbRating?.takeIf { it.isNotBlank() }?.let { rating ->
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.align(Alignment.CenterVertically).clip(RoundedCornerShape(50)).background(Color(0xD9121316)).padding(horizontal = 12.dp, vertical = 6.dp)) {
                         Box(Modifier.clip(RoundedCornerShape(3.dp)).background(Color(0xFFF5C518)).padding(horizontal = 4.dp, vertical = 1.dp)) {
                             Text("IMDb", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Black)
@@ -514,6 +561,7 @@ private fun Hero(
             }
 
             AccoladePills(meta.id.substringBefore(':').takeIf { it.startsWith("tt") })
+            if (!isSeries) details?.movieReleases?.let { MovieReleaseCountdowns(it) }
             if (!wide) HeroAwards(awards, Modifier)
             HeroActions(
                 repository, meta, details, isSeries, wide,
@@ -870,3 +918,7 @@ object MetaPreview {
 
     fun get(id: String): Meta? = synchronized(recent) { recent[id] }
 }
+
+/** An IMDb score as Harbor shows it: 0 < score ≤ 10, one decimal ("7.0"). */
+private fun validImdbRating(value: String): String? =
+    value.trim().toDoubleOrNull()?.takeIf { it > 0 && it <= 10 }?.let { "%.1f".format(Locale.US, it) }

@@ -181,7 +181,7 @@ private enum class Section(
     StreamFilters("Stream filters", "Only show sources that match.", R.drawable.set_filter, "filter resolution 4k 1080p remux bluray web hevc av1 hdr cached size"),
     HomeRows("Home", "The hero and rows on Home.", R.drawable.set_house, "home top 10 hero unreleased anime room watched hide catalogs new episodes row continue watching trakt", setOf("Home")),
     PosterCards("Poster cards", "What a poster card shows.", R.drawable.set_layout_grid, "poster card badge rating award dub watched check watchlist bookmark titles", setOf("Cards")),
-    DetailPages("Detail pages", "Show pages, spoilers, episode cards and community.", R.drawable.set_file_text, "episodes spoilers order description card size trakt comments letterboxd reviews community show pages full descriptions remember season imdb keyless free data", setOf("Detail pages")),
+    DetailPages("Detail pages", "Show pages, spoilers, episode cards and community.", R.drawable.set_file_text, "episodes spoilers order description card size trakt comments letterboxd reviews community show pages full descriptions remember season imdb keyless free data season explorer tvdb posters synopses", setOf("Detail pages")),
     Metadata("Metadata providers", "Where titles, artwork and scores come from.", R.drawable.set_database, "tmdb omdb tvdb thetvdb mdblist fanart rpdb custom posters ratings keys metadata providers"),
     AiSearchPage("Search", "AI search: describe what you want to watch.", R.drawable.set_discovery_search, "ai search openrouter groq model jina natural language", setOf("Search")),
     LibraryContent("Library", "Content filters and downloads.", R.drawable.set_saved_library, "library content filters hide anime downloads delete", setOf("Library")),
@@ -1200,6 +1200,11 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         HarborHeading("Show pages", "How a show or movie page behaves when you open it.")
         ToggleRow("Show full descriptions", "Opens with the whole synopsis instead of the first lines.", settings.fullDescriptions) { v -> set { it.copy(fullDescriptions = v) } }
         ToggleRow("Remember your place on show pages", "Reopens a show on the season you last looked at.", settings.rememberSeason) { v -> set { it.copy(rememberSeason = v) } }
+        ToggleRow(
+            "Season explorer",
+            "Shows a season shelf with posters, names, and synopses above the episode list. Anime uses Harbor's TVDB service without a key. Regular shows use your TVDB key when set, otherwise their TMDB metadata. Turn this off to hide the shelf and stop its metadata requests.",
+            settings.tvdbSeasonExplorer,
+        ) { v -> set { it.copy(tvdbSeasonExplorer = v) } }
         ToggleRow("Use free IMDb data without a TMDB key", "Cast photos, networks and air dates from TVMaze and imdbapi.dev when there is no TMDB key.", settings.keylessDetails) { v -> set { it.copy(keylessDetails = v) } }
         HarborHeading("Spoilers (blur)", "Keep unwatched episode details hidden.")
         ToggleRow("Blur spoilers", "Hides spoiler-prone episode details until you have watched them.", settings.hideSpoilers) { v -> set { it.copy(hideSpoilers = v) } }

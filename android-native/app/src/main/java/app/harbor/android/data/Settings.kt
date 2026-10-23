@@ -228,6 +228,8 @@ data class AppSettings(
     val keylessDetails: Boolean = true,
     /** Show pages reopen on the season you last looked at. */
     val rememberSeason: Boolean = true,
+    /** Harbor's Season Explorer: a shelf of season posters, names and synopses above the episodes. */
+    val tvdbSeasonExplorer: Boolean = true,
     /** The stream's quality (4K, 1080p) next to the title in the player. */
     val qualityInPlayer: Boolean = false,
     /** Delete a downloaded file once you finish watching it. */

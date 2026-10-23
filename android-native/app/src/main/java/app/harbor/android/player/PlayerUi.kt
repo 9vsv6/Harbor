@@ -664,6 +664,7 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
                 Column(Modifier.weight(1f)) {
                     Text(episodeCode(video), color = HarborColors.Accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Text(video.label, color = Color.White, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    app.harbor.android.ui.EpisodeReleaseCountdown(video.released)
                     if (playing) Text("Playing", color = Color(0xCCFFFFFF), fontSize = 12.sp)
                 }
             }

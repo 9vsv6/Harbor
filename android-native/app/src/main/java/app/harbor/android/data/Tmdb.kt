@@ -66,7 +66,14 @@ data class TmdbDetails(
     val backdrops: List<String>,
     val posters: List<String>,
     val logos: List<String>,
+    /** A film's cinema and digital releases in your region (movie-release-dates.ts). */
+    val movieReleases: List<MovieRelease> = emptyList(),
+    /** A show's seasons as TMDB lists them, for the Season Explorer. */
+    val seasonList: List<TmdbSeason> = emptyList(),
 )
+
+/** One season from TMDB's show details: its name, story and poster, in the request language. */
+data class TmdbSeason(val number: Int, val name: String?, val overview: String?, val poster: String?, val airDate: String?, val episodeCount: Int?)
 
 /**
  * TMDB, as Harbor uses it with a key: rows for Home, Movies and Shows, logos and
@@ -311,7 +318,8 @@ object Tmdb {
             key,
             "/$kind/$id",
             mapOf(
-                "append_to_response" to "credits,aggregate_credits,images,recommendations,similar,videos,watch/providers,external_ids,translations",
+                "append_to_response" to "credits,aggregate_credits,images,recommendations,similar,videos,watch/providers,external_ids,translations" +
+                    if (kind == "movie") ",release_dates" else "",
                 "include_image_language" to imageLanguages(lang),
             ),
         )
@@ -386,7 +394,51 @@ object Tmdb {
             backdrops = pictures("backdrops", "w780"),
             posters = pictures("posters", "w342"),
             logos = pictures("logos", "w300"),
+            movieReleases = if (kind == "movie") MovieReleases.pick(
+                (d["release_dates"]?.jsonObject?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { group ->
+                    val country = group.string("iso_3166_1") ?: return@mapNotNull null
+                    country to (group["release_dates"] as? JsonArray).orEmpty().mapNotNull { r ->
+                        val o = r.jsonObject
+                        val type = o["type"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+                        type to (o.string("release_date") ?: return@mapNotNull null)
+                    }
+                },
+                regionCode() ?: "US",
+            ) else emptyList(),
+            seasonList = (d["seasons"] as? JsonArray).orEmpty().mapNotNull { e ->
+                val o = e.jsonObject
+                TmdbSeason(
+                    number = o["season_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                    name = o.string("name")?.takeIf { it.isNotBlank() },
+                    overview = o.string("overview")?.takeIf { it.isNotBlank() },
+                    poster = o.string("poster_path")?.let { "$IMAGES/w342$it" },
+                    airDate = o.string("air_date"),
+                    episodeCount = o["episode_count"]?.jsonPrimitive?.intOrNull,
+                )
+            },
         )
+    }
+
+    /** The language TMDB's season names in [TmdbDetails.seasonList] are written in. */
+    val seasonNameLanguage: String get() = base(language)
+
+    /** A season's overview in each language TMDB has, as (language, region, overview); null when TMDB failed. */
+    suspend fun seasonTranslations(key: String, tvId: Int, season: Int): List<Triple<String, String?, String>>? {
+        val body = runCatching { get(key, "/tv/$tvId/season/$season/translations") }.getOrNull() ?: return null
+        return (body["translations"] as? JsonArray).orEmpty().mapNotNull { t ->
+            val o = t.jsonObject
+            val overview = o["data"]?.jsonObject?.string("overview")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            Triple(o.string("iso_639_1") ?: return@mapNotNull null, o.string("iso_3166_1"), overview)
+        }
+    }
+
+    /** A season's poster in the poster language, else English or textless (tmdb-season-artwork.ts). */
+    suspend fun seasonPoster(key: String, tvId: Int, season: Int, rejected: Set<String> = emptySet()): String? {
+        val body = runCatching { get(key, "/tv/$tvId/season/$season/images", mapOf("include_image_language" to imageLanguages())) }.getOrNull() ?: return null
+        val posters = (body["posters"] as? JsonArray).orEmpty().map { it.jsonObject }
+        val ranked = posters.filter { it.string("iso_639_1") == posterBase } + posters.filter { it.string("iso_639_1") == "en" } +
+            posters.filter { it.string("iso_639_1") == null } + posters
+        return ranked.mapNotNull { it.string("file_path")?.let { p -> "$IMAGES/w342$p" } }.firstOrNull { it !in rejected }
     }
 
     /** The overview or tagline in the description language, from TMDB's translations; else the device language's. */
