@@ -89,6 +89,8 @@ version = "0.1.0"
 dependencies = [
  "harbor-core",
  "jni",
+ "once_cell",
+ "regex",
  "serde",
  "serde_json",
 ]

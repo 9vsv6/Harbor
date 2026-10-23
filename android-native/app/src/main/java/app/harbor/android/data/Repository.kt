@@ -167,12 +167,14 @@ class Repository(private val context: Context) {
         val remote = library.filter { (!it.removed || it.temp) && (it.state?.timeOffset ?: 0) > 0 }.map { item ->
             val state = item.state!!
             val parts = state.videoId?.split(':').orEmpty()
+            // An anime video id (kitsu:ID:N) names the played cour and its episode, not a season.
+            val animeVideo = parts.size == 3 && parts[0] in setOf("kitsu", "mal", "anilist", "anidb")
             CwItem(
                 item.toMeta(),
                 state.videoId ?: item.id,
                 state.timeOffset,
                 state.duration,
-                parts.getOrNull(parts.size - 2)?.toIntOrNull()?.takeIf { parts.size >= 3 },
+                if (animeVideo) 1 else parts.getOrNull(parts.size - 2)?.toIntOrNull()?.takeIf { parts.size >= 3 },
                 parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 },
                 parseTime(state.lastWatched ?: item.mtime),
             )
