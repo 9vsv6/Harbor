@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Harbor's "More like this" end screen recommendations (src/lib/recommendations.ts): AniList's
@@ -26,11 +27,21 @@ object Recommendations {
                 val details = (if (imdb != null && tmdbKey != null) runCatching { Tmdb.details(tmdbKey, imdb, type) }.getOrNull() else null)
                     ?: runCatching { Keyless.details(meta) }.getOrNull()
                 val seen = mutableSetOf(meta.id)
-                details?.let { it.recommendations + it.similar }.orEmpty().filter { seen.add(it.id) }.take(MAX_ITEMS)
+                // Without TMDB: Cinemeta's top titles in the same first genre (cinemeta-details.ts).
+                val related = details?.let { it.recommendations + it.similar }.orEmpty().ifEmpty { topInGenre(meta, type) }
+                related.filter { seen.add(it.id) }.take(MAX_ITEMS)
             }
         }.getOrDefault(emptyList())
         cache[meta.id] = found
         return found
+    }
+
+    private suspend fun topInGenre(meta: Meta, type: String): List<Meta> {
+        val genre = meta.genres?.firstOrNull() ?: return emptyList()
+        val kind = if (type == "movie") "movie" else "series"
+        val json = Net.json.parseToJsonElement(Net.get("https://v3-cinemeta.strem.io/catalog/$kind/top/genre=${java.net.URLEncoder.encode(genre, "UTF-8").replace("+", "%20")}.json")).jsonObject
+        val metas = json["metas"] ?: return emptyList()
+        return Net.json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(Meta.serializer()), metas).filter { it.id != meta.id }.take(30)
     }
 
     /** Catalog art is served at medium sizes; the end screen asks for the largest (end-screen-art.ts). */

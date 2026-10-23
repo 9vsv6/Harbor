@@ -10,6 +10,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,8 +38,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -340,12 +342,28 @@ private fun MiniControls(state: PlayerState, actions: PlayerActions, modifier: M
             Box(Modifier.fillMaxHeight().fillMaxWidth(progress).clip(RoundedCornerShape(50)).background(Color.White))
         }
         MiniGlyph(if (state.muted) R.drawable.pl_mini_muted else R.drawable.pl_mini_volume, if (state.muted) "Unmute" else "Mute") { onInteract(); actions.toggleMute() }
-        Slider(
-            value = if (state.muted) 0f else state.volume,
-            onValueChange = { onInteract(); actions.setVolumeLevel(it) },
-            colors = SliderDefaults.colors(thumbColor = HarborColors.Accent, activeTrackColor = HarborColors.Accent, inactiveTrackColor = Color(0x40FFFFFF)),
-            modifier = Modifier.width(74.dp).height(20.dp),
-        )
+        // A thin range like the desktop's volume input: accent fill and a small knob.
+        val level = if (state.muted) 0f else state.volume
+        val accent = HarborColors.Accent
+        Canvas(
+            Modifier.width(74.dp).height(20.dp).pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    onInteract()
+                    actions.setVolumeLevel((down.position.x / size.width).coerceIn(0f, 1f))
+                    drag(down.id) { change ->
+                        change.consume()
+                        actions.setVolumeLevel((change.position.x / size.width).coerceIn(0f, 1f))
+                    }
+                }
+            },
+        ) {
+            val y = size.height / 2
+            val track = 4.dp.toPx()
+            drawLine(Color(0x40FFFFFF), Offset(0f, y), Offset(size.width, y), track, StrokeCap.Round)
+            drawLine(accent, Offset(0f, y), Offset(size.width * level, y), track, StrokeCap.Round)
+            drawCircle(accent, 5.dp.toPx(), Offset((size.width * level).coerceIn(5.dp.toPx(), size.width - 5.dp.toPx()), y))
+        }
     }
 }
 
