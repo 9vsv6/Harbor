@@ -125,6 +125,8 @@ class PlayerState {
     /** What's playing, for the end screen's artwork and lines. */
     var meta by mutableStateOf<app.harbor.android.data.Meta?>(null)
     var muted by mutableStateOf(false)
+    /** The phone's media volume, 0..1, for the end screen's mini player. */
+    var volume by mutableFloatStateOf(1f)
     /** The end screen when open, its recommendations, the focused card and the countdown. */
     var endScreen by mutableStateOf<EndScreenMode?>(null)
     var endItems by mutableStateOf<List<app.harbor.android.data.Meta>>(emptyList())

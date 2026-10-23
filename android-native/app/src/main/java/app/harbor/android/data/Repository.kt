@@ -444,6 +444,8 @@ class Repository(private val context: Context) {
 
     /** A manifest URL waiting to be installed: from a stremio:// link an addon's configure page opened. */
     val pendingInstall = MutableStateFlow<String?>(null)
+    /** A title the player's "More like this" screen handed back: (title, true to play it, false for its page). */
+    val pendingOpen = MutableStateFlow<Pair<Meta, Boolean>?>(null)
 
     fun isInstalled(manifestId: String?, transportUrl: String?): Boolean =
         _addons.value.any { (manifestId != null && it.manifest.id == manifestId) || it.transportUrl == transportUrl }

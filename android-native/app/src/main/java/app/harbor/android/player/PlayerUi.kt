@@ -145,6 +145,15 @@ interface PlayerActions {
     fun retry()
     /** Harbor's ad report: the ranges you marked, sent for review; `onDone` says whether it went. */
     fun reportAd(ranges: List<Pair<Long, Long>>, onDone: (Boolean) -> Unit)
+    /** "More like this": play a recommendation, or open its page. Both leave the player. */
+    fun endScreenPlay(meta: app.harbor.android.data.Meta)
+    fun endScreenInfo(meta: app.harbor.android.data.Meta)
+    /** "Keep watching": the card steps aside and the film fills the screen again. */
+    fun dismissEndScreen()
+    /** Scales the video into the end screen's corner (left and bottom in px); 1 puts it back. */
+    fun shrinkVideo(left: Float, bottom: Float, scale: Float)
+    fun toggleMute()
+    fun setVolumeLevel(level: Float)
 }
 
 private val Scrim = Color(0xB3000000)
@@ -291,7 +300,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             }
         } else {
-            AnimatedVisibility(state.controlsVisible, enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(state.controlsVisible && state.endScreen == null, enter = fadeIn(), exit = fadeOut()) {
                 HarborControls(state, prefs, actions, castButton) { touchedAt = System.currentTimeMillis() }
             }
         }
@@ -309,6 +318,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         LiveSyncPrompt(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)
+        EndScreen(state, actions)
     }
 }
 

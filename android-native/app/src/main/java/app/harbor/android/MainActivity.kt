@@ -149,6 +149,14 @@ private fun HarborRoot(repository: Repository) {
         if (pendingInstall != null && entry?.destination?.route != "addons") nav.navigate("addons")
     }
 
+    // A title picked on the player's "More like this" screen.
+    val pendingOpen by repository.pendingOpen.collectAsState()
+    LaunchedEffect(pendingOpen) {
+        val (meta, play) = pendingOpen ?: return@LaunchedEffect
+        repository.pendingOpen.value = null
+        if (play && meta.type == "movie") resolve(meta) { nav.openStreams(it.type, it.id, it.id, it.name) } else open(meta)
+    }
+
     val browse = object : BrowseNav {
         override fun openMeta(meta: Meta) = open(meta)
 

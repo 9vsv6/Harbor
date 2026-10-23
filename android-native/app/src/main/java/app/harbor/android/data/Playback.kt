@@ -49,6 +49,55 @@ object Playback {
         return listOf(match) + (ordered - match)
     }
 
+    /** The source you chose, as Harbor remembers it for the next episode (playback-history.ts). */
+    data class SourceRef(val addonId: String?, val resolution: Int, val releaseGroup: String?, val languages: List<String>)
+
+    private val DUB_LANGUAGES = listOf("en", "fr", "de", "es", "it", "pt", "ru", "ja", "ko", "zh", "hi", "ar", "pl", "tr", "nl")
+
+    fun sourceRef(stream: Stream, addonId: String?): SourceRef = SourceRef(
+        addonId,
+        Ranking.traits(stream).resolution,
+        releaseGroup(stream),
+        DUB_LANGUAGES.filter { Ranking.mentionsLanguage(stream, listOf(it)) },
+    )
+
+    /** The release group: "[SubsPlease] …" or "….1080p.WEB-DL-NTb.mkv". */
+    fun releaseGroup(stream: Stream): String? {
+        val line = (stream.title ?: stream.description ?: "").lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return null
+        Regex("""^\[([^\]]{2,30})\]""").find(line)?.let { return it.groupValues[1].lowercase() }
+        return Regex("""-([A-Za-z0-9]{2,20})(?:\.(?:mkv|mp4|avi|ts|m4v))?\s*$""").find(line)?.groupValues?.get(1)?.lowercase()
+    }
+
+    /**
+     * Harbor's keep-same-source for Next (findPreferredSourceMatch, streamMatchesPreferredSource):
+     * the chosen addon's stream at the chosen quality, the same release group and dub winning ties;
+     * else another stream at that quality, the addon's first. The rest keep their order.
+     */
+    fun preferSource(ordered: List<RankedStream>, ref: SourceRef, debrid: Boolean): List<RankedStream> {
+        val playable = ordered.filter { it.stream.playable(debrid) }
+        fun refs(s: RankedStream) = sourceRef(s.stream, s.addon.manifest.id)
+        val matches = playable.filter { s ->
+            val r = refs(s)
+            ref.addonId != null && s.addon.manifest.id == ref.addonId &&
+                // The quality you picked: a 4K episode isn't a match for a 1080p choice.
+                !(ref.resolution > 0 && r.resolution > 0 && r.resolution != ref.resolution) &&
+                // A dub is part of the source; unlabelled releases stay eligible.
+                !(ref.languages.isNotEmpty() && r.languages.isNotEmpty() && ref.languages.none { it in r.languages }) &&
+                !(ref.releaseGroup != null && r.releaseGroup != null && r.releaseGroup != ref.releaseGroup)
+        }
+        val score = { s: RankedStream ->
+            val r = refs(s)
+            (if (ref.releaseGroup != null && r.releaseGroup == ref.releaseGroup) 2 else 0) +
+                (if (ref.languages.any { it in r.languages }) 2 else 0) +
+                (if (ref.resolution > 0 && r.resolution == ref.resolution) 1 else 0)
+        }
+        val pick = matches.maxByOrNull(score)
+            ?: playable.firstOrNull { ref.resolution > 0 && it.addon.manifest.id == ref.addonId && refs(it).resolution == ref.resolution }
+            ?: playable.firstOrNull { ref.resolution > 0 && refs(it).resolution == ref.resolution }
+            ?: return ordered
+        return listOf(pick) + (ordered - pick)
+    }
+
     /** What identifies a source between visits: its name line, which carries quality and service. */
     fun streamKey(stream: Stream): String = (stream.name ?: stream.title ?: "").replace('\n', ' ').trim().take(80)
 

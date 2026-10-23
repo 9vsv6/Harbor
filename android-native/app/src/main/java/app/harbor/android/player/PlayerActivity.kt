@@ -34,6 +34,7 @@ import app.harbor.android.data.PlayerPrefs
 import app.harbor.android.data.RankedStream
 import app.harbor.android.data.Ranking
 import app.harbor.android.data.Ready
+import app.harbor.android.data.Recommendations
 import app.harbor.android.data.Scrobble
 import app.harbor.android.data.SkipSegment
 import app.harbor.android.data.SkipSegments
@@ -170,6 +171,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         currentAddonId = intent.getStringExtra(EXTRA_ADDON)
         currentStreamKey = intent.getStringExtra(EXTRA_STREAM_KEY)
         currentSource = intent.getStringExtra(EXTRA_SOURCE)
+        currentStream = app.harbor.android.data.Stream(name = currentStreamKey, title = intent.getStringExtra(EXTRA_STREAM_TITLE))
         showSource()
         autoAdvanced = 0
         anime4kChosenHere = false
@@ -178,6 +180,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         begin(videoId, url)
         lifecycleScope.launch {
             meta = AddonClient.meta(repository.metaAddons(), type, metaId)
+            state.meta = meta
             describe()
             loadXray()
             updateAnime4KButton()
@@ -216,6 +219,11 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.creditsAtMs = 0
         state.chapters = emptyList()
         loadAdvisory(videoId)
+        if (state.endScreen != null) dismissEndScreen()
+        state.endItems = emptyList()
+        endPreparing = ""
+        endPreparedFor = ""
+        endEarlySince = 0
         val settings = state.settings
         val resume = startAt ?: if (settings.resumePlayback) repository.resumeFor(videoId, metaId) else 0L
         state.resumedFromMs = if (startAt == null && settings.resumeNotice && resume > 30_000) resume else 0
@@ -269,6 +277,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             state.positionMs = position
             state.durationMs = duration
             state.bufferedMs = engine.bufferedMs
+            endScreenTick(position, duration)
             // The advisory shows once per video, as soon as playback is under way.
             if (position > 300 && advisoryShownFor != state.videoId && (state.advisory.isNotEmpty() || state.advisoryRating != null)) {
                 advisoryShownFor = state.videoId
@@ -378,12 +387,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val path = android.net.Uri.parse(state.currentUrl).path
             app.harbor.android.data.Downloads.saved(this).firstOrNull { it.file == path }?.let { app.harbor.android.data.Downloads.remove(this, it) }
         }
-        state.controlsVisible = true
+        state.controlsVisible = state.endScreen == null
         if (state.sleepAt == -1L) {
             state.sleepAt = null
             return
         }
-        if (state.next == null || !state.settings.autoPlayNextEpisode) return
+        if (state.next == null || !state.settings.autoPlayNextEpisode || state.endScreen != null) return
         autoAdvanced++
         val limit = prefs.stillWatchingAfter
         if (limit > 0 && autoAdvanced >= limit) state.stillWatching = true else playNext()
@@ -780,8 +789,11 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val debrid = repository.debrid.value
             val settings = state.settings
             // "Keep the same source": the addon this episode came from; else the one remembered for the show.
-            val prefer = currentAddonId?.takeIf { settings.keepSourceNextEpisode }?.let { it to null } ?: repository.preferredSource(metaId)
-            val ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
+            val keep = settings.keepSourceNextEpisode && currentAddonId != null
+            val prefer = if (keep) null else repository.preferredSource(metaId)
+            var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
+            // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
+            if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
             val ready = Playback.best(ranked, debrid)
             state.nextLoading = false
             if (ready == null) {
@@ -803,7 +815,14 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
+    /** The playing source, for keep-same-source on Next. */
+    private var currentStream: app.harbor.android.data.Stream? = null
+
+    private fun currentRef(): Playback.SourceRef =
+        Playback.sourceRef(currentStream ?: app.harbor.android.data.Stream(name = currentStreamKey), currentAddonId)
+
     private fun switchTo(videoId: String, ready: Ready, startAt: Long?) {
+        currentStream = ready.stream
         headers = ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty()
         currentAddonId = ready.addonId ?: currentAddonId
         currentStreamKey = Playback.streamKey(ready.stream)
@@ -916,6 +935,119 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(volumeLevel.coerceAtMost(1f) * max), 0)
         engine.setVolume(volumeLevel.coerceAtLeast(1f))
         return volumeLevel
+    }
+
+    // ---- "More like this" (views/player/hooks/use-end-screen.ts) ----
+
+    /** The video the recommendations are ready for, and the ones the screen already opened for. */
+    private var endPreparing = ""
+    private var endPreparedFor = ""
+    private var endFiredEarly = ""
+    private var endFiredEnd = ""
+    private var endEarlySince = 0L
+
+    /** Movies; series only on their last aired episode (a later season still to watch doesn't count). */
+    private fun endScreenEligible(): Boolean {
+        if (type == "movie") return true
+        val episodes = state.episodes
+        val current = episodes.firstOrNull { it.id == state.videoId } ?: return false
+        val now = System.currentTimeMillis()
+        return episodes.none { ep ->
+            (ep.season == 0) == (current.season == 0) && ep.id != current.id &&
+                compareValuesBy(ep, current, { it.season ?: 0 }, { it.episode ?: 0 }) > 0 &&
+                ep.released?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }?.let { it <= now } == true
+        }
+    }
+
+    private fun endScreenTick(position: Long, duration: Long) {
+        val settings = state.settings
+        val lead = settings.endScreenLeadSec
+        val videoId = state.videoId
+        // Short clips and stubs never get a recommendation screen.
+        if (lead == 0 || duration < 90_000 || state.castingTo != null || state.inPip) return
+        val meta = meta ?: return
+        if (endPreparing != videoId && endScreenEligible()) {
+            endPreparing = videoId
+            lifecycleScope.launch {
+                val list = Recommendations.moreLikeThis(meta, type, repository.tmdbKey.value)
+                Recommendations.warm(this@PlayerActivity, listOf(Recommendations.art(meta.background), Recommendations.art(meta.poster)) +
+                    list.map { Recommendations.art(it.background ?: it.poster) })
+                if (state.videoId != videoId) return@launch
+                state.endItems = list
+                state.endFocused = 0
+                endPreparedFor = videoId
+            }
+        }
+        if (endPreparedFor != videoId) return
+        val open = state.endScreen
+        // Back near the start: a replay or start over. Arm it again, and step aside if it's up.
+        if (position in 1 until 30_000) {
+            endFiredEarly = ""
+            endFiredEnd = ""
+            if (open != null) dismissEndScreen()
+            return
+        }
+        val ended = state.ended || (!state.playing && position >= duration - 1_000)
+        if (open == EndScreenMode.Shrink && ended) { state.endScreen = EndScreenMode.Full; return }
+        if (open != null) return
+        if (ended) {
+            if (endFiredEnd == videoId) return
+            endFiredEnd = videoId
+            if (state.endItems.isEmpty()) finish() else openEndScreen(EndScreenMode.Full)
+            return
+        }
+        if (lead <= 0 || lead * 1_000L >= duration || state.endItems.isEmpty()) return
+        if (position < duration - lead * 1_000L) { endEarlySince = 0; return }
+        // A replay flashes the old near-end position before seeking back; the window must hold.
+        if (endEarlySince == 0L) endEarlySince = System.currentTimeMillis()
+        if (System.currentTimeMillis() - endEarlySince < 1_500 || endFiredEarly == videoId) return
+        endFiredEarly = videoId
+        openEndScreen(EndScreenMode.Shrink)
+    }
+
+    private fun openEndScreen(mode: EndScreenMode) {
+        state.panel = null
+        state.controlsVisible = false
+        state.endScreen = mode
+    }
+
+    override fun dismissEndScreen() {
+        state.endScreen = null
+        state.endCountdown = null
+        shrinkVideo(0f, 0f, 1f)
+    }
+
+    override fun endScreenPlay(meta: Meta) = leaveFor(meta, play = true)
+    override fun endScreenInfo(meta: Meta) = leaveFor(meta, play = false)
+
+    private fun leaveFor(meta: Meta, play: Boolean) {
+        repository.pendingOpen.value = meta to play
+        startActivity(Intent(this, app.harbor.android.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        finish()
+    }
+
+    override fun shrinkVideo(left: Float, bottom: Float, scale: Float) {
+        val view = engine.view
+        view.pivotX = 0f
+        view.pivotY = view.height.toFloat()
+        view.animate().scaleX(scale).scaleY(scale).translationX(left).translationY(-bottom)
+            .setDuration(340).setInterpolator(android.view.animation.DecelerateInterpolator(2f)).start()
+    }
+
+    override fun toggleMute() {
+        state.muted = !state.muted
+        engine.setVolume(if (state.muted) 0f else volumeLevel.coerceAtLeast(1f))
+        if (!state.muted) setVolumeLevel(state.volume)
+    }
+
+    override fun setVolumeLevel(level: Float) {
+        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat()
+        state.volume = level.coerceIn(0f, 1f)
+        state.muted = false
+        volumeLevel = state.volume
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(state.volume * max), 0)
+        engine.setVolume(1f)
     }
 
     override fun reportAd(ranges: List<Pair<Long, Long>>, onDone: (Boolean) -> Unit) {
@@ -1123,6 +1255,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         private const val EXTRA_ADDON = "addon"
         private const val EXTRA_STREAM_KEY = "streamKey"
         private const val EXTRA_SOURCE = "adSource"
+        private const val EXTRA_STREAM_TITLE = "streamTitle"
         private val headerSerializer = MapSerializer(String.serializer(), String.serializer())
 
         fun intent(context: Context, ready: Ready, type: String, metaId: String, videoId: String, title: String): Intent =
@@ -1135,6 +1268,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 .putExtra(EXTRA_ADDON, ready.addonId)
                 .putExtra(EXTRA_STREAM_KEY, Playback.streamKey(ready.stream))
                 .putExtra(EXTRA_SOURCE, AdSkip.sourceKey(ready.stream))
+                .putExtra(EXTRA_STREAM_TITLE, ready.stream.title ?: ready.stream.description)
                 .putExtra(EXTRA_HEADERS, Net.json.encodeToString(headerSerializer, ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty()))
     }
 }

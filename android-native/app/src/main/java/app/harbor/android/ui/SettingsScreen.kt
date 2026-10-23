@@ -739,6 +739,17 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         PillChoice(listOf(0 to "At the credits", 30 to "30 s", 45 to "45 s", 60 to "1 min", 90 to "90 s"), settings.nextEpisodeLeadSec) { v -> set { it.copy(nextEpisodeLeadSec = v) } }
         RowText("Ask if you're still watching", "After this many episodes in a row.")
         PillChoice(listOf(0 to "Never", 2 to "2", 3 to "3", 5 to "5"), prefs.stillWatchingAfter) { n -> repository.updatePlayerPrefs { it.copy(stillWatchingAfter = n) } }
+        HarborHeading("More like this at the end", "Show recommendations when a movie, series finale or anime film finishes. At the end the card fills the screen; before the end the film shrinks to a corner and keeps playing behind it.")
+        PillChoice(listOf(-1 to "At the end", 0 to "Off", 30 to "30s", 60 to "1 min", 120 to "2 min", 180 to "3 min", 300 to "5 min"), settings.endScreenLeadSec) { v -> set { it.copy(endScreenLeadSec = v) } }
+        if (settings.endScreenLeadSec != 0) {
+            ToggleRow("Countdown", "Act automatically if nothing is chosen before time runs out.", settings.endScreenCountdownSec > 0) { v -> set { it.copy(endScreenCountdownSec = if (v) 15 else 0) } }
+            if (settings.endScreenCountdownSec > 0) {
+                RowText("Countdown length", "How long Harbor waits before acting on the countdown.")
+                PillChoice(listOf(5, 10, 15, 20, 30).map { it to "${it}s" }, settings.endScreenCountdownSec) { v -> set { it.copy(endScreenCountdownSec = v) } }
+                RowText("When the countdown ends", "Close the player, or start whichever recommendation is focused.")
+                PillChoice(listOf("close" to "Close player", "play" to "Play focused"), settings.endScreenOnZero) { v -> set { it.copy(endScreenOnZero = v) } }
+            }
+        }
     }
     // ---- Trailers ----
     Part("Trailers") {
