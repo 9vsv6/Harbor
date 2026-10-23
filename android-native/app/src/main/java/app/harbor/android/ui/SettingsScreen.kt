@@ -147,9 +147,13 @@ private enum class Section(
     val parts: Set<String>? = null,
 ) {
     Essentials("Essentials", "Four things worth checking once.", R.drawable.set_rocket, "get started essentials basics stremio account metadata engine languages play instant theme"),
-    Profiles("Profiles", "The profiles on this device, and who's watching.", R.drawable.set_users, "profile who's watching", setOf("Profiles")),
+    YourProfile("Your profile", "Your name, colour and the accounts you're signed in with.", R.drawable.set_user_round, "your profile identity name colour color avatar"),
+    Profiles("Profiles", "The profiles on this device, and who's watching.", R.drawable.set_users, "profile who's watching privileges secondary nuvio cloud profiles", setOf("Profiles")),
+    HarborAccount("Harbor account", "Your handle across Harbor.", R.drawable.harbor_mark, "harbor account handle sign in register recovery key discord"),
+    Provider("Account provider", "Stremio or Nuvio behind your profiles, progress and addons.", R.drawable.set_refresh_cw, "account provider stremio nuvio cloud switch"),
     Stremio("Stremio", "Your Stremio sign-in: addons and library come from it.", R.drawable.set_play, "stremio sign in email password", setOf("Stremio")),
-    Trackers("Trackers", "Trakt, Simkl, AniList, MyAnimeList and Letterboxd.", R.drawable.set_activity, "trakt simkl anilist myanimelist mal letterboxd stremboxd scrobble watched comments reviews avatar"),
+    Nuvio("Nuvio", "Your Nuvio account, profile slot and synced addons.", R.drawable.set_play, "nuvio cloud account profile slot mapping synced addons"),
+    Trackers("Trackers", "Trakt, Simkl, AniList, MyAnimeList, Letterboxd and PublicMetaDB.", R.drawable.set_activity, "trakt simkl anilist myanimelist mal letterboxd stremboxd publicmetadb pmdb scrobble watched comments reviews avatar"),
     Play("When you press Play", "What Play does, resuming, and which source plays.", R.drawable.set_play_start, "play button instant manual picker resume start over remember source stalled", setOf("Play")),
     Engine("Player engine", "mpv or Android's player.", R.drawable.set_cpu, "engine mpv media3 player", setOf("Engine")),
     Aspect("Aspect ratio", "How the picture fills the screen.", R.drawable.set_rectangle_horizontal, "aspect ratio fit fill stretch zoom", setOf("Aspect")),
@@ -198,7 +202,7 @@ private enum class Section(
 
 private enum class Group(val label: String, val section: String, @androidx.annotation.DrawableRes val icon: Int, val children: List<Section>) {
     GetStarted("Get started", "Setup", R.drawable.set_rocket, listOf(Section.Essentials)),
-    Account("Account & sync", "Setup", R.drawable.set_account_setup, listOf(Section.Profiles, Section.Stremio, Section.Trackers)),
+    Account("Account & sync", "Setup", R.drawable.set_account_setup, listOf(Section.YourProfile, Section.Profiles, Section.HarborAccount, Section.Provider, Section.Stremio, Section.Nuvio, Section.Trackers)),
     Playback(
         "Playback", "Watching", R.drawable.set_play,
         listOf(Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.AdSkip, Section.Intros, Section.UpNext, Section.Trailers, Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders, Section.MoreShaders, Section.Motion),
@@ -216,6 +220,13 @@ private enum class Group(val label: String, val section: String, @androidx.annot
 
 private fun groupOf(section: Section) = Group.entries.first { section in it.children }
 
+/** The account provider, as Settings last saw it: Account & sync shows Stremio's tab or Nuvio's. */
+private var shownProvider by mutableStateOf("stremio")
+
+/** A group's sub-pages as shown: only the active provider's account tab (account.tsx). */
+private val Group.shown: List<Section>
+    get() = children.filterNot { it == (if (shownProvider == "nuvio") Section.Stremio else Section.Nuvio) }
+
 private val LANGUAGE_CODES = listOf("en", "es", "fr", "de", "it", "pt", "ar", "ja", "ko", "zh", "ru", "tr", "hi", "nl", "pl", "sv", "he", "id", "vi", "th")
 
 /** A settings page (Section name) for Settings to open next, set by other screens. */
@@ -228,6 +239,8 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
     var sectionName by rememberSaveable { mutableStateOf(Section.Profiles.name) }
     var query by rememberSaveable { mutableStateOf("") }
     var target by remember { mutableStateOf<Section?>(null) }
+    val accountsShared by repository.accounts.shared.collectAsState()
+    shownProvider = accountsShared.provider
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
         // Tablets get Harbor's desktop layout: the sidebar on the left, the open page beside it.
@@ -237,7 +250,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
         fun open(g: Group, s: Section? = null) {
             query = ""
             groupName = g.name
-            if (wide) sectionName = (s ?: g.children.first()).name
+            if (wide) sectionName = (s ?: g.shown.first()).name
             target = s
         }
         // Another screen asked for a page, e.g. the library's "Connect TorBox".
@@ -338,7 +351,7 @@ private fun SettingsRail(repository: Repository, onOpenAddons: () -> Unit, selec
                 Column(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(HarborColors.Elevated.copy(alpha = 0.5f)).padding(6.dp),
                 ) {
-                    entry.children.forEach { child ->
+                    entry.shown.forEach { child ->
                         val open = child == selectedSection
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (open) HarborColors.Raised else Color.Transparent)
@@ -372,6 +385,7 @@ private fun SearchResults(query: String, onOpen: (Section) -> Unit) {
 /** A tablet sub-page: its title and what it is, then its settings. */
 /** Pages ported whole from Harbor: they open with their own headings, as Harbor's do. */
 private val SELF_TITLED = setOf(
+    Section.YourProfile, Section.HarborAccount, Section.Provider, Section.Nuvio,
     Section.Services, Section.SourcePreferences, Section.Sorting, Section.Picker, Section.StreamFilters,
     Section.HomeRows, Section.PosterCards, Section.DetailPages, Section.LibraryContent, Section.AiSearchPage, Section.Theme, Section.StreamBadges, Section.BadgeRules, Section.BadgePacks,
     Section.Essentials, Section.AdSkip, Section.MoreShaders, Section.Motion, Section.Support, Section.Licences,
@@ -417,7 +431,7 @@ private fun GroupContent(
     Column(
         Modifier.fillMaxSize().verticalScroll(scroll).padding(start = horizontal, end = horizontal, top = 6.dp, bottom = 48.dp),
     ) {
-        group.children.forEachIndexed { index, section ->
+        group.shown.forEachIndexed { index, section ->
             Column(
                 Modifier.fillMaxWidth().onGloballyPositioned { offsets[section] = it.positionInParent().y.toInt() },
                 verticalArrangement = Arrangement.spacedBy(22.dp),
@@ -441,9 +455,15 @@ private fun SectionBody(
     set: ((AppSettings) -> AppSettings) -> Unit,
     onOpenAddons: () -> Unit,
 ) {
+    val openSection = LocalOpenSection.current
     androidx.compose.runtime.CompositionLocalProvider(LocalParts provides section.parts) {
         when (section) {
-            Section.Profiles, Section.Stremio -> AccountSection(repository, settings, set)
+            Section.YourProfile -> YourProfilePage(repository)
+            Section.Profiles -> AccountSection(repository, settings, set)
+            Section.HarborAccount -> AccountGate(repository, AccountTab.Harbor) { HarborAccountPage(repository) { openSection(Section.Stremio) } }
+            Section.Provider -> AccountGate(repository, AccountTab.Provider) { AccountProviderPage(repository) { openSection(Section.Stremio) } }
+            Section.Stremio -> AccountGate(repository, AccountTab.ProviderAccount) { AccountSection(repository, settings, set) }
+            Section.Nuvio -> AccountGate(repository, AccountTab.ProviderAccount) { NuvioPage(repository, onOpenAddons) }
             Section.Trackers -> TrackersPanel(repository, settings, set)
             Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.Intros, Section.UpNext, Section.Trailers,
             Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders -> PlayerSection(repository, settings, set)
@@ -537,15 +557,23 @@ private fun languageOptions(extra: List<String> = emptyList()): List<Pair<String
 
 @Composable
 private fun AccountSection(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
+    val profile by repository.activeProfile.collectAsState()
+    val shared by repository.accounts.shared.collectAsState()
+    val nuvio by repository.accounts.nuvio.collectAsState()
+    val primary = profile?.id == app.harbor.android.data.MAIN_PROFILE
+    val privileges = if (shared.provider == "nuvio") shared.nuvioPrivileges else shared.privileges
     Part("Stremio") { StremioCard(repository) }
-    Part("Profiles") { ProfilesCard(repository) }
-    Card("Profiles") {
+    // Nuvio mode: the account's cloud profiles, and which one this profile watches as.
+    if (shared.provider == "nuvio" && nuvio.session != null) Part("Profiles") { NuvioProfilesSection(repository) }
+    Part("Profiles") { ProfilesCard(repository, canAdd = primary || privileges.canAddProfiles) }
+    if (primary || privileges.canManageStartup) Card("Profiles") {
         SwitchRow(
             "Ask \"Who's watching?\" when Harbor opens",
             "With more than one profile. Off opens the last profile used.",
             settings.askProfileOnLaunch,
         ) { v -> set { it.copy(askProfileOnLaunch = v) } }
     }
+    if (primary) Card("Profiles") { SecondaryPrivilegesCard(repository) }
 }
 
 @Composable

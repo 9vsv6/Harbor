@@ -113,6 +113,8 @@ fun HeroActions(
             Icon(if (listed) Icons.Rounded.Check else Icons.Rounded.Add, null, tint = HarborColors.Ink, modifier = Modifier.size(18.dp))
             Text(if (listed) "In Watchlist" else "Add to Watchlist", color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
+        // PublicMetaDB's watchlist, when connected (add-to-publicmetadb-button.tsx).
+        AddToPmdbButton(repository, meta)
         // Rate: the star, or your score once you've rated it.
         Box(
             Modifier.size(48.dp).clip(CircleShape).background(if (rating != null) InkOn else Scrim).clickable { rateOpen = true },

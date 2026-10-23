@@ -130,7 +130,7 @@ fun WhosWatching(repository: Repository) {
 
 /** Settings → Profiles: switch, rename, recolour, add and delete. */
 @Composable
-fun ProfilesCard(repository: Repository) {
+fun ProfilesCard(repository: Repository, canAdd: Boolean = true) {
     val profiles by repository.profiles.collectAsState()
     val active by repository.activeProfile.collectAsState()
     val scope = rememberCoroutineScope()
@@ -159,7 +159,7 @@ fun ProfilesCard(repository: Repository) {
                 }
             }
         }
-        HGhostButton(onClick = { adding = true }) {
+        if (canAdd) HGhostButton(onClick = { adding = true }) {
             Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
             Text("Add profile")
         }
