@@ -51,7 +51,7 @@ object SkipSegments {
             if (parts.size >= 3) append("&season=").append(parts[1]).append("&episode=").append(parts[2])
         }
         val introDbApp = async { introDbApp(query) }
-        val theIntroDb = async { theIntroDb(query, durationMs) }
+        val theIntroDb = async { theIntroDb(query + if (durationMs > 0) "&duration_ms=$durationMs" else "", durationMs) }
         val skipDb = async { skipDb(query, durationMs) }
         // Same preference as Harbor: the first database that knows the episode wins.
         listOf(introDbApp, theIntroDb, skipDb).map { it.await() }.firstOrNull { it.isNotEmpty() }.orEmpty()
@@ -79,8 +79,10 @@ object SkipSegments {
     }
 
     private suspend fun theIntroDb(query: String, durationMs: Long): List<SkipSegment> {
-        val request = okhttp3.Request.Builder().url("https://api.theintrodb.org/v2/media?$query")
-            .apply { theIntroDbKey?.let { header("X-API-Key", it) } }.build()
+        // TheIntroDB's API v4, as Harbor (src/lib/skip-intro/theintrodb.ts): a bearer key, and the
+        // length so it picks the cut of the episode that's playing.
+        val request = okhttp3.Request.Builder().url("https://api.theintrodb.org/v4/media?$query")
+            .apply { theIntroDbKey?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer ${it.trim()}") } }.build()
         val json = runCatching { Net.json.parseToJsonElement(Net.call(request)).jsonObject }.getOrNull() ?: return emptyList()
         fun all(key: String, kind: SkipSegment.Kind) =
             (json[key] as? JsonArray).orEmpty().mapNotNull { span(it, kind, durationMs) }

@@ -90,8 +90,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
+import app.harbor.android.R
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -228,6 +232,10 @@ internal fun HarborControls(
                         onTouch()
                         toggle(state, Panel.Subtitles)
                     }
+                    // Harbor's Chapters control: a chrome control you turn on, shown when the file has chapters.
+                    if (state.settings.chapterMenu && state.chapters.isNotEmpty()) {
+                        ToolIcon(painterResource(R.drawable.pl_list_tree), "Chapters", state.panel == Panel.Chapters) { onTouch(); toggle(state, Panel.Chapters) }
+                    }
                     if (state.anime4kAvailable) Anime4KPill(prefs, state.panel == Panel.Anime4K) { onTouch(); toggle(state, Panel.Anime4K) }
                     ToolIcon(Icons.Outlined.Speed, "Speed", state.panel == Panel.Speed, dot = state.speed != 1f) { onTouch(); toggle(state, Panel.Speed) }
                     // Harbor's Picture menu: Fit, Fill (no bars), Stretch and fixed shapes.
@@ -254,7 +262,11 @@ private fun TransportButton(icon: ImageVector, description: String, iconSize: an
 
 /** Harbor's 48 dp round tool button: white/85, white/22 behind it while its menu is open. */
 @Composable
-private fun ToolIcon(icon: ImageVector, description: String, open: Boolean, dot: Boolean = false, onClick: () -> Unit) {
+private fun ToolIcon(icon: ImageVector, description: String, open: Boolean, dot: Boolean = false, onClick: () -> Unit) =
+    ToolIcon(rememberVectorPainter(icon), description, open, dot, onClick)
+
+@Composable
+private fun ToolIcon(icon: Painter, description: String, open: Boolean, dot: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier.size(48.dp).clip(CircleShape).background(if (open) Color(0x38FFFFFF) else Color.Transparent).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -333,6 +345,16 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
             drawLine(Color(0x26FFFFFF), Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
             drawLine(Color(0x4DFFFFFF), Offset(0f, y), Offset(size.width * buffered, y), stroke, StrokeCap.Round)
             drawLine(HarborColors.Accent, Offset(0f, y), Offset(size.width * value, y), stroke, StrokeCap.Round)
+            // Harbor's chapter marks: a 1 px white tick with a dark edge, 12 px tall.
+            if (state.settings.seekBarChapters && state.durationMs > 0) {
+                val tick = 12.dp.toPx()
+                for (chapter in state.chapters) {
+                    if (chapter.startMs <= 0 || chapter.startMs >= state.durationMs) continue
+                    val x = size.width * chapter.startMs / state.durationMs
+                    drawRect(Color(0xA6000000), Offset(x - 1.dp.toPx(), y - tick / 2), androidx.compose.ui.geometry.Size(1.dp.toPx(), tick))
+                    drawRect(Color(0xE6FFFFFF), Offset(x, y - tick / 2), androidx.compose.ui.geometry.Size(1.dp.toPx(), tick))
+                }
+            }
             if (dragging) drawCircle(Color.White, 8.dp.toPx(), Offset(size.width * value, y))
         }
         if (dragging) {
@@ -375,7 +397,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
             val current = state.panel ?: Panel.Audio
             val width = when (current) {
                 Panel.Subtitles, Panel.Episodes, Panel.XRay -> minOf(640.dp, maxW - 36.dp)
-                Panel.Audio, Panel.SubStyle -> minOf(360.dp, maxW - 36.dp)
+                Panel.Audio, Panel.SubStyle, Panel.Chapters -> minOf(360.dp, maxW - 36.dp)
                 else -> minOf(300.dp, maxW - 36.dp)
             }
             Column(
@@ -413,6 +435,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
                         Box(Modifier.padding(horizontal = 12.dp)) { EpisodesPanel(state, actions) }
                     }
                     Panel.XRay -> XrayPanel(state)
+                    Panel.Chapters -> ChaptersPopover(state, actions)
                     Panel.Sources -> {}
                 }
             }
@@ -590,6 +613,66 @@ private fun ColumnScope.AudioPopover(state: PlayerState, actions: PlayerActions)
             }
         }
         SyncOffset("Sync Offset", state.audioDelayMs, listOf(100)) { actions.setAudioDelay(it) }
+    }
+}
+
+// ---- Chapters (transport/chapter-menu.tsx) ----
+
+@Composable
+private fun ColumnScope.ChaptersPopover(state: PlayerState, actions: PlayerActions) {
+    val chapters = state.chapters
+    // The chapter playing: the last one that starts at or before the position.
+    val active = chapters.indexOfLast { it.startMs <= state.positionMs + 250 }
+    PopoverFrame("Chapters", chapters.size, onClose = { state.panel = null }) {
+        val marks = state.settings.seekBarChapters
+        Row(
+            Modifier.fillMaxWidth().clickable { actions.updateSettings { it.copy(seekBarChapters = !marks) } }.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Show chapter marks on seekbar", color = Muted, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+            // Harbor's small switch: accent track with the knob on the right when on.
+            Box(
+                Modifier.size(width = 32.dp, height = 18.dp).clip(RoundedCornerShape(50)).background(if (marks) HarborColors.Accent else PopRaised).padding(3.dp),
+                contentAlignment = if (marks) Alignment.CenterEnd else Alignment.CenterStart,
+            ) { Box(Modifier.size(12.dp).clip(CircleShape).background(HarborColors.Canvas)) }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = active.coerceAtLeast(0))
+        LazyColumn(Modifier.weight(1f, fill = false).padding(8.dp), state = listState, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            itemsIndexed(chapters, key = { index, chapter -> "${chapter.startMs}-$index" }) { index, chapter ->
+                val current = index == active
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        .background(if (current) Pop else Color.Transparent)
+                        .then(if (current) Modifier.border(1.dp, PopEdge, RoundedCornerShape(8.dp)) else Modifier)
+                        .clickable {
+                            actions.seekTo(chapter.startMs)
+                            state.panel = null
+                        }
+                        .padding(horizontal = 10.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        Modifier.size(16.dp).clip(CircleShape).background(if (current) HarborColors.Accent else PopRaised),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("${index + 1}", color = if (current) HarborColors.Canvas else Subtle, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(
+                        chapter.title ?: "Chapter ${index + 1}",
+                        color = if (current) Color.White else Muted,
+                        fontSize = 12.5.sp,
+                        fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(clock(chapter.startMs), color = Subtle, fontSize = 10.5.sp)
+                }
+            }
+        }
     }
 }
 

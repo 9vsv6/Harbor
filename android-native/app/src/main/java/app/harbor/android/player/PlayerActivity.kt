@@ -214,6 +214,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         secondaryDone = false
         bufferingSince = 0L
         state.creditsAtMs = 0
+        state.chapters = emptyList()
+        loadAdvisory(videoId)
         val settings = state.settings
         val resume = startAt ?: if (settings.resumePlayback) repository.resumeFor(videoId, metaId) else 0L
         state.resumedFromMs = if (startAt == null && settings.resumeNotice && resume > 30_000) resume else 0
@@ -267,6 +269,11 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             state.positionMs = position
             state.durationMs = duration
             state.bufferedMs = engine.bufferedMs
+            // The advisory shows once per video, as soon as playback is under way.
+            if (position > 300 && advisoryShownFor != state.videoId && (state.advisory.isNotEmpty() || state.advisoryRating != null)) {
+                advisoryShownFor = state.videoId
+                state.advisoryOpen = true
+            }
             pendingFraction?.let { fraction ->
                 if (duration > 0) {
                     pendingFraction = null
@@ -388,6 +395,30 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun onVideoSizeChanged() = updatePipParams()
+
+    override fun onChaptersChanged() {
+        state.chapters = engine.chapters()
+        if (state.chapters.isEmpty() && state.panel == Panel.Chapters) state.panel = null
+    }
+
+    private var advisoryShownFor = ""
+
+    /** Harbor's content advisory: the parental guide for this title, unless you ignored it. */
+    private fun loadAdvisory(videoId: String) {
+        state.advisory = emptyList()
+        state.advisoryRating = null
+        state.advisoryOpen = false
+        val imdb = Regex("""tt\d+""").find(metaId)?.value ?: Regex("""tt\d+""").find(videoId)?.value
+        state.advisoryFor = imdb
+        val settings = state.settings
+        if (!settings.contentAdvisoryToast || imdb == null || imdb in settings.contentAdvisoryIgnored) return
+        lifecycleScope.launch {
+            val guide = app.harbor.android.data.ContentAdvisory.find(imdb, meta?.name, meta?.year, type == "movie")
+            if (state.videoId != videoId) return@launch
+            state.advisory = guide.categories.map { Advisory(it.first, it.second) }
+            state.advisoryRating = guide.rating
+        }
+    }
 
     override fun onTracksChanged() {
         val audio = engine.audioTracks()

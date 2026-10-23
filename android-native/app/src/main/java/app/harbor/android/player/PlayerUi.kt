@@ -297,6 +297,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         }
 
         Hint(state)
+        ContentAdvisoryLayer(state, actions)
         if (!state.stillWatching) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
         ResumePill(state, actions, Modifier.align(Alignment.BottomStart))
 

@@ -30,7 +30,13 @@ sealed interface SubChoice {
     data class Addon(val subtitle: Subtitle) : SubChoice
 }
 
-enum class Panel { Subtitles, SubStyle, Audio, Speed, Sources, Episodes, Sleep, Anime4K, XRay, Picture }
+enum class Panel { Subtitles, SubStyle, Audio, Speed, Sources, Episodes, Sleep, Anime4K, XRay, Picture, Chapters }
+
+/** Harbor's "More like this" end screen: "shrink" while the film still plays in a corner, "full" once it ends. */
+enum class EndScreenMode { Full, Shrink }
+
+/** One line of the IMDb parental guide: "Violence", "Severe". */
+data class Advisory(val category: String, val severity: String)
 
 /** Harbor's crop modes (use-video-fill.ts); the fixed shapes are mpv's aspect override. */
 enum class Fit(val label: String, val mode: Int, val aspect: String? = null) {
@@ -112,6 +118,24 @@ class PlayerState {
     var quality by mutableStateOf<String?>(null)
     /** A movie's year, under the title when there's no episode line. */
     var year by mutableStateOf<String?>(null)
+
+    /** The file's chapters (mpv), for the Chapters menu and the seek bar marks. */
+    var chapters by mutableStateOf<List<Chapter>>(emptyList())
+
+    /** What's playing, for the end screen's artwork and lines. */
+    var meta by mutableStateOf<app.harbor.android.data.Meta?>(null)
+    var muted by mutableStateOf(false)
+    /** The end screen when open, its recommendations, the focused card and the countdown. */
+    var endScreen by mutableStateOf<EndScreenMode?>(null)
+    var endItems by mutableStateOf<List<app.harbor.android.data.Meta>>(emptyList())
+    var endFocused by mutableIntStateOf(0)
+    var endCountdown by mutableStateOf<Int?>(null)
+
+    /** The content advisory card for this title while it shows, its rating, and the IMDb id it's for. */
+    var advisory by mutableStateOf<List<Advisory>>(emptyList())
+    var advisoryRating by mutableStateOf<String?>(null)
+    var advisoryFor by mutableStateOf<String?>(null)
+    var advisoryOpen by mutableStateOf(false)
 
     /** Wall-clock time the sleep timer pauses at, or -1 for "end of this episode". */
     var sleepAt by mutableStateOf<Long?>(null)
