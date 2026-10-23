@@ -350,6 +350,8 @@ data class AppSettings(
     val spoilerDescriptions: Boolean = true,
     /** Episode card size on title pages: 0 default, 1 large, 2 extra large (Harbor's Card size). */
     val episodeCardSize: Int = 0,
+    /** Harbor's My Groups in the library: MDBList and Trakt lists, some pinned to Home. */
+    val libraryGroups: List<LibraryGroup> = emptyList(),
 
     // ---- Appearance and profiles ----
     val accent: Long = 0xFFF0A35E,

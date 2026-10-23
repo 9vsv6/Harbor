@@ -219,7 +219,17 @@ private fun HarborRoot(repository: Repository) {
                         nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre ${if (type == "movie") "Movies" else "Shows"}")
                     }
                 }
-                composable(Tab.MyStuff.route) { LibraryScreen(repository, onOpen = { open(it) }, onResume = browse::resume) }
+                composable(Tab.MyStuff.route) {
+                    LibraryScreen(
+                        repository, onOpen = { open(it) }, onResume = browse::resume,
+                        onConnectTorbox = { app.harbor.android.ui.SettingsJump.value = "Services"; nav.selectTab(Tab.Profile) },
+                        // TorBox cloud files play on their own, outside Stremio's library and the trackers.
+                        onPlayFile = { url, id, title ->
+                            val ready = app.harbor.android.data.Ready(app.harbor.android.data.Stream(url = url, name = "TorBox"), url)
+                            context.startActivity(PlayerActivity.intent(context, ready, "movie", id, id, title))
+                        },
+                    )
+                }
                 composable(Tab.Profile.route) { SettingsScreen(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) }) }
                 composable("addons") { AddonsScreen(repository, onBack = { nav.popBackStack() }) }
                 composable(

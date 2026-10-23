@@ -218,6 +218,9 @@ private fun groupOf(section: Section) = Group.entries.first { section in it.chil
 
 private val LANGUAGE_CODES = listOf("en", "es", "fr", "de", "it", "pt", "ar", "ja", "ko", "zh", "ru", "tr", "hi", "nl", "pl", "sv", "he", "id", "vi", "th")
 
+/** A settings page (Section name) for Settings to open next, set by other screens. */
+val SettingsJump = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
 @Composable
 fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> Unit = {}) {
     // Phones: "" is the home rail, else an open group. Tablets: the open sub-page.
@@ -236,6 +239,12 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
             groupName = g.name
             if (wide) sectionName = (s ?: g.children.first()).name
             target = s
+        }
+        // Another screen asked for a page, e.g. the library's "Connect TorBox".
+        val jump by SettingsJump.collectAsState()
+        LaunchedEffect(jump) {
+            jump?.let { name -> Section.entries.firstOrNull { it.name == name }?.let { open(groupOf(it), it) } }
+            SettingsJump.value = null
         }
         BackHandler(enabled = query.isNotEmpty() || (!wide && group != null)) {
             if (query.isNotEmpty()) query = "" else groupName = ""

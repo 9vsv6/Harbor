@@ -246,6 +246,17 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                     if (view == BrowseView.Home && newEpisodes.isNotEmpty()) {
                         item(key = "new-episodes") { Rail("New Episodes", newEpisodes.map { it.meta }, nav::openMeta) }
                     }
+                    // Harbor's My Groups row: the library groups pinned to Home.
+                    val pinnedGroups = display.libraryGroups.filter { it.pinnedToHome }
+                    if (view == BrowseView.Home && pinnedGroups.isNotEmpty()) {
+                        item(key = "library-groups") {
+                            val openPage = LocalOpenPage.current
+                            HomeGroupsRow(pinnedGroups) { group ->
+                                app.harbor.android.data.LibraryGroups.openRequest.value = group.id
+                                openPage("mystuff")
+                            }
+                        }
+                    }
                     // Shows and Movies always lead with Top 10 from Trending (Harbor's rank row); Home when asked.
                     val rankFirst = display.showTop10 || ((view == BrowseView.Shows || view == BrowseView.Movies) && (current.firstOrNull()?.metas?.size ?: 0) >= 10)
                     current.firstOrNull()?.takeIf { rankFirst }?.let { first ->
