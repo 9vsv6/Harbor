@@ -47,6 +47,8 @@ object HarborCore {
         type: String,
         settings: AppSettings,
         debrids: Collection<DebridService>,
+        /** The anime episode asked for: the core then reads anime filenames and drops other episodes and seasons. */
+        anime: AnimeStreams.Request? = null,
     ): Result? {
         if (!available || streams.isEmpty()) return null
         val returnIdx = mutableMapOf<String, Int>()
@@ -81,6 +83,20 @@ object HarborCore {
             put("allowSeasonPacks", true)
             put("requirePreferredLanguage", settings.requireStreamLanguage)
             putJsonArray("preferredLanguages") { settings.streamLanguages.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+            if (anime != null) {
+                put("isAnime", true)
+                anime.season?.let { put("expectedSeason", it) }
+                anime.episode?.let { put("expectedEpisode", it) }
+                putJsonArray("expectedTitles") { anime.titles.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+                put("animeEpisode", buildJsonObject {
+                    put("absolute", anime.absolute)
+                    putJsonArray("aliases") { anime.aliases.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
+                    putJsonArray("coordinates") {
+                        anime.coordinates.forEach { (s, e) -> add(buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(s)); add(kotlinx.serialization.json.JsonPrimitive(e)) }) }
+                    }
+                    anime.splitPart?.let { put("splitPart", it) }
+                })
+            }
         }
         val score = buildJsonObject {
             putJsonArray("activeDebrids") { debrids.mapNotNull { debridSlug[it] }.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }

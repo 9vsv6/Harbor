@@ -6,7 +6,9 @@
 //! `nativeIndex`), runs parse → trust → corpus stats → score → rank, and answers
 //! `{ primary, order: [{ i, score, tier, reasons }], rejected: [{ i, reason }] }`.
 
-use harbor_core::{parser, scoring, trust, ScoreOptions, Stream, TrustOptions};
+mod anime;
+
+use harbor_core::{parser, scoring, trust, Rejection, ScoreOptions, Stream, TrustOptions};
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
@@ -40,11 +42,31 @@ fn index_of(extra: &std::collections::BTreeMap<String, serde_json::Value>) -> u6
 
 fn rank(streams: &str, trust_opts: &str, score_opts: &str) -> Result<String, String> {
     let raw: Vec<Stream> = serde_json::from_str(streams).map_err(|e| format!("streams: {e}"))?;
-    let trust_opts: TrustOptions = serde_json::from_str(trust_opts).map_err(|e| format!("trust: {e}"))?;
+    let mut trust_json: serde_json::Value = serde_json::from_str(trust_opts).map_err(|e| format!("trust: {e}"))?;
+    // The episode an anime request is for rides along with the trust options.
+    let anime_episode: Option<anime::AnimeEpisode> = trust_json
+        .as_object_mut()
+        .and_then(|o| o.remove("animeEpisode"))
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| format!("animeEpisode: {e}"))?;
+    let trust_opts: TrustOptions = serde_json::from_value(trust_json).map_err(|e| format!("trust: {e}"))?;
     let score_opts: ScoreOptions = serde_json::from_str(score_opts).map_err(|e| format!("score: {e}"))?;
 
-    let parsed = raw.into_iter().map(parser::parse_stream).collect::<Vec<_>>();
-    let gated = trust::apply_trust(parsed, &trust_opts);
+    let mut parsed = raw.into_iter().map(parser::parse_stream).collect::<Vec<_>>();
+    // As the desktop pipeline: anime filenames are read the anime way, then other episodes,
+    // seasons and cours are dropped before the trust gate (unless the filter is off).
+    let mut anime_rejected = Vec::new();
+    if trust_opts.is_anime {
+        anime::enhance(&mut parsed);
+        if let (Some(request), false) = (&anime_episode, trust_opts.disabled) {
+            let (keep, drop) = anime::filter_episode(parsed, request, &trust_opts.expected_titles);
+            parsed = keep;
+            anime_rejected = drop;
+        }
+    }
+    let mut gated = trust::apply_trust(parsed, &trust_opts);
+    gated.rejected.extend(anime_rejected.into_iter().map(|(stream, reason)| Rejection { stream, reason }));
     let corpus = scoring::compute_corpus_stats(&gated.keep, &score_opts);
     let mut scored: Vec<_> = gated.keep.into_iter().map(|p| scoring::score_stream(p, &score_opts, &corpus)).collect();
     // The desktop's rankAndPick (src/lib/streams/scoring/scoring-rank.ts) sorts by score, or by

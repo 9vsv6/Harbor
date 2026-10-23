@@ -175,7 +175,7 @@ private enum class Section(
     SubtitleTiming("Subtitle timing", "The sync indicator and nudging subtitle timing.", R.drawable.set_timer, "sync timing delay offset indicator", setOf("Subtitle timing")),
     SubtitleLook("Subtitle style", "Background, outline, colours, font, position and size.", R.drawable.set_subtitle_style, "subtitle style size colour color bold position ass font outline background opacity pip", setOf("Subtitle style")),
     Services("Streaming services", "Your addons and debrid service.", R.drawable.set_tv, "addons debrid real-debrid torbox services", setOf("Services")),
-    SourcePreferences("Source preferences", "The safety filter, P2P and how long to wait for addons.", R.drawable.set_source_preferences, "safety cam filter torrents p2p timeout wait", setOf("Filters")),
+    SourcePreferences("Source preferences", "The safety filter, P2P and how long to wait for addons.", R.drawable.set_source_preferences, "safety cam filter torrents p2p timeout wait imdb anime streams stream id kitsu mal anime mapping", setOf("Filters")),
     Sorting("Stream sorting", "The order sources come in.", R.drawable.set_arrow_down_up, "order sort ranking addon order", setOf("Sorting")),
     Picker("Source picker", "The picker's layout, source mode and what each source shows.", R.drawable.set_mouse_pointer_click, "picker layout condensed stremio source mode direct p2p descriptions release name file names refresh back", setOf("Picker")),
     StreamFilters("Stream filters", "Only show sources that match.", R.drawable.set_filter, "filter resolution 4k 1080p remux bluray web hevc av1 hdr cached size"),
@@ -1101,6 +1101,12 @@ private fun StreamingSection(repository: Repository, settings: AppSettings, set:
             settings.safetyFilter,
         ) { v -> set { it.copy(safetyFilter = v) } }
         ToggleRow("Disable P2P entirely", "Hide torrent sources, even with debrid.", settings.torrentsDisabled) { v -> set { it.copy(torrentsDisabled = v) } }
+        HarborHeading("Prefer IMDb IDs for anime", null)
+        ToggleRow(
+            "Prefer IMDb IDs for anime",
+            "Use IMDb IDs for anime stream searches when a verified mapping is available. Otherwise, use the usual anime IDs.",
+            settings.animePreferImdbStreams,
+        ) { v -> set { it.copy(animePreferImdbStreams = v) } }
         HarborHeading("Addon wait time", "How long to wait for a slow addon before showing the rest.")
         PillChoice(listOf(10 to "10 s", 20 to "20 s", 30 to "30 s", 60 to "60 s"), settings.addonTimeoutSec) { v -> set { it.copy(addonTimeoutSec = v) } }
     }

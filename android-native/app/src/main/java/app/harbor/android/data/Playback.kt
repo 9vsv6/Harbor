@@ -23,13 +23,15 @@ object Playback {
         /** Told which addons failed, as (addon name, reason). */
         onFailures: ((List<Pair<String, String>>) -> Unit)? = null,
     ): List<RankedStream> {
-        val groups = AddonClient.streams(addons, type, id)
+        // An anime episode is asked for under its anime and IMDb ids, and must match its episode.
+        val anime = AnimeStreams.request(id, settings)
+        val groups = if (anime != null) AddonClient.streams(addons) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id)
         onFailures?.invoke(groups.filter { it.error != null }.map { it.addon.manifest.name to it.error!! })
         val all = groups.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
         val kept = all.filter { allowed(it.stream, settings) }
         val playable = { s: Stream -> s.playable(debrid != null) }
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
-        val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service))
+        val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service), anime)
         val ordered = if (core != null && core.order.isNotEmpty()) {
             val top = core.primary?.let { kept[it] }
             val list = core.order.map { kept[it] }

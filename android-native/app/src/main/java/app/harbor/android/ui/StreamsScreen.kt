@@ -171,7 +171,7 @@ fun StreamsScreen(
         meta = runCatching { AddonClient.meta(repository.metaAddons(), type, metaId) }.getOrNull()
     }
 
-    LaunchedEffect(addons, type, videoId, debrid, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage) {
+    LaunchedEffect(addons, type, videoId, debrid, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage, settings.animePreferImdbStreams) {
         if (addons.isEmpty()) return@LaunchedEffect
         if (refreshKey > 0) ranked = null
         val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it })

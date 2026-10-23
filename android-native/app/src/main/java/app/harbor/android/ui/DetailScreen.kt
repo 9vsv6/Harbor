@@ -281,6 +281,7 @@ private fun DetailBody(
             .let { if (HarborDisplay.settings.episodesNewestFirst) it.reversed() else it }
     }
     val next = remember(meta.id, videos) { if (isSeries) nextEpisode(repository, meta, videos) else null }
+    val episodeQuery = rememberEpisodeQuery(meta.id)
     // Harbor's episode ratings: OMDb's real IMDb scores with a key, else TMDB's; one call per season.
     val omdbKey by repository.omdbKey.collectAsState()
     val tmdbKey by repository.tmdbKey.collectAsState()
@@ -384,19 +385,18 @@ private fun DetailBody(
             val crew = crewOf(meta, details)
             if (crew.isNotEmpty()) item(key = "crew") { CrewGrid(crew, if (wide) 3 else 2, side) }
             if (isSeries && seasons.isNotEmpty()) {
-                item(key = "seasons") {
-                    // Harbor's episode section: the season's tools and its episodes.
-                    EpisodesSection(
-                        repository, meta, videos, seasons, season,
-                        onSeason = { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() },
-                        side = side,
-                        wide = wide,
-                        next = next,
-                        rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
-                        onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
-                        set = repository::updateSettings,
-                    )
-                }
+                // Harbor's episode section: the season's tools, then each episode as a row of this list.
+                episodesSection(
+                    episodeQuery, repository, meta, videos, seasons, season,
+                    onSeason = { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() },
+                    side = side,
+                    wide = wide,
+                    next = next,
+                    rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
+                    onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
+                    set = repository::updateSettings,
+                    listGap = 30.dp,
+                )
             }
             val cast = details?.cast?.takeIf { it.isNotEmpty() } ?: meta.castNames.map { CastMember(it, null, null) }
             if (cast.isNotEmpty()) item(key = "cast") { CastRail(cast, details?.castCount?.takeIf { it > 0 } ?: cast.size, side, wide) }

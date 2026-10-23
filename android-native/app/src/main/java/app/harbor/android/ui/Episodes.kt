@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,13 +75,28 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+/** The episode search, kept by the detail page so the episodes can be the page's own lazy rows. */
+class EpisodeQuery(state: MutableState<String?>) {
+    var value by state
+}
+
+@Composable
+fun rememberEpisodeQuery(metaId: String): EpisodeQuery {
+    val state = rememberSaveable(metaId) { mutableStateOf<String?>(null) }
+    return remember(state) { EpisodeQuery(state) }
+}
+
 /**
  * Harbor's episode section (series-episodes.tsx, episode-grid-controls.tsx): the title, then
  * the season's size and its tools (download the season, a random episode, list / strip / grid,
  * Oldest or Newest, mark the season watched, search, and the season menu), then the episodes.
+ *
+ * Each episode row is an item of the detail page's list, so a long run (Kitsu's One Piece is
+ * 1,400+ episodes in one season) only builds the rows on screen. `listGap` is that list's
+ * spacing, taken back between rows so they sit together as before.
  */
-@Composable
-fun EpisodesSection(
+fun LazyListScope.episodesSection(
+    query: EpisodeQuery,
     repository: Repository,
     meta: Meta,
     videos: List<Video>,
@@ -91,27 +109,77 @@ fun EpisodesSection(
     rating: (Video) -> String?,
     onPlay: (Video) -> Unit,
     set: ((AppSettings) -> AppSettings) -> Unit,
+    listGap: Dp,
 ) {
     val display = HarborDisplay.settings
-    val shelves by repository.shelves.collectAsState()
-    var query by rememberSaveable(meta.id) { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
     // Absolute numbers ("Abs E13"): the episode's place in the whole run, specials aside.
-    val absolute = remember(videos) {
-        videos.filter { (it.season ?: 0) > 0 }.sortedWith(compareBy({ it.season }, { it.episode })).mapIndexed { i, v -> v.id to i + 1 }.toMap()
-    }
+    val absolute = videos.filter { (it.season ?: 0) > 0 }.sortedWith(compareBy({ it.season }, { it.episode })).mapIndexed { i, v -> v.id to i + 1 }.toMap()
     val inSeason = videos.filter { it.season == season }.sortedBy { it.episode ?: 0 }
-    val shown = query?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
+    val shown = query.value?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
         // Searching looks across every season, by number or title.
         videos.filter { v -> v.episode?.toString() == q || absolute[v.id]?.toString() == q || v.label.contains(q, ignoreCase = true) }
             .sortedWith(compareBy({ it.season }, { it.episode }))
     } ?: inSeason.let { if (display.episodesNewestFirst) it.reversed() else it }
     val upTo = next?.let { (it.season ?: 0) * 10_000 + (it.episode ?: 0) } ?: 0
     fun spoiler(v: Video) = display.hideSpoilers && (v.season ?: 0) > 0 && (v.season ?: 0) * 10_000 + (v.episode ?: 0) > upTo
-    fun watched(v: Video) = v.id in shelves.watched
-    val allWatched = inSeason.isNotEmpty() && inSeason.all { watched(it) }
+
+    item(key = "seasons") { EpisodesHeader(query, repository, meta, videos, seasons, season, onSeason, inSeason, side, wide, onPlay, set) }
+    when {
+        shown.isEmpty() -> item(key = "episodes-none") {
+            Text("No episodes match.", color = HarborColors.InkSubtle, fontSize = 14.sp, modifier = Modifier.padding(horizontal = side))
+        }
+        display.episodeLayout == "strip" -> item(key = "episodes-strip") {
+            val watched by repository.shelves.collectAsState()
+            LazyRow(contentPadding = PaddingValues(horizontal = side), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                items(shown, key = { it.id }) { v ->
+                    EpisodeCard(v, absolute[v.id], spoiler(v), v.id in watched.watched, rating(v), Modifier.width(if (wide) 300.dp else 240.dp)) { onPlay(v) }
+                }
+            }
+        }
+        display.episodeLayout == "grid" -> {
+            val columns = if (wide) 3 else 2
+            items(shown.chunked(columns), key = { "episodes-" + it.first().id }) { row ->
+                val watched by repository.shelves.collectAsState()
+                Row(Modifier.padding(horizontal = side).closeGap(listGap - 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { v -> EpisodeCard(v, absolute[v.id], spoiler(v), v.id in watched.watched, rating(v), Modifier.weight(1f)) { onPlay(v) } }
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        else -> items(shown, key = { "episode-" + it.id }) { v ->
+            val watched by repository.shelves.collectAsState()
+            Box(Modifier.closeGap(listGap)) { EpisodeListRow(v, absolute[v.id], spoiler(v), v.id in watched.watched, side, wide, rating(v)) { onPlay(v) } }
+        }
+    }
+}
+
+/** Reports `gap` less height, centred on the content, so the list's spacing between rows closes up. */
+private fun Modifier.closeGap(gap: Dp) = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val px = gap.roundToPx().coerceIn(0, placeable.height)
+    layout(placeable.width, placeable.height - px) { placeable.place(0, -px / 2) }
+}
+
+@Composable
+private fun EpisodesHeader(
+    query: EpisodeQuery,
+    repository: Repository,
+    meta: Meta,
+    videos: List<Video>,
+    seasons: List<Int>,
+    season: Int?,
+    onSeason: (Int) -> Unit,
+    inSeason: List<Video>,
+    side: Dp,
+    wide: Boolean,
+    onPlay: (Video) -> Unit,
+    set: ((AppSettings) -> AppSettings) -> Unit,
+) {
+    val display = HarborDisplay.settings
+    val shelves by repository.shelves.collectAsState()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val allWatched = inSeason.isNotEmpty() && inSeason.all { it.id in shelves.watched }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         val tools: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
@@ -126,7 +194,7 @@ fun EpisodesSection(
             ToolButton(Icons.Rounded.DoneAll, if (allWatched) "Mark season as unwatched" else "Mark season as watched", active = allWatched) {
                 repository.setWatched(inSeason.map { it.id }, !allWatched)
             }
-            ToolButton(Icons.Rounded.Search, "Search by episode number or title", active = query != null) { query = if (query == null) "" else null }
+            ToolButton(Icons.Rounded.Search, "Search by episode number or title", active = query.value != null) { query.value = if (query.value == null) "" else null }
             SeasonMenu(seasons, season, videos, onSeason)
         }
         val title: @Composable () -> Unit = {
@@ -148,32 +216,10 @@ fun EpisodesSection(
                 content = tools,
             )
         }
-        query?.let { q ->
+        query.value?.let { q ->
             Row(Modifier.padding(horizontal = side), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HTextField(q, { query = it }, Modifier.weight(1f), label = { Text("Search by episode number or title") }, singleLine = true)
-                Icon(Icons.Rounded.Close, "Clear", tint = HarborColors.InkMuted, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { query = null }.padding(10.dp))
-            }
-        }
-        when {
-            shown.isEmpty() -> Text("No episodes match.", color = HarborColors.InkSubtle, fontSize = 14.sp, modifier = Modifier.padding(horizontal = side))
-            display.episodeLayout == "strip" -> LazyRow(contentPadding = PaddingValues(horizontal = side), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                items(shown, key = { it.id }) { v ->
-                    EpisodeCard(v, absolute[v.id], spoiler(v), watched(v), rating(v), Modifier.width(if (wide) 300.dp else 240.dp)) { onPlay(v) }
-                }
-            }
-            display.episodeLayout == "grid" -> {
-                val columns = if (wide) 3 else 2
-                Column(Modifier.padding(horizontal = side), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    shown.chunked(columns).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            row.forEach { v -> EpisodeCard(v, absolute[v.id], spoiler(v), watched(v), rating(v), Modifier.weight(1f)) { onPlay(v) } }
-                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            }
-            else -> Column {
-                shown.forEach { v -> EpisodeListRow(v, absolute[v.id], spoiler(v), watched(v), side, wide, rating(v)) { onPlay(v) } }
+                HTextField(q, { query.value = it }, Modifier.weight(1f), label = { Text("Search by episode number or title") }, singleLine = true)
+                Icon(Icons.Rounded.Close, "Clear", tint = HarborColors.InkMuted, modifier = Modifier.size(40.dp).clip(CircleShape).clickable { query.value = null }.padding(10.dp))
             }
         }
     }

@@ -165,6 +165,8 @@ data class AppSettings(
     val torrentsDisabled: Boolean = false,
     val showFilename: Boolean = false,
     val addonTimeoutSec: Int = 30,
+    /** Harbor's "Prefer IMDb IDs for anime": ask addons under the episode's verified IMDb mapping. */
+    val animePreferImdbStreams: Boolean = false,
 
     // ---- Library and cards ----
     val showRatingBadge: Boolean = true,
