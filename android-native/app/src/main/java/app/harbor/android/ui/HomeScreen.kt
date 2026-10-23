@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -208,15 +210,32 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                     // Harbor's Shows page opens with its time-of-day heading (shows.tsx PageMast).
                     if (view == BrowseView.Shows) item(key = "mast") { ShowsMast() }
                     val heroSlides = heroFor(view, current)
+                    // Harbor's Spooktober invitation: in the hero's corner, or its own band below the hero.
+                    val spooktober = if (view == BrowseView.Home) SpooktoberHome.placement() else null
+                    val dismissSpooktober = { repository.updateSettings { it.copy(spooktoberDismissed = true, spooktoberBanner = "small") } }
                     item(key = "hero") {
-                        HeroCarousel(
-                            slides = heroSlides,
-                            badge = { i, meta -> if (view == BrowseView.Anime && current.any { it.key == "anilist:trending" }) "Trending on AniList" else "#${i + 1} in ${typeLabel(meta.type, view)} Today" },
-                            inMyList = { repository.inMyList(it.id) },
-                            onPlay = nav::playMeta,
-                            onToggleList = repository::toggleMyList,
-                            onOpen = nav::openMeta,
-                        )
+                        Box {
+                            HeroCarousel(
+                                slides = heroSlides,
+                                badge = { i, meta -> if (view == BrowseView.Anime && current.any { it.key == "anilist:trending" }) "Trending on AniList" else "#${i + 1} in ${typeLabel(meta.type, view)} Today" },
+                                inMyList = { repository.inMyList(it.id) },
+                                onPlay = nav::playMeta,
+                                onToggleList = repository::toggleMyList,
+                                onOpen = nav::openMeta,
+                            )
+                            if (spooktober == "small" && heroSlides.isNotEmpty()) {
+                                val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
+                                SpooktoberEntry(
+                                    compact = true,
+                                    onDismiss = dismissSpooktober,
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 30.dp).fillMaxWidth(if (wide) 0.42f else 0.62f).widthIn(max = 360.dp)
+                                        .wrapContentWidth(Alignment.End),
+                                )
+                            }
+                        }
+                    }
+                    if (spooktober == "below-hero" || (spooktober != null && heroSlides.isEmpty())) {
+                        item(key = "spooktober") { SpooktoberEntry(compact = false, onDismiss = dismissSpooktober, modifier = Modifier.padding(horizontal = 16.dp)) }
                     }
                     if ((view == BrowseView.Home || view == BrowseView.Anime) && cw.isNotEmpty()) {
                         item(key = "cw") { ContinueWatchingRow(cw, nav::resume, repository::dismissContinueWatching) }

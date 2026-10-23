@@ -348,8 +348,8 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
         if (!display.hidePosterTitles) Text(
             meta.name,
             color = HarborColors.InkMuted,
-            fontSize = 12.5.sp,
-            lineHeight = 16.sp,
+            fontSize = 12.5.sp * display.cardTitleScale,
+            lineHeight = 16.sp * display.cardTitleScale,
             fontWeight = FontWeight.Medium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,

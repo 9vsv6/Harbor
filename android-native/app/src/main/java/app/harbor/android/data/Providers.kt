@@ -236,6 +236,8 @@ object PosterService {
         val idToken = ids.imdb ?: ids.tmdb?.let { "${ids.type}-$it" } ?: return null
         if (!sub("{imdbId}", ids.imdb) || !sub("{imdb_id}", ids.imdb)) return null
         if (!sub("{tmdbId}", ids.tmdb) || !sub("{tmdb_id}", ids.tmdb)) return null
+        // Pictorium's copied template takes whichever id the title has.
+        if (!sub("{tmdb_id|imdb_id}", ids.tmdb ?: ids.imdb)) return null
         sub("{type}", ids.type)
         sub("{mediaType}", ids.type)
         if (!sub("{id}", idToken)) return null

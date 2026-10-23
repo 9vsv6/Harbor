@@ -65,7 +65,7 @@ fun PosterCard(meta: Meta, width: Dp?, onClick: () -> Unit) {
         Text(
             meta.name,
             modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
-            fontSize = 12.5.sp,
+            fontSize = 12.5.sp * HarborDisplay.settings.cardTitleScale,
             color = HarborColors.InkMuted,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
