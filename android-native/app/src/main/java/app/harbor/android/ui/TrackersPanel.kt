@@ -314,6 +314,11 @@ private fun AniListPage(repository: Repository, settings: AppSettings, set: ((Ap
         }
         SettingsSection("Tracking what you watch", null) {
             ToggleRow("Sync watch progress", "Finishing an anime episode updates your AniList progress. Forward only: it never lowers a count you already have.", settings.anilistAutoSync) { v -> set { it.copy(anilistAutoSync = v) } }
+            ToggleRow(
+                "Count AniList rewatches",
+                if (settings.anilistAutoSync) REWATCHES_BODY else "Turn on Sync watch progress first.",
+                settings.anilistCountRewatches && settings.anilistAutoSync,
+            ) { v -> if (settings.anilistAutoSync) set { it.copy(anilistCountRewatches = v) } }
             AvatarToggle(repository, "AniList", avatar, settings.useAnilistAvatar) { v -> set { it.copy(useAnilistAvatar = v) } }
         }
     }
@@ -323,6 +328,8 @@ private fun AniListPage(repository: Repository, settings: AppSettings, set: ((Ap
     }
     if (auth?.accessToken != null) SyncIndicatorSection(settings, set)
 }
+
+private const val REWATCHES_BODY = "Watching an anime you already finished marks it as Rewatching and counts the rewatch, instead of resetting your progress."
 
 // ---------------- MyAnimeList ----------------
 
@@ -339,6 +346,11 @@ private fun MalPage(repository: Repository, settings: AppSettings, set: ((AppSet
             signOut(repository, Tracker.Mal, auth)
         }
         ToggleRow("Sync watch progress", "Finishing an anime episode updates your MyAnimeList progress. Forward only: it never lowers a count you already have.", settings.malAutoSync) { v -> set { it.copy(malAutoSync = v) } }
+        ToggleRow(
+            "Count MyAnimeList rewatches",
+            if (settings.malAutoSync) REWATCHES_BODY else "Turn on Sync watch progress first.",
+            settings.malCountRewatches && settings.malAutoSync,
+        ) { v -> if (settings.malAutoSync) set { it.copy(malCountRewatches = v) } }
         AvatarToggle(repository, "MyAnimeList", avatar, settings.useMalAvatar) { v -> set { it.copy(useMalAvatar = v) } }
     }
     SyncIndicatorSection(settings, set)

@@ -70,21 +70,27 @@ object AnimeRows {
     /** anilist-top-row.tsx: Top 100 on AniList. */
     suspend fun top100(): List<Meta> = browse("SCORE_DESC")
 
-    /** anilist-rows.tsx: your Watching and Plan to Watch, signed in to AniList. */
+    /**
+     * anilist-rows.tsx: your Watching (Rewatching included) and Plan to Watch, then your custom
+     * lists under their own names, signed in to AniList.
+     */
     suspend fun yourLists(auth: TrackerAuth): List<Pair<String, List<Meta>>> {
         val token = auth.accessToken ?: return emptyList()
         val viewer = query("query { Viewer { id } }", token = token)?.get("Viewer")?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
+        // Custom lists only come with the whole collection; a status filter would drop them.
         val data = query(
-            "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME, status_in: [CURRENT, PLANNING]) { lists { status entries { media { $MEDIA } } } } }",
+            "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME) { lists { status name isCustomList entries { media { $MEDIA } } } } }",
             buildJsonObject { put("user", viewer) },
             token,
         )
         val lists = (data?.get("MediaListCollection")?.jsonObject?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
-        return listOf("CURRENT" to "Your AniList: Watching", "PLANNING" to "Your AniList: Plan to Watch").mapNotNull { (status, title) ->
-            val media = lists.filter { it.string("status") == status }
-                .flatMap { (it["entries"] as? JsonArray).orEmpty() }.mapNotNull { it.jsonObject["media"]?.jsonObject }
-            toMetas(media).takeIf { it.isNotEmpty() }?.let { title to it }
+        fun media(groups: List<JsonObject>) = groups.flatMap { (it["entries"] as? JsonArray).orEmpty() }.mapNotNull { it.jsonObject["media"]?.jsonObject }
+        val (custom, byStatus) = lists.partition { it["isCustomList"]?.jsonPrimitive?.content == "true" }
+        val status = listOf(listOf("CURRENT", "REPEATING") to "Your AniList: Watching", listOf("PLANNING") to "Your AniList: Plan to Watch").map { (statuses, title) ->
+            title to media(byStatus.filter { it.string("status") in statuses })
         }
+        val named = custom.mapNotNull { g -> g.string("name")?.trim()?.takeIf { it.isNotEmpty() }?.let { "Your AniList: $it" to media(listOf(g)) } }
+        return (status + named).mapNotNull { (title, m) -> toMetas(m).takeIf { it.isNotEmpty() }?.let { title to it } }
     }
 
     /** use-watch-history-recs.ts: AniList's recommendations for the anime you've been watching. */
@@ -149,8 +155,19 @@ object AnimeRows {
     private fun JsonArray?.orEmpty(): List<kotlinx.serialization.json.JsonElement> = this ?: emptyList()
 }
 
-/** An anime on your AniList or MyAnimeList list: its status and how far you are. */
-data class ListEntry(val meta: Meta, val mediaId: Int, val status: String, val progress: Int, val episodes: Int?)
+/**
+ * An anime on your AniList or MyAnimeList list: its status and how far you are. AniList adds
+ * whether the entry is private and the custom lists it sits in.
+ */
+data class ListEntry(
+    val meta: Meta,
+    val mediaId: Int,
+    val status: String,
+    val progress: Int,
+    val episodes: Int?,
+    val isPrivate: Boolean = false,
+    val customLists: List<String> = emptyList(),
+)
 
 /** anilist-tab.tsx: your whole AniList anime list, and editing it from the Library. */
 object AniListLibrary {
@@ -167,11 +184,20 @@ object AniListLibrary {
         val viewer = query(token, "query { Viewer { id } }", JsonObject(emptyMap()))?.get("Viewer")?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
         val data = query(
             token,
-            "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME) { lists { entries { status progress media { id idMal episodes format title { english romaji } coverImage { extraLarge large } seasonYear } } } } }",
+            "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME) { lists { name isCustomList entries { status progress private media { id idMal episodes format title { english romaji } coverImage { extraLarge large } seasonYear } } } } }",
             buildJsonObject { put("user", viewer) },
         )
-        val raw = (data?.get("MediaListCollection")?.jsonObject?.get("lists") as? JsonArray).orEmpty()
-            .flatMap { (it.jsonObject["entries"] as? JsonArray).orEmpty() }.map { it.jsonObject }
+        val lists = (data?.get("MediaListCollection")?.jsonObject?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
+        fun entriesOf(list: JsonObject) = (list["entries"] as? JsonArray).orEmpty().map { it.jsonObject }
+        fun mediaId(e: JsonObject) = e["media"]?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull
+        // A title in a custom list also sits in its status list: one entry, carrying its list names.
+        val (custom, byStatus) = lists.partition { it["isCustomList"]?.jsonPrimitive?.content == "true" }
+        val listsOf = mutableMapOf<Int, MutableList<String>>()
+        custom.forEach { list ->
+            val name = list.string("name")?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
+            entriesOf(list).forEach { e -> mediaId(e)?.let { listsOf.getOrPut(it) { mutableListOf() } += name } }
+        }
+        val raw = (byStatus + custom).flatMap { entriesOf(it) }.distinctBy { mediaId(it) }
         val kitsu = Jikan.kitsuIds(raw.mapNotNull { it["media"]?.jsonObject?.get("idMal")?.jsonPrimitive?.intOrNull })
         return raw.mapNotNull { e ->
             val m = e["media"]?.jsonObject ?: return@mapNotNull null
@@ -187,17 +213,20 @@ object AniListLibrary {
                     releaseInfo = m["seasonYear"]?.jsonPrimitive?.intOrNull?.toString(),
                 ),
                 id, e.string("status") ?: "CURRENT", e["progress"]?.jsonPrimitive?.intOrNull ?: 0, m["episodes"]?.jsonPrimitive?.intOrNull,
+                isPrivate = e["private"]?.jsonPrimitive?.content == "true",
+                customLists = listsOf[id].orEmpty(),
             )
         }
     }
 
-    suspend fun save(auth: TrackerAuth, mediaId: Int, status: String? = null, progress: Int? = null) {
-        val token = auth.accessToken ?: return
-        query(
+    /** Saves only what is given, so a status change never clears the entry's private flag. */
+    suspend fun save(auth: TrackerAuth, mediaId: Int, status: String? = null, progress: Int? = null, isPrivate: Boolean? = null): Boolean {
+        val token = auth.accessToken ?: return false
+        return query(
             token,
-            "mutation (\$id: Int, \$status: MediaListStatus, \$progress: Int) { SaveMediaListEntry(mediaId: \$id, status: \$status, progress: \$progress) { id } }",
-            buildJsonObject { put("id", mediaId); status?.let { put("status", it) }; progress?.let { put("progress", it) } },
-        )
+            "mutation (\$id: Int, \$status: MediaListStatus, \$progress: Int, \$private: Boolean) { SaveMediaListEntry(mediaId: \$id, status: \$status, progress: \$progress, private: \$private) { id } }",
+            buildJsonObject { put("id", mediaId); status?.let { put("status", it) }; progress?.let { put("progress", it) }; isPrivate?.let { put("private", it) } },
+        )?.get("SaveMediaListEntry") is JsonObject
     }
 
     private fun JsonArray?.orEmpty(): List<kotlinx.serialization.json.JsonElement> = this ?: emptyList()

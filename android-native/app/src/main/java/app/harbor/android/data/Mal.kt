@@ -84,24 +84,51 @@ object Mal {
     }
 
     /**
-     * Sets progress to [episode] (sync.ts syncMalProgress): forward only, never touching an
-     * entry already completed or being rewatched; the last episode completes it.
-     * Returns true when MyAnimeList took the new count.
+     * Sets progress to [episode] (sync.ts syncMalProgress): forward only; the last episode
+     * completes it. A title already completed or being rewatched is rewatched instead when
+     * [countRewatches] is on, and its finale completes the pass with `num_times_rewatched` bumped.
+     * Returns what MyAnimeList took, or null when nothing was written.
      */
-    suspend fun markWatched(auth: TrackerAuth, metaId: String, episode: Int): Boolean {
-        val id = malId(metaId) ?: return false
+    suspend fun markWatched(auth: TrackerAuth, metaId: String, episode: Int, countRewatches: Boolean, guard: RewatchGuard): TrackerSync? {
+        val id = malId(metaId) ?: return null
         val current = Net.json.parseToJsonElement(Net.call(request(auth, "/anime/$id?fields=num_episodes,my_list_status").build())).jsonObject
         val status = current["my_list_status"] as? JsonObject
-        if (status?.string("status") == "completed" || status?.get("is_rewatching")?.jsonPrimitive?.contentOrNullSafe() == "true") return false
         val watched = status?.get("num_episodes_watched")?.jsonPrimitive?.intOrNull ?: 0
         val total = current["num_episodes"]?.jsonPrimitive?.intOrNull ?: 0
-        if (episode <= watched || (total > 0 && episode > total)) return false
-        val form = FormBody.Builder()
-            .add("num_watched_episodes", "$episode")
-            .add("status", if (total > 0 && episode >= total) "completed" else "watching")
-            .build()
-        Net.call(request(auth, "/anime/$id/my_list_status").patch(form).build())
-        return true
+        if (total > 0 && episode > total) return null
+
+        suspend fun save(vararg fields: Pair<String, String>): Boolean {
+            val form = FormBody.Builder().apply { fields.forEach { (k, v) -> add(k, v) } }.build()
+            val saved = Net.json.parseToJsonElement(Net.call(request(auth, "/anime/$id/my_list_status").patch(form).build())).jsonObject
+            return saved["num_episodes_watched"]?.jsonPrimitive?.intOrNull == fields.first { it.first == "num_watched_episodes" }.second.toInt()
+        }
+
+        val rewatching = status?.get("is_rewatching")?.jsonPrimitive?.contentOrNullSafe() == "true"
+        if (status != null && (status.string("status") == "completed" || rewatching)) {
+            // Rewatch recording is off: leave the finished entry exactly as the user set it.
+            if (!countRewatches) return null
+            // Replaying the finale of a pass that was just counted is not a new rewatch.
+            val doneAt = guard.done(metaId)
+            if (doneAt != null && status.string("status") == "completed" && episode >= doneAt) return null
+            // The finale of a rewatch finishes the pass; completing alone does not bump the counter.
+            if (rewatching && total > 0 && episode >= total) {
+                val times = (status["num_times_rewatched"]?.jsonPrimitive?.intOrNull ?: 0) + 1
+                if (!save("num_watched_episodes" to "$total", "status" to "completed", "is_rewatching" to "false", "num_times_rewatched" to "$times")) return null
+                guard.remember(metaId, episode)
+                return TrackerSync.Rewatched
+            }
+            // Starting a rewatch ignores the completed progress; continuing one is forward only.
+            if (rewatching && episode <= watched) return null
+            guard.forget(metaId)
+            return if (save("num_watched_episodes" to "$episode", "status" to "watching", "is_rewatching" to "true")) TrackerSync.Rewatched else null
+        }
+
+        if (episode <= watched) return null
+        val next = if (total > 0 && episode >= total) "completed" else "watching"
+        if (!save("num_watched_episodes" to "$episode", "status" to next)) return null
+        // A first watch that completes the title must not read as a finished rewatch next time.
+        if (next == "completed") guard.remember(metaId, episode)
+        return TrackerSync.Synced
     }
 
     /** One status of the user's anime list ("watching", "plan_to_watch", …) as titles. */
