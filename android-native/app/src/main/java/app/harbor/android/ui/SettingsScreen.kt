@@ -681,6 +681,28 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         ToggleRow("Show stream quality under the title", "The source's quality, such as 4K or 1080p, next to the title.", settings.qualityInPlayer) { v -> set { it.copy(qualityInPlayer = v) } }
         ToggleRow("Volume pop-up while watching", "Shows the volume and brightness level while you swipe the edges.", settings.volumePopup) { v -> set { it.copy(volumePopup = v) } }
         ToggleRow("Screen lock button", "Locks the controls so a pocket or a child can't tap them.", settings.screenLock) { v -> set { it.copy(screenLock = v) } }
+        ToggleRow("Chapters button", "Adds the Chapters menu to the controls when a video has chapters.", settings.chapterMenu) { v -> set { it.copy(chapterMenu = v) } }
+        HarborHeading("While you watch", "Optional overlays that appear over the video.")
+        ToggleRow("Content advisory on start", "When a movie or episode starts, briefly show its IMDb parental guide (violence, profanity, substances, frightening scenes and more) with severity. Fades on its own.", settings.contentAdvisoryToast) { v -> set { it.copy(contentAdvisoryToast = v) } }
+        if (settings.contentAdvisoryToast) {
+            RowText("Content advisory theme", "Choose whether the content advisory appears in full color or a restrained monochrome tone.")
+            PillChoice(listOf("colored" to "Colored", "monochrome" to "Monochrome"), settings.contentAdvisoryTheme) { v -> set { it.copy(contentAdvisoryTheme = v) } }
+            ToggleRow("Show ignore title button", "Display a button on the content advisory card to permanently ignore the title.", settings.contentAdvisoryShowIgnore) { v -> set { it.copy(contentAdvisoryShowIgnore = v) } }
+            if (settings.contentAdvisoryShowIgnore && settings.contentAdvisoryIgnored.isNotEmpty()) {
+                ToggleRow("Ignored titles", "${settings.contentAdvisoryIgnored.size} titles will never show the content advisory again. Turn off to restore them.", true) { _ -> set { it.copy(contentAdvisoryIgnored = emptyList()) } }
+            }
+            // Harbor's live preview of the card.
+            androidx.compose.foundation.layout.Box(
+                Modifier.padding(vertical = 8.dp).fillMaxWidth().height(192.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF2A2C33), Color(0xFF121316)))),
+                contentAlignment = Alignment.Center,
+            ) {
+                app.harbor.android.player.ContentAdvisoryCard(
+                    listOf(app.harbor.android.player.Advisory("Violence", "Severe"), app.harbor.android.player.Advisory("Profanity", "Moderate"), app.harbor.android.player.Advisory("Frightening", "Mild")),
+                    "15+", settings, preview = true,
+                )
+            }
+        }
         HarborHeading("Seek steps", "How far the back and forward buttons and double-taps jump.")
         RowText("Back", null)
         PillChoice(listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 30 to "30 s"), settings.seekBackSec) { v -> set { it.copy(seekBackSec = v) } }
@@ -726,6 +748,17 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         PillChoice(listOf(0 to "At the credits", 30 to "30 s", 45 to "45 s", 60 to "1 min", 90 to "90 s"), settings.nextEpisodeLeadSec) { v -> set { it.copy(nextEpisodeLeadSec = v) } }
         RowText("Ask if you're still watching", "After this many episodes in a row.")
         PillChoice(listOf(0 to "Never", 2 to "2", 3 to "3", 5 to "5"), prefs.stillWatchingAfter) { n -> repository.updatePlayerPrefs { it.copy(stillWatchingAfter = n) } }
+        HarborHeading("More like this at the end", "Show recommendations when a movie, series finale or anime film finishes. At the end the card fills the screen; before the end the film shrinks to a corner and keeps playing behind it.")
+        PillChoice(listOf(-1 to "At the end", 0 to "Off", 30 to "30s", 60 to "1 min", 120 to "2 min", 180 to "3 min", 300 to "5 min"), settings.endScreenLeadSec) { v -> set { it.copy(endScreenLeadSec = v) } }
+        if (settings.endScreenLeadSec != 0) {
+            ToggleRow("Countdown", "Act automatically if nothing is chosen before time runs out.", settings.endScreenCountdownSec > 0) { v -> set { it.copy(endScreenCountdownSec = if (v) 15 else 0) } }
+            if (settings.endScreenCountdownSec > 0) {
+                RowText("Countdown length", "How long Harbor waits before acting on the countdown.")
+                PillChoice(listOf(5, 10, 15, 20, 30).map { it to "${it}s" }, settings.endScreenCountdownSec) { v -> set { it.copy(endScreenCountdownSec = v) } }
+                RowText("When the countdown ends", "Close the player, or start whichever recommendation is focused.")
+                PillChoice(listOf("close" to "Close player", "play" to "Play focused"), settings.endScreenOnZero) { v -> set { it.copy(endScreenOnZero = v) } }
+            }
+        }
     }
     // ---- Trailers ----
     Part("Trailers") {

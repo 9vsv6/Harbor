@@ -16,6 +16,9 @@ data class EngineTrack(
     val external: Boolean = false,
 )
 
+/** A chapter mark in the file (mpv's chapter-list). */
+data class Chapter(val title: String?, val startMs: Long)
+
 /**
  * What an engine needs from the settings when it starts: audio and subtitle languages in
  * order of preference (no subtitle languages means subtitles start off), and the rest.
@@ -29,6 +32,7 @@ interface EngineListener {
     fun onError(message: String)
     fun onTracksChanged()
     fun onVideoSizeChanged()
+    fun onChaptersChanged() {}
 }
 
 /**
@@ -83,6 +87,9 @@ interface Engine {
     /** Loudest the engine may go, as a multiple of full volume (mpv can boost past 100%). */
     val maxVolume: Float get() = 1f
     fun setVolume(level: Float) {}
+
+    /** The file's chapters, in order; empty when it has none or the engine can't read them. */
+    fun chapters(): List<Chapter> = emptyList()
 
     fun release()
 }

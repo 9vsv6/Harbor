@@ -105,6 +105,26 @@ data class AppSettings(
     val showSkipButton: Boolean = true,
     /** Hide the Skip button after this many seconds; 0 keeps it for the whole segment. */
     val skipButtonHideSec: Int = 0,
+    /**
+     * Harbor's "More like this" end screen: 0 off, -1 when playback finishes, else that many
+     * seconds before the end (the film shrinks to a corner and keeps playing).
+     */
+    val endScreenLeadSec: Int = -1,
+    /** Seconds before the end screen acts on its own; 0 leaves it open. */
+    val endScreenCountdownSec: Int = 15,
+    /** "close" closes the player when the countdown ends; "play" starts the focused title. */
+    val endScreenOnZero: String = "close",
+    /** The Chapters control in the player (hidden by default, as in Harbor's player layout). */
+    val chapterMenu: Boolean = false,
+    /** Chapter marks on the seek bar (the Chapters menu's toggle). */
+    val seekBarChapters: Boolean = true,
+    /** Harbor's content advisory: the IMDb parental guide, briefly, when a title starts. */
+    val contentAdvisoryToast: Boolean = false,
+    /** "colored" or "monochrome". */
+    val contentAdvisoryTheme: String = "monochrome",
+    val contentAdvisoryShowIgnore: Boolean = true,
+    /** IMDb ids whose advisory you chose to never see again. */
+    val contentAdvisoryIgnored: List<String> = emptyList(),
 
     // ---- Playback: sources ----
     val autoNextStreamOnStall: Boolean = false,

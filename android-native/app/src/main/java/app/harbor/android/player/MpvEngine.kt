@@ -17,6 +17,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import java.io.File
 import java.security.KeyStore
@@ -187,6 +188,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.observeProperty("width", MPVLib.MpvFormat.MPV_FORMAT_INT64)
         mpv.observeProperty("height", MPVLib.MpvFormat.MPV_FORMAT_INT64)
         mpv.observeProperty("track-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
+        mpv.observeProperty("chapter-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
     }
 
     // ---- Surface ----
@@ -223,6 +225,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun eventProperty(property: String) {
         if (property == "track-list") main.post { listener?.onTracksChanged() }
+        if (property == "chapter-list") main.post { listener?.onChaptersChanged() }
     }
 
     override fun eventProperty(property: String, value: Long) {
@@ -466,6 +469,17 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     /** 0..maxVolume of mpv's own volume, on top of the phone's. */
     override fun setVolume(level: Float) = mpv.setPropertyDouble("volume", (level * 100.0).coerceIn(0.0, maxVolume * 100.0))
+
+    override fun chapters(): List<Chapter> {
+        val list = mpv.getPropertyString("chapter-list")
+            ?.let { runCatching { Net.json.parseToJsonElement(it) as? JsonArray }.getOrNull() }
+            ?: return emptyList()
+        return list.mapNotNull { element ->
+            val chapter = element as? JsonObject ?: return@mapNotNull null
+            val time = (chapter["time"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() } ?: return@mapNotNull null
+            Chapter((chapter["title"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }, (time * 1000).toLong())
+        }.sortedBy { it.startMs }
+    }
 
     override val supportsShaders = true
 
