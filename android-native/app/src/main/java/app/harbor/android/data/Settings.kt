@@ -322,6 +322,12 @@ data class AppSettings(
     val hidePosterTitles: Boolean = false,
     val posterRadius: Int = 12,
     val posterScale: Float = 1f,
+    /** Harbor's Card title size: the titles under poster cards, apart from the rest of the interface. */
+    val cardTitleScale: Float = 1f,
+    /** Harbor's Spooktober banner: null (Harbor's default, small), "disabled", "small" or "below-hero". */
+    val spooktoberBanner: String? = null,
+    /** The banner was dismissed to its small chip. */
+    val spooktoberDismissed: Boolean = false,
     val showTop10: Boolean = false,
     val heroAutoRotate: Boolean = true,
     val hideUnreleased: Boolean = false,

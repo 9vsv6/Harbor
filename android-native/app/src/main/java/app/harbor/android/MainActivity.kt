@@ -206,6 +206,7 @@ private fun HarborRoot(repository: Repository) {
                     }
                 }
                 composable("collections") { app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() }) }
+                composable("spooktober") { app.harbor.android.ui.SpooktoberScreen(onBack = { nav.popBackStack() }, onOpen = { open(it) }) }
                 composable("collection/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { back ->
                     app.harbor.android.ui.CollectionScreen(repository, back.arguments?.getInt("id") ?: 0, onBack = { nav.popBackStack() }, onOpen = { open(it) })
                 }

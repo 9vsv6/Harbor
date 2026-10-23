@@ -223,6 +223,8 @@ class HarborImport(private val repository: Repository, private val context: Cont
                 hidePosterTitles = s.bool("hidePosterTitles") ?: a.hidePosterTitles,
                 posterRadius = s.int("posterRadius") ?: a.posterRadius,
                 posterScale = s.num("posterScale")?.toFloat() ?: a.posterScale,
+                cardTitleScale = s.num("cardTitleScale")?.toFloat() ?: a.cardTitleScale,
+                spooktoberBanner = s.str("spooktoberBanner")?.takeIf { it in listOf("disabled", "small", "below-hero") } ?: a.spooktoberBanner,
                 showTop10 = s.bool("top10Ribbon") ?: a.showTop10,
                 hideUnreleased = s.bool("hideUnreleased") ?: a.hideUnreleased,
                 hideSpoilers = s.bool("hideSpoilers") ?: a.hideSpoilers,

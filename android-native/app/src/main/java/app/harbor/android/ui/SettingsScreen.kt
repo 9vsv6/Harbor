@@ -185,7 +185,7 @@ private enum class Section(
     Metadata("Metadata providers", "Where titles, artwork and scores come from.", R.drawable.set_database, "tmdb omdb tvdb thetvdb mdblist fanart rpdb custom posters ratings keys metadata providers"),
     AiSearchPage("Search", "AI search: describe what you want to watch.", R.drawable.set_discovery_search, "ai search openrouter groq model jina natural language", setOf("Search")),
     LibraryContent("Library", "Content filters and downloads.", R.drawable.set_saved_library, "library content filters hide anime downloads delete", setOf("Library")),
-    Theme("Theme & appearance", "Accent colour, poster size and corners.", R.drawable.set_theme_swatches, "accent colour color theme poster size corner radius", null),
+    Theme("Theme & appearance", "Accent colour, poster size and corners.", R.drawable.set_theme_swatches, "accent colour color theme poster size corner radius card title size font size text under posters spooktober banner seasonal", null),
     StreamBadges("Stream badges", "The format chips on stream rows, and which badges show.", R.drawable.set_badge_check, "badges format chips 4k hdr dolby vision codec audio atmos hide badge art"),
     BadgeRules("Badge rules", "Your own badges, matched against each stream.", R.drawable.set_badge_rules, "custom rules badge pattern regex release group remaps"),
     BadgePacks("Badge packs", "Badge packs, import from a link or a file, and export.", R.drawable.set_package, "badge packs import export nuvio json betterformatter gist"),
@@ -1347,7 +1347,14 @@ private val ACCENTS = listOf(0xFFF0A35E, 0xFFE57373, 0xFFF06292, 0xFFBA68C8, 0xF
 /** Harbor's Theme & appearance: the accent, then poster size and corners, as its Theme tab. */
 @Composable
 private fun AppearanceSection(settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
-    HarborHeading("Theme", "The accent colour used for highlights, progress and focus.")
+    if (app.harbor.android.data.Spooktober.inSeason()) {
+        HarborHeading("Spooktober", "Temporary seasonal settings for Spooktober.")
+        RowText("Spooktober banner", "Hide the banner, keep it small in the top-right corner of the hero, or show the full banner below the hero.")
+        HarborSelect(
+            listOf("disabled" to "Disabled", "small" to "Small - Top Right", "below-hero" to "Below hero"),
+            settings.spooktoberBanner ?: "small",
+        ) { v -> set { it.copy(spooktoberBanner = v) } }
+    }
     ColorSwatches(ACCENTS, settings.accent, 0xFFF0A35E) { c -> set { it.copy(accent = c) } }
     HarborHeading("Typography", "The typeface Harbor is drawn in. Upload your own TTF or OTF if none of these suit.")
     FontPairGrid(settings.fontPair, settings.customFonts) { v -> set { it.copy(fontPair = v) } }
@@ -1356,6 +1363,21 @@ private fun AppearanceSection(settings: AppSettings, set: ((AppSettings) -> AppS
     TickSlider(settings.posterScale, listOf(0.8f, 0.85f, 0.9f, 1f, 1.1f, 1.15f, 1.25f), { "${(it * 100).toInt()}%" }, 1f) { v -> set { it.copy(posterScale = v) } }
     HarborHeading("Corner radius", "How round poster cards are.")
     TickSlider(settings.posterRadius.toFloat(), listOf(0f, 2f, 4f, 6f, 8f, 10f, 12f, 14f, 18f), { "${it.toInt()}px" }, 8f) { v -> set { it.copy(posterRadius = v.toInt()) } }
+    HarborHeading("Title text", "Resize the titles under poster cards without scaling the rest of the interface.")
+    RowText("Card title size", "Movie and TV show titles beneath poster cards.")
+    TickSlider(settings.cardTitleScale, (0..16).map { 0.8f + it * 0.05f }, { "${kotlin.math.round(it * 100).toInt()}%" }, 1f) { v -> set { it.copy(cardTitleScale = v) } }
+    // Harbor's preview card: a long title at the chosen size.
+    Box(Modifier.widthIn(max = 180.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(8.dp)).background(HarborColors.Canvas).padding(12.dp)) {
+        Text(
+            "The Lord of the Rings: The Fellowship of the Ring",
+            color = HarborColors.Ink,
+            fontSize = 13.sp * settings.cardTitleScale,
+            lineHeight = 17.sp * settings.cardTitleScale,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
     Muted("Harbor's custom themes, wallpapers, fonts, liquid glass and window options are desktop-only.")
 }
 
