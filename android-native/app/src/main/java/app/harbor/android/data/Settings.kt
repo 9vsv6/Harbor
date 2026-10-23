@@ -199,6 +199,9 @@ data class AppSettings(
     val showAnilistComments: Boolean = false,
     val anilistBlurComments: Boolean = false,
     val malAutoSync: Boolean = true,
+    /** Watching a finished anime marks it Rewatching and counts the rewatch. */
+    val anilistCountRewatches: Boolean = true,
+    val malCountRewatches: Boolean = true,
     /** The badge over the player when an episode syncs to a tracker. */
     val syncIndicator: Boolean = true,
     /** "top-left", "top-right", "bottom-left", "bottom-right", "bottom-center". */

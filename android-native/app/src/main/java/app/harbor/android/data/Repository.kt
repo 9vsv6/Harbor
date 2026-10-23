@@ -272,7 +272,7 @@ class Repository(private val context: Context) {
         scope.launch {
             // A stop past 80% marks it watched, which the player's sync indicator shows.
             val label = if (what.season != null && what.episode != null) "Episode ${what.episode}" else "Movie"
-            fun done(service: String) { if (action == "stop" && progressPercent >= 80) syncEvents.tryEmit("$service · $label") }
+            fun done(service: String) { if (action == "stop" && progressPercent >= 80) syncEvents.tryEmit("$service · $label synced") }
             trackers.trakt?.takeIf { it.accessToken != null }?.let { auth -> runCatching { Trakt.scrobble(auth, action, what, progressPercent) }.onSuccess { done("Trakt") } }
             if (_settings.value.simklScrobble) trackers.simkl?.takeIf { it.accessToken != null }?.let { auth -> runCatching { Simkl.scrobble(auth, action, what, progressPercent) }.onSuccess { done("Simkl") } }
         }
@@ -282,16 +282,31 @@ class Repository(private val context: Context) {
     fun markAnimeWatched(kitsuId: String, episode: Int) {
         val trackers = _trackers.value
         val settings = _settings.value
+        // "Rewatched on AniList", as Harbor's sync toast words a counted rewatch.
+        fun emit(service: String, result: TrackerSync?) = when (result) {
+            TrackerSync.Synced -> syncEvents.tryEmit("$service · Episode $episode synced")
+            TrackerSync.Rewatched -> syncEvents.tryEmit("Rewatched on $service · Episode $episode")
+            null -> false
+        }
         if (settings.anilistAutoSync) trackers.anilist?.takeIf { it.accessToken != null }?.let { auth ->
-            scope.launch { if (runCatching { AniList.markWatched(auth, kitsuId, episode) }.getOrDefault(false)) syncEvents.tryEmit("AniList · Episode $episode") }
+            val guard = rewatchGuard("anilist")
+            scope.launch { emit("AniList", runCatching { AniList.markWatched(auth, kitsuId, episode, settings.anilistCountRewatches, guard) }.getOrNull()) }
         }
         if (settings.malAutoSync) trackers.mal?.takeIf { it.accessToken != null }?.let { auth ->
+            val guard = rewatchGuard("mal")
             scope.launch {
                 val fresh = runCatching { Mal.fresh(auth) }.getOrDefault(auth)
                 if (fresh != auth) updateTrackers { it.copy(mal = fresh) }
-                if (runCatching { Mal.markWatched(fresh, "kitsu:$kitsuId", episode) }.getOrDefault(false)) syncEvents.tryEmit("MyAnimeList · Episode $episode")
+                emit("MyAnimeList", runCatching { Mal.markWatched(fresh, "kitsu:$kitsuId", episode, settings.malCountRewatches, guard) }.getOrNull())
             }
         }
+    }
+
+    private val rewatchGuards = mutableMapOf<String, RewatchGuard>()
+
+    /** This profile's finished-rewatch guard for one tracker. */
+    private fun rewatchGuard(tracker: String): RewatchGuard = profileKey(tracker).let { scope ->
+        rewatchGuards.getOrPut(scope) { RewatchGuard(context.getSharedPreferences("tracker-rewatch", android.content.Context.MODE_PRIVATE), scope) }
     }
 
     internal suspend fun editStore(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {

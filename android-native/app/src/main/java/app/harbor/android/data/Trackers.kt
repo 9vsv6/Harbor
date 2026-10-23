@@ -380,25 +380,87 @@ object AniList {
         }.getOrNull()
     }
 
-    /** Marks episode `episode` watched, never moving progress backwards. */
-    suspend fun markWatched(auth: TrackerAuth, kitsuId: String, episode: Int): Boolean {
-        val mediaId = anilistId(kitsuId) ?: return false
+    /**
+     * Marks episode `episode` watched (sync.ts syncAnimeProgress), never moving progress backwards.
+     * A title already Completed or Re-watching is rewatched instead when [countRewatches] is on:
+     * the entry goes to REPEATING, and the finale completes it with `repeat` bumped.
+     * Returns what AniList took, or null when nothing was written.
+     */
+    suspend fun markWatched(auth: TrackerAuth, kitsuId: String, episode: Int, countRewatches: Boolean, guard: RewatchGuard): TrackerSync? {
+        val mediaId = anilistId(kitsuId) ?: return null
+        val key = "kitsu:$kitsuId"
         val vars = buildJsonObject { put("id", mediaId) }
-        val media = query(auth, "query(\$id: Int) { Media(id: \$id) { episodes mediaListEntry { progress } } }", vars)["Media"]?.jsonObject
-        val current = media?.get("mediaListEntry")?.let { it as? JsonObject }?.get("progress")?.jsonPrimitive?.intOrNull ?: 0
-        if (episode <= current) return false
-        val total = media?.get("episodes")?.jsonPrimitive?.intOrNull
-        val status = if (total != null && episode >= total) "COMPLETED" else "CURRENT"
-        query(
-            auth,
-            "mutation(\$id: Int, \$progress: Int, \$status: MediaListStatus) { SaveMediaListEntry(mediaId: \$id, progress: \$progress, status: \$status) { id } }",
-            buildJsonObject {
-                put("id", mediaId)
-                put("progress", episode)
-                put("status", status)
-            },
-        )
-        return true
+        val media = query(auth, "query(\$id: Int) { Media(id: \$id) { episodes mediaListEntry { progress status repeat } } }", vars)["Media"]?.jsonObject
+        val entry = media?.get("mediaListEntry") as? JsonObject
+        val entryStatus = entry?.string("status")
+        val current = entry?.get("progress")?.jsonPrimitive?.intOrNull ?: 0
+        val total = media?.get("episodes")?.jsonPrimitive?.intOrNull ?: 0
+        if (total > 0 && episode > total) return null
+
+        suspend fun save(progress: Int, status: String, repeat: Int? = null): Boolean {
+            val saved = query(
+                auth,
+                "mutation(\$id: Int, \$progress: Int, \$status: MediaListStatus, \$repeat: Int) { SaveMediaListEntry(mediaId: \$id, progress: \$progress, status: \$status, repeat: \$repeat) { progress } }",
+                buildJsonObject {
+                    put("id", mediaId)
+                    put("progress", progress)
+                    put("status", status)
+                    repeat?.let { put("repeat", it) }
+                },
+            )
+            return saved["SaveMediaListEntry"]?.jsonObject?.get("progress")?.jsonPrimitive?.intOrNull == progress
+        }
+
+        if (entryStatus == "COMPLETED" || entryStatus == "REPEATING") {
+            // Rewatch recording is off: leave the finished entry exactly as the user set it.
+            if (!countRewatches) return null
+            // Replaying the finale of a pass that was just counted is not a new rewatch.
+            val doneAt = guard.done(key)
+            if (doneAt != null && entryStatus == "COMPLETED" && episode >= doneAt) return null
+            // The finale of a rewatch finishes the pass: Completed, with the counter (a plain field) bumped.
+            if (entryStatus == "REPEATING" && total > 0 && episode >= total) {
+                val repeat = (entry["repeat"]?.jsonPrimitive?.intOrNull ?: 0) + 1
+                if (!save(total, "COMPLETED", repeat)) return null
+                guard.remember(key, episode)
+                return TrackerSync.Rewatched
+            }
+            // Starting a rewatch ignores the completed progress; continuing one is forward only.
+            if (entryStatus == "REPEATING" && episode <= current) return null
+            guard.forget(key)
+            return if (save(episode, "REPEATING")) TrackerSync.Rewatched else null
+        }
+
+        if (episode <= current) return null
+        val status = if (total > 0 && episode >= total) "COMPLETED" else "CURRENT"
+        if (!save(episode, status)) return null
+        // A first watch that completes the title must not read as a finished rewatch next time.
+        if (status == "COMPLETED") guard.remember(key, episode)
+        return TrackerSync.Synced
+    }
+}
+
+/** What a tracker took from a watched episode, for the player's sync indicator. */
+enum class TrackerSync { Synced, Rewatched }
+
+/**
+ * Where a finished pass was counted (sync.ts rewatch-done), per tracker and profile, so replaying
+ * the finale cannot flip a completed entry into a phantom rewatch. Multi-episode titles persist
+ * across restarts; a movie's single episode stays for this session only, where a replay is
+ * indistinguishable from the pass that just ended.
+ */
+class RewatchGuard(private val prefs: android.content.SharedPreferences, private val scope: String) {
+    private val session = mutableMapOf<String, Int>()
+
+    fun done(id: String): Int? = session[id] ?: prefs.getInt("$scope|$id", 0).takeIf { it > 0 }
+
+    fun remember(id: String, episode: Int) {
+        session[id] = episode
+        if (episode > 1) prefs.edit().putInt("$scope|$id", episode).apply()
+    }
+
+    fun forget(id: String) {
+        session.remove(id)
+        prefs.edit().remove("$scope|$id").apply()
     }
 }
 

@@ -29,7 +29,9 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.StarBorder
@@ -150,6 +152,7 @@ fun LibraryScreen(repository: Repository, onOpen: (Meta) -> Unit, @Suppress("UNU
                 load = { trackers.anilist?.let { AniListLibrary.entries(it) }.orEmpty() },
                 statuses = AniListLibrary.statuses,
                 save = { e, status, progress -> trackers.anilist?.let { AniListLibrary.save(it, e.mediaId, status, progress) } },
+                setPrivate = { e, isPrivate -> check(trackers.anilist?.let { AniListLibrary.save(it, e.mediaId, isPrivate = isPrivate) } == true) },
                 onOpen = onOpen,
             )
             LibTab.Mal -> EntriesTab(
@@ -370,6 +373,8 @@ private fun EntriesTab(
     statuses: List<Pair<String, String>>,
     save: suspend (ListEntry, String?, Int?) -> Unit,
     onOpen: (Meta) -> Unit,
+    /** AniList only: marks an entry private, offered in its status menu. */
+    setPrivate: (suspend (ListEntry, Boolean) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var entries by remember(key) { mutableStateOf<List<ListEntry>?>(null) }
@@ -381,6 +386,14 @@ private fun EntriesTab(
     fun update(e: ListEntry, status: String? = null, progress: Int? = null) {
         entries = list.map { if (it.mediaId == e.mediaId) it.copy(status = status ?: it.status, progress = progress ?: it.progress) else it }
         scope.launch { save(e, status, progress) }
+    }
+    fun updatePrivate(e: ListEntry, isPrivate: Boolean) {
+        val save = setPrivate ?: return
+        entries = list.map { if (it.mediaId == e.mediaId) it.copy(isPrivate = isPrivate) else it }
+        scope.launch {
+            // A failed save puts the flag back, as Harbor's commitPrivate does.
+            if (runCatching { save(e, isPrivate) }.isFailure) entries = entries?.map { if (it.mediaId == e.mediaId) it.copy(isPrivate = e.isPrivate) else it }
+        }
     }
     val movies = list.count { it.meta.type == "movie" }
     val shown = list.filter { when (kind) { Kind.All -> true; Kind.Movies -> it.meta.type == "movie"; Kind.Shows -> it.meta.type != "movie" } }
@@ -397,14 +410,24 @@ private fun EntriesTab(
                 SearchBox(query) { query = it }
             }
         }
-        statuses.forEach { (status, title) ->
-            val inStatus = shown.filter { it.status == status }
-            if (inStatus.isEmpty()) return@forEach
-            item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle(title, inStatus.size) }
-            items(inStatus, key = { "$status:${it.mediaId}" }) { e ->
+        // The status sections, then each custom list under its own name (anilist-tab.tsx).
+        val sections = statuses.map { (status, title) -> Triple(status, title, shown.filter { it.status == status }) } +
+            shown.flatMap { it.customLists }.distinct().map { name -> Triple("custom:$name", name, shown.filter { name in it.customLists }) }
+        sections.forEach { (section, title, inSection) ->
+            if (inSection.isEmpty()) return@forEach
+            item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle(title, inSection.size) }
+            items(inSection, key = { "$section:${it.mediaId}" }) { e ->
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PosterTile(e.meta) { onOpen(e.meta) }
-                    StatusMenu(statuses, e.status) { update(e, status = it) }
+                    Box {
+                        PosterTile(e.meta) { onOpen(e.meta) }
+                        // Harbor's private marker at the poster's corner.
+                        if (e.isPrivate) {
+                            Box(Modifier.padding(8.dp).size(28.dp).clip(CircleShape).background(Color(0xD9121316)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Rounded.Lock, "Private", tint = HarborColors.Ink, modifier = Modifier.size(13.dp))
+                            }
+                        }
+                    }
+                    StatusMenu(statuses, e.status, e.isPrivate.takeIf { setPrivate != null }, { updatePrivate(e, it) }) { update(e, status = it) }
                     Row(
                         Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(HarborColors.Surface),
                         verticalAlignment = Alignment.CenterVertically,
@@ -424,7 +447,13 @@ private fun EntriesTab(
 }
 
 @Composable
-private fun StatusMenu(statuses: List<Pair<String, String>>, status: String, onPick: (String) -> Unit) {
+private fun StatusMenu(
+    statuses: List<Pair<String, String>>,
+    status: String,
+    isPrivate: Boolean?,
+    onPrivate: (Boolean) -> Unit,
+    onPick: (String) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
@@ -438,6 +467,16 @@ private fun StatusMenu(statuses: List<Pair<String, String>>, status: String, onP
         DropdownMenu(open, onDismissRequest = { open = false }, containerColor = HarborColors.Elevated) {
             statuses.forEach { (value, label) ->
                 DropdownMenuItem(text = { Text(label, fontWeight = if (value == status) FontWeight.Bold else FontWeight.Normal) }, onClick = { onPick(value); open = false })
+            }
+            // AniList's Private, under the statuses: checked when the entry is hidden from others.
+            if (isPrivate != null) {
+                Box(Modifier.padding(vertical = 4.dp).fillMaxWidth().height(1.dp).background(HarborColors.EdgeSoft))
+                DropdownMenuItem(
+                    text = { Text("Private", color = if (isPrivate) HarborColors.Ink else HarborColors.InkMuted) },
+                    leadingIcon = { Icon(Icons.Rounded.Lock, null, tint = if (isPrivate) HarborColors.Ink else HarborColors.InkMuted, modifier = Modifier.size(16.dp)) },
+                    trailingIcon = if (isPrivate) ({ Icon(Icons.Rounded.Check, null, tint = HarborColors.Ink, modifier = Modifier.size(17.dp)) }) else null,
+                    onClick = { onPrivate(!isPrivate); open = false },
+                )
             }
         }
     }

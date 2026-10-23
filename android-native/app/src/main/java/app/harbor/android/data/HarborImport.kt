@@ -160,6 +160,8 @@ class HarborImport(private val repository: Repository, private val context: Cont
                 showAnilistComments = s.bool("showAnilistComments") ?: a.showAnilistComments,
                 anilistBlurComments = s.bool("anilistBlurComments") ?: a.anilistBlurComments,
                 malAutoSync = s.bool("malAutoSync") ?: a.malAutoSync,
+                anilistCountRewatches = s.bool("anilistCountRewatches") ?: a.anilistCountRewatches,
+                malCountRewatches = s.bool("malCountRewatches") ?: a.malCountRewatches,
                 syncIndicator = s.bool("syncIndicator") ?: a.syncIndicator,
                 syncIndicatorPosition = s.str("syncIndicatorPosition") ?: a.syncIndicatorPosition,
                 letterboxd = (s["letterboxd"] as? JsonObject)?.let { l ->

@@ -65,7 +65,7 @@ fun TrackerSyncBadge(events: Flow<String>, settings: AppSettings) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF3FB950), modifier = Modifier.size(16.dp))
-                Text("${message.orEmpty()} synced", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                Text(message.orEmpty(),color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
