@@ -88,6 +88,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val repository = (application as HarborApp).repository
+        // Cloudstream extensions show their toasts through the foreground activity.
+        com.lagradost.cloudstream3.CommonActivity.activity = this
         setContent {
             HarborTheme {
                 val chosen by repository.profileChosen.collectAsState()

@@ -197,6 +197,8 @@ private enum class Section(
     Backup("Updates & backup", "Updates, and a copy of your setup.", R.drawable.set_arrow_up_circle, "backup restore export import file updates"),
     About("About", "This build and reporting a problem.", R.drawable.set_info, "version report bug github"),
     Support("Support", "Who keeps Harbor running, and where to give instead.", R.drawable.set_heart, "support donate elfhosted stremio charity"),
+    InstalledPlugins("Installed plugins", "The plugins you installed: turn them on or off, or remove them.", R.drawable.set_puzzle, "plugins installed extensions cloudstream providers enable disable remove"),
+    PluginRepos("Plugin repositories", "Add plugin repositories and install their plugins.", R.drawable.set_package, "plugins repositories repo add install cloudstream extensions cs3 manifest"),
     Licences("Licences", "Harbor's licence, acknowledgements and what it's built on.", R.drawable.set_scale, "licences licenses open source acknowledgements credits mit gpl"),
 }
 
@@ -212,6 +214,7 @@ private enum class Group(val label: String, val section: String, @androidx.annot
         "Sources & library", "Content", R.drawable.set_library,
         listOf(Section.Services, Section.SourcePreferences, Section.Sorting, Section.Picker, Section.StreamFilters, Section.HomeRows, Section.PosterCards, Section.DetailPages, Section.Metadata, Section.AiSearchPage, Section.LibraryContent),
     ),
+    Plugins("Plugins", "Plugins", R.drawable.set_puzzle, listOf(Section.InstalledPlugins, Section.PluginRepos)),
     Appearance("Appearance", "Look & feel", R.drawable.set_palette, listOf(Section.Theme, Section.StreamBadges, Section.BadgeRules, Section.BadgePacks)),
     System("System", "System", R.drawable.set_sliders_horizontal, listOf(Section.Storage)),
     Updates("Updates & backup", "Updates", R.drawable.set_arrow_up_circle, listOf(Section.Backup)),
@@ -482,6 +485,8 @@ private fun SectionBody(
             Section.Motion -> MotionPage(settings, set)
             Section.Support -> SupportPage()
             Section.Licences -> LicencesPage()
+            Section.InstalledPlugins -> InstalledPluginsPage()
+            Section.PluginRepos -> PluginRepositoriesPage()
             Section.Metadata -> ProvidersSection(repository)
             Section.Storage -> StorageSection(repository, set)
             Section.Backup -> BackupSection(repository)

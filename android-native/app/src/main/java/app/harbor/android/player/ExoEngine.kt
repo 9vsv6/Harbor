@@ -103,8 +103,8 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
 
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
         // Data sources read the factory's properties when they open, so this covers the new item.
-        http.setUserAgent(headers["User-Agent"] ?: Net.USER_AGENT)
-        http.setDefaultRequestProperties(headers - "User-Agent")
+        http.setUserAgent(headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: Net.USER_AGENT)
+        http.setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent", true) })
         player.setMediaItem(MediaItem.fromUri(url), startMs)
         player.prepare()
         player.play()

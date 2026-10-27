@@ -1,5 +1,7 @@
 package app.harbor.android.data
 
+import kotlinx.coroutines.async
+
 /** A stream ready to hand to the player: where it came from and the URL to open. */
 data class Ready(val stream: Stream, val url: String, val addonId: String? = null)
 
@@ -25,7 +27,18 @@ object Playback {
     ): List<RankedStream> {
         // An anime episode is asked for under its anime and IMDb ids, and must match its episode.
         val anime = AnimeStreams.request(id, settings)
-        val groups = if (anime != null) AddonClient.streams(addons) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id)
+        // Installed plugins (Settings → Plugins) are asked beside the addons, each a source group of its own.
+        val groups = kotlinx.coroutines.coroutineScope {
+            val fromPlugins = async {
+                if (!app.harbor.android.data.plugins.Plugins.hasEnabled) return@async emptyList<AddonClient.AddonStreams>()
+                runCatching {
+                    val title = app.harbor.android.data.plugins.Plugins.titleFor(type, id)
+                    app.harbor.android.data.plugins.Plugins.streams(type, id, title)
+                }.getOrDefault(emptyList())
+            }
+            val fromAddons = if (anime != null) AddonClient.streams(addons) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id)
+            fromAddons + fromPlugins.await()
+        }
         onFailures?.invoke(groups.filter { it.error != null }.map { it.addon.manifest.name to it.error!! })
         val all = groups.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
         val kept = all.filter { allowed(it.stream, settings) }

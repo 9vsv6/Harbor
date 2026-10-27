@@ -135,6 +135,11 @@ fun DetailScreen(
         } else null
     }
 
+    // Plugins search by name: note what this page shows for when its sources are asked for.
+    LaunchedEffect(meta?.id, meta?.name) {
+        meta?.let { app.harbor.android.data.plugins.Plugins.remember(it.id, it.name, it.year) }
+    }
+
     // Harbor's anime extras from AniList: characters, related anime, other titles, stats, next episode.
     LaunchedEffect(meta?.id) {
         val current = meta ?: return@LaunchedEffect

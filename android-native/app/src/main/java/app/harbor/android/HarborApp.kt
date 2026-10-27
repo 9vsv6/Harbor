@@ -24,6 +24,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         repository = Repository(this)
+        // Installed plugins (Cloudstream extensions) and their repositories.
+        app.harbor.android.data.plugins.Plugins.init(this)
         app.harbor.android.ui.HarborFonts.assets = assets
         app.harbor.android.data.Curated.init(this)
         // The curated lists and last launch's Home rows are parsed now, off the main thread,

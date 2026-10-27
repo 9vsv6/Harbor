@@ -307,9 +307,11 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         eof = false
         position = 0.0
         duration = 0.0
-        mpv.setPropertyString("user-agent", headers["User-Agent"] ?: Net.USER_AGENT)
+        // Header names are case-insensitive: a plugin's "user-agent" is the user agent, not a second header.
+        val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
+        mpv.setPropertyString("user-agent", ua ?: Net.USER_AGENT)
         // mpv takes extra headers as a comma-separated list.
-        mpv.setPropertyString("http-header-fields", (headers - "User-Agent").entries.joinToString(",") { (k, v) -> "$k: ${v.replace(",", "\\,")}" })
+        mpv.setPropertyString("http-header-fields", headers.filterKeys { !it.equals("User-Agent", true) }.entries.joinToString(",") { (k, v) -> "$k: ${v.replace(",", "\\,")}" })
         mpv.setPropertyString("start", if (startMs > 0) "%.3f".format(Locale.US, startMs / 1000.0) else "none")
         val start = {
             mpv.command(arrayOf("loadfile", url, "replace"))

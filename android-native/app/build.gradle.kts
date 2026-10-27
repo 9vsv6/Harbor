@@ -157,6 +157,14 @@ dependencies {
     implementation("io.coil-kt:coil-svg:2.7.0")
     // Trailer streams from YouTube, as Harbor gets them with yt-dlp (GPL-3, like the rest).
     implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.5")
+    // Cloudstream's extension library (GPL-3): the API surface Android extensions (.cs3, Harbor's
+    // "android-extension" plugins) are built against, so they load and run here as in Cloudstream.
+    // Android pieces Cloudstream extensions use from the Cloudstream app (settings screens, preferences).
+    implementation("androidx.preference:preference-ktx:1.2.1")
+    implementation("com.github.recloudstream.cloudstream:library:4.8.0") {
+        // The same NewPipeExtractor as above under another group spelling; one copy, the newer.
+        exclude(group = "com.github.teamnewpipe")
+    }
 
     implementation("androidx.media3:media3-exoplayer:1.9.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
