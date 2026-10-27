@@ -161,6 +161,9 @@ object CloudstreamHost {
         return found.map { it.data }.filter { it.isNotBlank() }.distinct().take(2)
     }
 
+    /** An ExtractorLink as a stream to play, its headers kept for the player. */
+    fun streamOf(api: MainAPI, link: ExtractorLink): Stream? = runCatching { toStream(api, link) }.getOrNull()
+
     private fun toStream(api: MainAPI, link: ExtractorLink): Stream? {
         val name = "${api.name}\n${qualityLabel(link.quality)}"
         if (link.type == ExtractorLinkType.TORRENT || link.type == ExtractorLinkType.MAGNET) {

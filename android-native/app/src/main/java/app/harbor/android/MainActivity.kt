@@ -216,6 +216,20 @@ private fun HarborRoot(repository: Repository) {
                     }
                 }
                 composable("collections") { app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() }) }
+                composable("plugins") {
+                    app.harbor.android.ui.PluginsScreen(
+                        onBack = if (wide) null else ({ nav.popBackStack() }),
+                        onOpen = { nav.navigate("plugintitle/${enc(it.key)}") },
+                        onSettings = { nav.navigate(Tab.Profile.route) },
+                    )
+                }
+                composable("plugintitle/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                    val key = back.arguments?.getString("key").orEmpty()
+                    app.harbor.android.ui.PluginTitleScreen(key, onBack = { nav.popBackStack() }) { stream, title, data ->
+                        val url = stream.url ?: return@PluginTitleScreen
+                        context.startActivity(PlayerActivity.intent(context, app.harbor.android.data.Ready(stream, url), "movie", "plugin:$key", "plugin:$data", title))
+                    }
+                }
                 composable("spooktober") { app.harbor.android.ui.SpooktoberScreen(onBack = { nav.popBackStack() }, onOpen = { open(it) }) }
                 composable("collection/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { back ->
                     app.harbor.android.ui.CollectionScreen(repository, back.arguments?.getInt("id") ?: 0, onBack = { nav.popBackStack() }, onOpen = { open(it) })
@@ -441,6 +455,10 @@ private fun SideRail(route: String?, view: BrowseView, onSelect: (Tab) -> Unit, 
         RailIcon(Tab.MyStuff.glyph, "Library", route == Tab.MyStuff.route) { onSelect(Tab.MyStuff) }
         BrowseView.entries.drop(1).filter { it != BrowseView.Anime || !app.harbor.android.ui.HarborDisplay.settings.hideAnime }.forEach { v ->
             RailIcon(v.glyph, v.label, homeView && view == v) { onView(v) }
+        }
+        // Harbor's Plugins page sits under the views, as on the desktop sidebar, once a plugin is installed.
+        if (app.harbor.android.data.plugins.Plugins.state.collectAsState().value.installed.isNotEmpty()) {
+            RailIcon(pages[4].glyph, pages[4].label, route == pages[4].route || route?.startsWith("plugintitle") == true) { onPage(pages[4].route) }
         }
         RailIcon(pages[2].glyph, pages[2].label, route == pages[2].route) { onPage(pages[2].route) }
         RailIcon(pages[1].glyph, pages[1].label, route == pages[1].route) { onPage(pages[1].route) }
