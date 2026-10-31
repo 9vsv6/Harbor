@@ -3,7 +3,10 @@ package app.harbor.android.data
 import android.net.Uri
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -77,27 +80,44 @@ object AddonClient {
     data class AddonStreams(val addon: Addon, val streams: List<Stream>, val error: String? = null)
 
     /** Streams from every addon that offers them, in parallel; a slow addon times out alone. */
-    suspend fun streams(addons: List<Addon>, type: String, id: String): List<AddonStreams> =
-        streams(addons) { addon -> if (addon.manifest.supports("stream", type, id)) listOf(type to id) else emptyList() }
+    suspend fun streams(addons: List<Addon>, type: String, id: String, onEach: (suspend (AddonStreams) -> Unit)? = null): List<AddonStreams> =
+        streams(addons, onEach) { addon -> if (addon.manifest.supports("stream", type, id)) listOf(type to id) else emptyList() }
 
-    /** As above, each addon asked under the (type, id) pairs `pick` chooses for it (anime ids or IMDb). */
-    suspend fun streams(addons: List<Addon>, pick: (Addon) -> List<Pair<String, String>>): List<AddonStreams> = coroutineScope {
+    /**
+     * As above, each addon asked under the (type, id) pairs `pick` chooses for it (anime ids or IMDb).
+     * `onEach` hears each addon as it answers, so a list can fill in before the slowest one is done.
+     */
+    suspend fun streams(
+        addons: List<Addon>,
+        onEach: (suspend (AddonStreams) -> Unit)? = null,
+        pick: (Addon) -> List<Pair<String, String>>,
+    ): List<AddonStreams> = withContext(Dispatchers.Default) {
         addons.map { it to pick(it) }.filter { it.second.isNotEmpty() }.map { (addon, ids) ->
             async {
                 val result = withTimeoutOrNull(streamTimeoutMs) {
                     runCatching {
-                        ids.flatMap { (type, id) ->
-                            fetch(path(addon, "stream", type, id))["streams"]?.jsonArray?.mapNotNull {
-                                runCatching { Net.json.decodeFromJsonElement(Stream.serializer(), it) }.getOrNull()
-                            } ?: emptyList()
+                        // Its own scope: one failed id fails this addon alone, not the others.
+                        coroutineScope {
+                            ids.map { (type, id) ->
+                                async {
+                                    fetch(path(addon, "stream", type, id))["streams"]?.jsonArray?.mapNotNull {
+                                        runCatching { Net.json.decodeFromJsonElement(Stream.serializer(), it) }.getOrNull()
+                                    } ?: emptyList()
+                                }
+                            }.awaitAll().flatten()
                         }
                     }
                 }
-                when {
+                // Left the screen: stop here rather than report the cancellation as the addon's error.
+                ensureActive()
+                val group = when {
                     result == null -> AddonStreams(addon, emptyList(), "Timed out")
                     result.isFailure -> AddonStreams(addon, emptyList(), result.exceptionOrNull()?.message)
                     else -> AddonStreams(addon, result.getOrThrow())
                 }
+                // A listener that fails mustn't cancel the addons still loading.
+                onEach?.let { listener -> runCatching { listener(group) }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it } }
+                group
             }
         }.awaitAll()
     }

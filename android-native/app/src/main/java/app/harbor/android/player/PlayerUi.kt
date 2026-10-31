@@ -170,7 +170,7 @@ private val PanelColor = Color(0xF21A1C20)
 fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, castButton: (@Composable () -> Unit)? = null) {
     // Controls fade out after a few seconds of playback without touches.
     var touchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(state.controlsVisible, state.playing, state.panel, touchedAt) {
+    LaunchedEffect(state.controlsVisible, state.playing, state.panel, touchedAt, state.keyAt) {
         if (state.controlsVisible && state.playing && state.panel == null) {
             delay(4_000)
             state.controlsVisible = false

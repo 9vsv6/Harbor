@@ -15,6 +15,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.25).build() }
         .diskCache { coil.disk.DiskCache.Builder().directory(cacheDir.resolve("image_cache")).maxSizeBytes(768L * 1024 * 1024).build() }
         .respectCacheHeaders(false)
+        // TV boxes and low-memory phones: posters at half the memory, which on screen looks the same.
+        .allowRgb565(getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true)
         .components { add(coil.decode.SvgDecoder.Factory()) }
         .build()
 

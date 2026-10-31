@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material.icons.rounded.PersonSearch
@@ -199,7 +200,10 @@ internal fun HarborControls(
             val forward = state.settings.seekForwardSec
             TransportButton(seekIcon(back, forward = false), "Back $back seconds", 40.dp) { onTouch(); actions.seekBy(-back * 1_000L) }
             if (!state.buffering || state.ended) {
-                TransportButton(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play", 58.dp) {
+                // With a remote, the controls open on Play rather than the top corner.
+                val playFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+                LaunchedEffect(Unit) { if (state.keyAt > 0) runCatching { playFocus.requestFocus() } }
+                TransportButton(if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play", 58.dp, Modifier.focusRequester(playFocus)) {
                     onTouch()
                     actions.togglePlay()
                 }
@@ -254,9 +258,9 @@ private fun toggle(state: PlayerState, panel: Panel) {
 }
 
 @Composable
-private fun TransportButton(icon: ImageVector, description: String, iconSize: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
+private fun TransportButton(icon: ImageVector, description: String, iconSize: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        Modifier.size(iconSize + 28.dp).clip(CircleShape).background(Color(0x1F000000)).clickable(onClick = onClick),
+        modifier.size(iconSize + 28.dp).clip(CircleShape).background(Color(0x1F000000)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(iconSize)) }
 }

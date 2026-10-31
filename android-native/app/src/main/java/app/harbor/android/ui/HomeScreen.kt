@@ -188,7 +188,10 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     LaunchedEffect(display.hideAnime) { if (display.hideAnime && view == BrowseView.Anime) onView(BrowseView.Home) }
 
     Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
-        val current = rows[view]?.let { tidyRows(it, display) }
+        // Filtered once per change, not on every recomposition; stable lists let the rows skip.
+        val viewRows = rows[view]
+        val current = remember(viewRows, display, HarborDisplay.watchedIds) { viewRows?.let { tidyRows(it, display) } }
+        val heroSlides = remember(view, current) { current?.let { heroFor(view, it) } }
         val listState = rememberLazyListState()
         LaunchedEffect(view) { listState.scrollToItem(0) }
         val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp
@@ -209,11 +212,11 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                 else -> {
                     // Harbor's Shows page opens with its time-of-day heading (shows.tsx PageMast).
                     if (view == BrowseView.Shows) item(key = "mast") { ShowsMast() }
-                    val heroSlides = heroFor(view, current)
+                    val heroSlides = heroSlides.orEmpty()
                     // Harbor's Spooktober invitation: in the hero's corner, or its own band below the hero.
                     val spooktober = if (view == BrowseView.Home) SpooktoberHome.placement() else null
                     val dismissSpooktober = { repository.updateSettings { it.copy(spooktoberDismissed = true, spooktoberBanner = "small") } }
-                    item(key = "hero") {
+                    item(key = "hero", contentType = "hero") {
                         Box {
                             HeroCarousel(
                                 slides = heroSlides,
@@ -276,11 +279,11 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                     val rest = if (rankFirst) current.drop(1) else current
                     // Anime: Top Picks and Recommended lead, then your lists (Harbor's order); elsewhere three rows lead.
                     val lead = if (view == BrowseView.Anime) rest.takeWhile { it.key.startsWith("lead:") } else rest.take(3)
-                    items(lead, key = { it.key }) { row ->
-                        Rail(row.title, row.metas.distinctBy { it.id }.take(18), nav::openMeta) { nav.openCatalog(row) }
+                    items(lead, key = { it.key }, contentType = { "rail" }) { row ->
+                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
                     }
-                    items(trackerRows, key = { it.key }) { row ->
-                        Rail(row.title, row.metas.distinctBy { it.id }.take(18), nav::openMeta) { nav.openCatalog(row) }
+                    items(trackerRows, key = { it.key }, contentType = { "rail" }) { row ->
+                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
                     }
                     // Harbor's curated lists: the NYT's TV 100 for shows, the Registry's newest for films, and the shelf.
                     val curated = when (view) {
@@ -289,12 +292,12 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                         BrowseView.Movies -> listOf("national-film-registry-latest")
                         else -> emptyList()
                     }.mapNotNull { app.harbor.android.data.Curated.list(it) }
-                    items(curated, key = { "curated-${it.id}" }) { list -> CuratedRow(list, nav::openMeta) }
+                    items(curated, key = { "curated-${it.id}" }, contentType = { "curated" }) { list -> CuratedRow(list, nav::openMeta) }
                     if (view == BrowseView.Home || view == BrowseView.Movies) {
                         item(key = "lists") { CuratedShelf(app.harbor.android.data.Curated.shelf()) }
                     }
-                    items(rest.drop(lead.size), key = { it.key }) { row ->
-                        Rail(row.title, row.metas.distinctBy { it.id }.take(18), nav::openMeta) { nav.openCatalog(row) }
+                    items(rest.drop(lead.size), key = { it.key }, contentType = { "rail" }) { row ->
+                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
                     }
                 }
             }

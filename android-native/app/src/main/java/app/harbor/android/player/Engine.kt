@@ -71,8 +71,11 @@ interface Engine {
 
     /** True when the engine draws subtitles itself (mpv, with libass); else Harbor draws them. */
     val drawsSubtitles: Boolean
-    /** Loads an addon subtitle as the engine's own track. Engines that can't return false. */
-    fun addExternalSubtitle(url: String, language: String, title: String): Boolean
+    /**
+     * Loads an addon subtitle as the engine's own track, in the background; `done` hears whether it
+     * loaded (on any thread). Engines that can't return false.
+     */
+    fun addExternalSubtitle(url: String, language: String, title: String, done: (Boolean) -> Unit = {}): Boolean
     fun removeExternalSubtitles()
     fun applySubtitleStyle(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean)
     /** Subtitle events for Harbor to draw at `positionMs` (engines that don't draw them). */

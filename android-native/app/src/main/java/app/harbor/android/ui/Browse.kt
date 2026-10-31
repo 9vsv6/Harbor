@@ -1,7 +1,6 @@
 package app.harbor.android.ui
 
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,6 +46,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -162,7 +162,8 @@ fun HeroCarousel(
                 .clip(RoundedCornerShape(24.dp)).background(HarborColors.Surface)
                 .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(24.dp)),
         ) {
-            Crossfade(targetState = index, animationSpec = tween(900), label = "hero") { i ->
+            // Two full-size slides are drawn while they fade; a short fade keeps that cheap on TV boxes.
+            Crossfade(targetState = index, animationSpec = tween(450), label = "hero") { i ->
                 val meta = slides[i.coerceIn(0, slides.lastIndex)]
                 Box(Modifier.fillMaxSize().clickable { onOpen(meta) }) {
                     AsyncImage(meta.background ?: meta.poster, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -211,9 +212,10 @@ fun HeroCarousel(
         if (slides.size > 1) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 slides.indices.forEach { i ->
+                    val dotWidth by androidx.compose.animation.core.animateDpAsState(if (i == index) 20.dp else 6.dp, label = "dot")
                     Box(
-                        Modifier.padding(horizontal = 3.dp).height(6.dp).animateContentSize()
-                            .width(if (i == index) 20.dp else 6.dp).clip(RoundedCornerShape(50))
+                        Modifier.padding(horizontal = 3.dp).height(6.dp)
+                            .width(dotWidth).clip(RoundedCornerShape(50))
                             .background(if (i == index) HarborColors.Accent else HarborColors.Ink.copy(alpha = 0.2f))
                             .clickable {
                                 pausedUntil = System.currentTimeMillis() + 12_000
@@ -289,7 +291,8 @@ fun Rail(title: String, metas: List<Meta>, onOpen: (Meta) -> Unit, onSeeAll: (()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RailHeader(title, onSeeAll)
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(metas, key = { it.type + it.id }) { meta -> PosterTile(meta, Modifier.width(124.dp * HarborDisplay.settings.posterScale)) { onOpen(meta) } }
+            val width = 124.dp * HarborDisplay.settings.posterScale
+            items(metas, key = { it.type + it.id }, contentType = { "poster" }) { meta -> PosterTile(meta, Modifier.width(width)) { onOpen(meta) } }
         }
     }
 }
@@ -301,6 +304,9 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
     // RPDB has no poster for some titles: fall back to the addon's.
     var rpdbFailed by remember(rpdb) { mutableStateOf(false) }
     val poster = if (rpdbFailed) meta.poster else rpdb
+    // Only the tiles whose answer changes redraw when My List or Watched changes, not every poster on screen.
+    val inMyList by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.myListIds } }
+    val watched by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.watchedIds } }
     Column(modifier.clickable(onClick = onClick)) {
         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(display.posterRadius.dp)).background(HarborColors.Elevated)) {
             if (poster != null) {
@@ -330,7 +336,7 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
             }
             CardBadges(meta, Modifier.align(Alignment.TopStart).fillMaxWidth(0.74f))
             // Harbor's watchlist bookmark (top right) and watched check (bottom left).
-            if (display.watchlistBookmark && meta.id in HarborDisplay.myListIds) {
+            if (display.watchlistBookmark && inMyList) {
                 Icon(
                     Icons.Rounded.Bookmark,
                     "In your list",
@@ -338,7 +344,7 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
                     modifier = Modifier.align(Alignment.TopEnd).padding(5.dp).size(22.dp),
                 )
             }
-            if (display.watchedBadge && meta.id in HarborDisplay.watchedIds) {
+            if (display.watchedBadge && watched) {
                 Box(
                     Modifier.align(Alignment.BottomStart).padding(7.dp).size(20.dp).background(Color(0xD9000000), CircleShape),
                     contentAlignment = Alignment.Center,

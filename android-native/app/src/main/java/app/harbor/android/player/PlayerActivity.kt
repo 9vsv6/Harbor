@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Rational
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -107,6 +108,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         // mpv is the main engine; Media3 takes over where libmpv can't start, or when chosen.
         val settings = repository.settings.value
         state.settings = settings
+        state.tv = app.harbor.android.ui.isTv(this)
         val device = Locale.getDefault().language
         val setup = EngineSetup(
             audioLanguages = settings.audioLanguages.ifEmpty { listOf(device) },
@@ -481,7 +483,19 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     ?.let { lang -> repository.updatePlayerPrefs { it.copy(subLanguage = lang) } }
             }
             is SubChoice.Addon -> {
-                if (!engine.addExternalSubtitle(choice.subtitle.url, choice.subtitle.lang, languageName(choice.subtitle.lang))) {
+                state.subLoading = true
+                val added = engine.addExternalSubtitle(choice.subtitle.url, choice.subtitle.lang, languageName(choice.subtitle.lang)) { ok ->
+                    runOnUiThread {
+                        if (state.subChoice != choice) return@runOnUiThread
+                        state.subLoading = false
+                        if (!ok) {
+                            state.hint = "That subtitle didn't load"
+                            state.hintIcon = 0
+                            state.subChoice = SubChoice.Off
+                        }
+                    }
+                }
+                if (!added) {
                     // Media3: Harbor loads and draws addon subtitles itself.
                     engine.selectText(null)
                     loadAddonSubtitle(choice)
@@ -685,6 +699,64 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         applyAnime4K()
         state.hint = if (mode == null) "Anime4K off" else "Anime4K ${Anime4K.Mode.valueOf(mode).label}"
         state.hintIcon = 0
+    }
+
+    // ---- TV remotes and keyboards ----
+
+    /**
+     * With the controls hidden, the D-pad drives playback (left/right seek, center plays or pauses,
+     * up/down bring the controls); with them showing, it moves focus through them. Back closes a
+     * menu, then (on a TV) the controls, before it leaves. Media keys work either way.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (state.inPip || state.castingTo != null) return super.dispatchKeyEvent(event)
+        state.keyAt = System.currentTimeMillis()
+        val down = event.action == KeyEvent.ACTION_DOWN
+        when (code) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> { if (down && event.repeatCount == 0) togglePlay(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { if (down) engine.play(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { if (down) engine.pause(); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { if (down) keySeek(forward = true); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { if (down) keySeek(forward = false); return true }
+            KeyEvent.KEYCODE_MEDIA_NEXT -> { if (down && event.repeatCount == 0 && state.next != null) playNext(); return true }
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                // The live sync panel handles Back itself.
+                if (state.liveSync != null) return super.dispatchKeyEvent(event)
+                val handled = state.panel != null || (state.tv && state.controlsVisible && state.playing)
+                if (!handled) return super.dispatchKeyEvent(event)
+                if (!down) {
+                    if (state.panel != null) state.panel = null else state.controlsVisible = false
+                }
+                return true
+            }
+        }
+        val hidden = !state.controlsVisible && state.panel == null && state.endScreen == null && state.liveSync == null
+        if (!hidden || state.locked) return super.dispatchKeyEvent(event)
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (down) keySeek(forward = code == KeyEvent.KEYCODE_DPAD_RIGHT)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> {
+                if (down && event.repeatCount == 0) {
+                    togglePlay()
+                    state.controlsVisible = true
+                }
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (down) state.controlsVisible = true
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun keySeek(forward: Boolean) {
+        val sec = if (forward) state.settings.seekForwardSec else state.settings.seekBackSec
+        seekBy((if (forward) sec else -sec) * 1_000L)
+        state.hint = if (forward) "+${sec}s" else "-${sec}s"
     }
 
     // ---- PlayerActions ----

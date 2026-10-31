@@ -176,7 +176,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     }
 
     override val drawsSubtitles = false
-    override fun addExternalSubtitle(url: String, language: String, title: String) = false
+    override fun addExternalSubtitle(url: String, language: String, title: String, done: (Boolean) -> Unit) = false
     override fun removeExternalSubtitles() {}
     override fun applySubtitleStyle(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean) {}
 

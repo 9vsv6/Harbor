@@ -64,6 +64,10 @@ class PlayerState {
     var bufferedMs by mutableLongStateOf(0)
 
     var controlsVisible by mutableStateOf(true)
+    /** Running on a TV (remote, no touch). */
+    var tv = false
+    /** When a key was last pressed: keeps the controls up while you move through them with a remote. */
+    var keyAt by mutableLongStateOf(0)
     var locked by mutableStateOf(false)
     var inPip by mutableStateOf(false)
     var panel by mutableStateOf<Panel?>(null)

@@ -62,9 +62,13 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     companion object {
         private const val TAG = "HarborMpv"
+        private const val ARABIC_FONT = "Noto Sans Arabic"
 
         /** Null when libmpv can't start here; the player then falls back to Media3. */
         fun create(context: Context, setup: EngineSetup): MpvEngine? = runCatching {
+            // libass finds fonts through fontconfig, whose cache goes under XDG_CACHE_HOME. Unset on
+            // Android, so every start rescanned all of /system/fonts before the first subtitle showed.
+            runCatching { android.system.Os.setenv("XDG_CACHE_HOME", context.cacheDir.absolutePath, true) }
             val mpv = MPVLib.create(context.applicationContext) ?: error("libmpv didn't start")
             configure(context, mpv, setup)
             mpv.init()
@@ -135,8 +139,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             opt("alang", (setup.audioLanguages + "eng" + "en").distinct().joinToString(","))
             if (setup.subtitleLanguages.isEmpty()) opt("sid", "no") else opt("slang", setup.subtitleLanguages.joinToString(","))
             opt("sub-ass-override", s.assOverride)
-            // Fonts you uploaded, for subtitles drawn by libass.
-            java.io.File(context.filesDir, "fonts").takeIf { it.isDirectory }?.let { opt("sub-fonts-dir", it.absolutePath) }
+            // Fonts you uploaded, and Harbor's Arabic face (see rtlFont), for subtitles drawn by libass.
+            opt("sub-fonts-dir", subtitleFontsDir(context).absolutePath)
             if (s.hideSdh) opt("sub-filter-sdh", "yes")
             opt("sub-auto", "no")
             opt("user-agent", Net.USER_AGENT)
@@ -158,6 +162,22 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 "night" -> add("lavfi=[acompressor=threshold=0.05:ratio=4:makeup=4]")
             }
         }.joinToString(",")
+
+        /**
+         * The app's fonts folder (fonts you upload land here too), with Harbor's Arabic face copied in.
+         * libass otherwise draws Arabic in whatever fallback the phone has, and some phones' fallback
+         * fonts lose the spaces between words.
+         */
+        private fun subtitleFontsDir(context: Context): File {
+            val dir = File(context.filesDir, "fonts").apply { mkdirs() }
+            runCatching {
+                for (name in context.assets.list("subfonts").orEmpty().filter { it.endsWith(".ttf") }) {
+                    val target = File(dir, name)
+                    if (target.length() == 0L) context.assets.open("subfonts/$name").use { input -> target.outputStream().use { input.copyTo(it) } }
+                }
+            }.onFailure { Log.w(TAG, "Couldn't copy subtitle fonts", it) }
+            return dir
+        }
 
         /** mpv's TLS needs a CA file: written once from the phone's own trusted certificates. */
         private fun caBundle(context: Context): File? = runCatching {
@@ -261,7 +281,39 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     override fun eventProperty(property: String, value: String) {
-        if (property == "sub-text") keepShownLine(value)
+        if (property == "sub-text") {
+            if (value.any(::isArabic)) rtlFont(true) else if (value.any(Char::isLetter)) rtlFont(false)
+            keepShownLine(value)
+        }
+    }
+
+    // ---- Arabic subtitles ----
+
+    /** The font Harbor's style asks for (sub-font), and whether Harbor's Arabic face stands in for it. */
+    @Volatile private var styleFont = "sans-serif"
+    @Volatile private var styleFontUploaded = false
+    @Volatile private var arabicFont = false
+    @Volatile private var styleScale = 1.0
+
+    /** Arabic faces are drawn small for their size (tall line metrics for the marks); a little larger matches Latin lines. */
+    private fun subScale() = styleScale * if (arabicFont) 1.25 else 1.0
+
+    private fun isArabic(c: Char) = c.code in 0x0600..0x06FF || c.code in 0x0750..0x077F || c.code in 0xFB50..0xFDFF || c.code in 0xFE70..0xFEFC
+
+    private fun isArabicLanguage(lang: String?) = lang?.lowercase()?.substringBefore('-') in setOf("ar", "ara", "fa", "fas", "per", "ur", "urd", "ps", "pus", "ku", "ckb")
+
+    /**
+     * Arabic-script lines are drawn in Noto Sans Arabic (bundled, see subtitleFontsDir), words and
+     * spaces from one font, unless you uploaded a font of your own.
+     */
+    private fun rtlFont(on: Boolean) {
+        val use = on && !styleFontUploaded
+        if (use == arabicFont) return
+        arabicFont = use
+        runCatching {
+            mpv.setPropertyString("sub-font", if (use) ARABIC_FONT else styleFont)
+            mpv.setPropertyDouble("sub-scale", subScale())
+        }
     }
 
     override fun event(eventId: Int) {
@@ -438,20 +490,37 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun selectAudio(key: String) = mpv.setPropertyString("aid", key.substringAfter(':'))
 
+    /**
+     * Subtitle track changes, in order, off the main thread: mpv's sub-add downloads the whole file
+     * before it returns, which froze the player while an addon subtitle loaded.
+     */
+    private val subtitleWork = java.util.concurrent.Executors.newSingleThreadExecutor()
+
     override fun selectText(key: String?) {
         seenLines.clear()
-        mpv.setPropertyString("sid", key?.substringAfter(':') ?: "no")
+        val language = key?.let { k -> tracks("sub").firstOrNull { it.key == k }?.language }
+        subtitleWork.execute {
+            if (key != null) rtlFont(isArabicLanguage(language))
+            mpv.setPropertyString("sid", key?.substringAfter(':') ?: "no")
+        }
     }
 
     override val drawsSubtitles = true
 
-    override fun addExternalSubtitle(url: String, language: String, title: String): Boolean {
-        removeExternalSubtitles()
-        mpv.command(arrayOf("sub-add", url, "select", title, language))
+    override fun addExternalSubtitle(url: String, language: String, title: String, done: (Boolean) -> Unit): Boolean {
+        seenLines.clear()
+        subtitleWork.execute {
+            dropExternalSubtitles()
+            rtlFont(isArabicLanguage(language))
+            runCatching { mpv.command(arrayOf("sub-add", url, "select", title, language)) }
+            done(tracks("sub").any { it.external && it.selected })
+        }
         return true
     }
 
-    override fun removeExternalSubtitles() {
+    override fun removeExternalSubtitles() = subtitleWork.execute { dropExternalSubtitles() }
+
+    private fun dropExternalSubtitles() {
         tracks("sub").filter { it.external }.forEach { mpv.command(arrayOf("sub-remove", it.key.substringAfter(':'))) }
     }
 
@@ -460,7 +529,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         // mpv takes #AARRGGBB.
         fun argb(c: Long, alpha: Float = 1f) = "#%02X%06X".format((alpha * 255).toInt().coerceIn(0, 255), c and 0xFFFFFF)
         val color = argb(prefs.subColor, style.subOpacity.coerceIn(0.2f, 1f))
-        mpv.setPropertyDouble("sub-scale", prefs.subScale.toDouble())
+        styleScale = prefs.subScale.toDouble()
+        mpv.setPropertyDouble("sub-scale", subScale())
         mpv.setPropertyString("sub-color", color)
         mpv.setPropertyBoolean("sub-bold", style.subBold)
         val horizontal = subHorizontal(style)
@@ -476,7 +546,10 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         )
         // An uploaded font: libass finds it in the app's fonts folder (sub-fonts-dir, set at start) by its family name.
         val uploaded = style.subFont.removePrefix("file:").takeIf { style.subFont.startsWith("file:") }?.let { app.harbor.android.ui.fontFamilyName(java.io.File(it)) }
-        mpv.setPropertyString("sub-font", uploaded ?: when (style.subFont) { "serif" -> "serif"; "mono" -> "monospace"; "condensed" -> "sans-serif-condensed"; else -> "sans-serif" })
+        styleFont = uploaded ?: when (style.subFont) { "serif" -> "serif"; "mono" -> "monospace"; "condensed" -> "sans-serif-condensed"; else -> "sans-serif" }
+        styleFontUploaded = uploaded != null
+        if (styleFontUploaded) arabicFont = false
+        mpv.setPropertyString("sub-font", if (arabicFont) ARABIC_FONT else styleFont)
         when (prefs.subBackground) {
             "box" -> {
                 val box = argb(style.subBoxColor, style.subBoxOpacity)
@@ -531,6 +604,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     override fun release() {
+        subtitleWork.shutdownNow()
+        runCatching { subtitleWork.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
         mpv.removeObserver(this)
         runCatching { mpv.destroy() }
     }

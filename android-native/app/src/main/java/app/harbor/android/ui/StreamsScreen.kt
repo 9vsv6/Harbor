@@ -142,6 +142,8 @@ fun StreamsScreen(
     val scope = rememberCoroutineScope()
     var meta by remember { mutableStateOf<Meta?>(null) }
     var ranked by remember { mutableStateOf<List<RankedStream>?>(null) }
+    // Sources show as each addon answers; this stays on until the last one has.
+    var loading by remember { mutableStateOf(true) }
     var failures by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -174,7 +176,9 @@ fun StreamsScreen(
     LaunchedEffect(addons, type, videoId, debrid, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage, settings.animePreferImdbStreams) {
         if (addons.isEmpty()) return@LaunchedEffect
         if (refreshKey > 0) ranked = null
-        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it })
+        loading = true
+        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it }, onPartial = { ranked = it })
+        loading = false
         ranked = list
         if (autoPlay && !autoPlayed) {
             autoPlayed = true
@@ -220,7 +224,7 @@ fun StreamsScreen(
                     HeaderPill(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Back", spin = false, onClick = onBack)
                     // Harbor's "Move Refresh next to Back"; off keeps it at the far end.
                     if (!settings.pickerRefreshNextToBack) Spacer(Modifier.weight(1f))
-                    HeaderPill(Icons.Rounded.Refresh, "Refresh", spin = all == null) {
+                    HeaderPill(Icons.Rounded.Refresh, "Refresh", spin = loading) {
                         refreshKey++
                         failures = emptyList()
                     }
@@ -312,7 +316,7 @@ fun StreamsScreen(
                 }
             }
             when {
-                all == null -> item(key = "loading") { Loading() }
+                all == null || (loading && shown.isEmpty()) -> item(key = "loading") { Loading() }
                 shown.isEmpty() -> item(key = "empty") {
                     EmptyState(
                         "No sources found",

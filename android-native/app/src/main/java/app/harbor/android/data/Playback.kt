@@ -1,6 +1,7 @@
 package app.harbor.android.data
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.withLock
 
 /** A stream ready to hand to the player: where it came from and the URL to open. */
 data class Ready(val stream: Stream, val url: String, val addonId: String? = null)
@@ -24,9 +25,27 @@ object Playback {
         prefer: Pair<String, String?>? = null,
         /** Told which addons failed, as (addon name, reason). */
         onFailures: ((List<Pair<String, String>>) -> Unit)? = null,
+        /** The list so far, each time another addon or plugin answers (on the caller's thread). */
+        onPartial: ((List<RankedStream>) -> Unit)? = null,
     ): List<RankedStream> {
         // An anime episode is asked for under its anime and IMDb ids, and must match its episode.
         val anime = AnimeStreams.request(id, settings)
+        val arrived = ArrayList<AddonClient.AddonStreams>()
+        val lock = kotlinx.coroutines.sync.Mutex()
+        // Re-ranks what has arrived so far off the main thread, and hands it over on the caller's thread.
+        val caller = kotlinx.coroutines.currentCoroutineContext()[kotlin.coroutines.ContinuationInterceptor] ?: kotlinx.coroutines.Dispatchers.Main
+        val partial: (suspend (List<AddonClient.AddonStreams>) -> Unit)? = onPartial?.let { deliver ->
+            { groups ->
+                lock.withLock {
+                    arrived += groups
+                    val snapshot = arrived.toList()
+                    val ordered = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        order(snapshot, addons, type, debrid, settings, media3, anime, prefer)
+                    }
+                    kotlinx.coroutines.withContext(caller) { deliver(ordered) }
+                }
+            }
+        }
         // Installed plugins (Settings → Plugins) are asked beside the addons, each a source group of its own.
         val groups = kotlinx.coroutines.coroutineScope {
             val fromPlugins = async {
@@ -34,13 +53,31 @@ object Playback {
                 runCatching {
                     val title = app.harbor.android.data.plugins.Plugins.titleFor(type, id)
                     app.harbor.android.data.plugins.Plugins.streams(type, id, title)
-                }.getOrDefault(emptyList())
+                }.getOrDefault(emptyList()).also { if (it.isNotEmpty()) partial?.invoke(it) }
             }
-            val fromAddons = if (anime != null) AddonClient.streams(addons) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id)
+            val each: (suspend (AddonClient.AddonStreams) -> Unit)? = partial?.let { p -> { group -> if (group.streams.isNotEmpty()) p(listOf(group)) } }
+            val fromAddons = if (anime != null) AddonClient.streams(addons, each) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id, each)
             fromAddons + fromPlugins.await()
         }
         onFailures?.invoke(groups.filter { it.error != null }.map { it.addon.manifest.name to it.error!! })
-        val all = groups.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            order(groups, addons, type, debrid, settings, media3, anime, prefer)
+        }
+    }
+
+    /** Filters and orders the streams of these groups, addons in your order and plugins after. */
+    private fun order(
+        groups: List<AddonClient.AddonStreams>,
+        addons: List<Addon>,
+        type: String,
+        debrid: DebridAccount?,
+        settings: AppSettings,
+        media3: Boolean,
+        anime: AnimeStreams.Request?,
+        prefer: Pair<String, String?>?,
+    ): List<RankedStream> {
+        val rank = addons.withIndex().associate { it.value to it.index }
+        val all = groups.sortedBy { rank[it.addon] ?: Int.MAX_VALUE }.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
         val kept = all.filter { allowed(it.stream, settings) }
         val playable = { s: Stream -> s.playable(debrid != null) }
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
