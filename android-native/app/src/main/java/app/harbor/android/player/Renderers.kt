@@ -85,12 +85,17 @@ class CueStore {
         entries[base + (sequence++ and 63)] = entry
     }
 
-    /** The first event with text starting after `positionMs` (the live sync guide's next line). */
-    fun nextAfter(positionMs: Long): SubtitleFile.Cue? =
-        entries.tailMap(positionMs * 64 + 64).values.firstNotNullOfOrNull { entry ->
+    /** Every event with text read so far, by start (the live sync list). */
+    fun lines(): List<SubtitleFile.Cue> {
+        val all = entries.values.toList()
+        return all.mapIndexedNotNull { i, entry ->
             val text = entry.cues.mapNotNull { it.text?.toString()?.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
-            if (text.isEmpty()) null else SubtitleFile.Cue(entry.startMs, if (entry.endMs == C.TIME_UNSET) entry.startMs + 2_000 else entry.endMs, text)
+            if (text.isEmpty()) return@mapIndexedNotNull null
+            // Open-ended events last until the next one starts.
+            val end = if (entry.endMs != C.TIME_UNSET) entry.endMs else all.getOrNull(i + 1)?.startMs ?: (entry.startMs + 2_000)
+            SubtitleFile.Cue(entry.startMs, end, text)
         }
+    }
 
     /** The cues showing at `positionMs`. Open-ended events last until the next one starts. */
     fun at(positionMs: Long): List<Cue> {

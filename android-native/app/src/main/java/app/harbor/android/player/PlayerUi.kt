@@ -116,9 +116,13 @@ interface PlayerActions {
     fun selectAudio(key: String)
     fun selectSubtitle(choice: SubChoice)
     fun setSubDelay(delayMs: Long)
-    /** Guided live sync: shows the next line to tap on; [liveSyncNow] sets the offset from the tap. */
+    /** Live sync: Harbor's panel of every subtitle line; align the one you hear to now. */
     fun startLiveSync()
-    fun liveSyncNow()
+    fun liveSyncAlign(line: SubtitleFile.Cue)
+    fun liveSyncReset()
+    fun liveSyncPlayFrom(line: SubtitleFile.Cue)
+    /** Done keeps the new timing; closing without keeping puts the old one back. */
+    fun closeLiveSync(keep: Boolean)
     fun setSubTimeScale(scale: Double)
     /** Positive plays the sound later than the picture. */
     fun setAudioDelay(delayMs: Long)
@@ -315,7 +319,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         HarborPopovers(state, prefs, actions)
         if (state.panel == Panel.SubStyle) SubStyleBar(state, prefs, actions)
         SubSyncBar(state, actions)
-        LiveSyncPrompt(state, actions)
+        LiveSyncPanel(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)
         EndScreen(state, actions)

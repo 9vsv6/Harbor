@@ -189,6 +189,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.observeProperty("height", MPVLib.MpvFormat.MPV_FORMAT_INT64)
         mpv.observeProperty("track-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
         mpv.observeProperty("chapter-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
+        mpv.observeProperty("sub-text", MPVLib.MpvFormat.MPV_FORMAT_STRING)
     }
 
     // ---- Surface ----
@@ -259,7 +260,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         reportPlaying()
     }
 
-    override fun eventProperty(property: String, value: String) {}
+    override fun eventProperty(property: String, value: String) {
+        if (property == "sub-text") keepShownLine(value)
+    }
 
     override fun event(eventId: Int) {
         when (eventId) {
@@ -302,6 +305,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
         cover.visibility = View.VISIBLE
+        seenLines.clear()
         awaitingStart = true
         loaded = false
         eof = false
@@ -355,29 +359,34 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun setSubSpeed(speed: Double) { subSpeed = speed; runCatching { mpv.setPropertyDouble("sub-speed", speed) } }
 
     /**
-     * mpv has no look-ahead for subtitle lines, but `sub-step` shifts sub-delay so a later line shows
-     * now: the delay it picks gives that line's start, and the line on screen gives its text. The old
-     * delay goes back once the text has been read.
+     * The lines of the selected subtitle seen so far, by start in subtitle time. mpv can't list a
+     * track's lines ahead of playback, so each line is kept as it shows (see the sub-text event).
      */
-    override fun nextSubtitleLine(afterMs: Long, result: (SubtitleFile.Cue?) -> Unit) {
-        val old = mpv.getPropertyDouble("sub-delay") ?: 0.0
-        val now = positionMs
-        var start: Long? = null
-        for (skip in 1..4) {
-            runCatching { mpv.command(arrayOf("sub-step", skip.toString())) }
-            val delay = mpv.getPropertyDouble("sub-delay") ?: break
-            if (delay == old) break
-            // Shown at file time * speed + delay; the step made that land on `now`.
-            val fileStart = ((now - delay * 1000) / subSpeed).toLong()
-            if (fileStart > afterMs) { start = fileStart; break }
-            mpv.setPropertyDouble("sub-delay", old)
+    private val seenLines = java.util.concurrent.ConcurrentSkipListMap<Long, SubtitleFile.Cue>()
+
+    override fun subtitleLines(): List<SubtitleFile.Cue> = seenLines.values.toList()
+
+    override val subtitleLinesAsPlayed get() = true
+
+    private fun keepShownLine(text: String) {
+        val line = text.trim()
+        if (line.isEmpty()) return
+        val delay = mpv.getPropertyDouble("sub-delay") ?: 0.0
+        // The line is showing now, so on the subtitle's clock it spans `subtitleNow`. Whether sub-start
+        // already has the delay in it or not, keep the reading that puts the line on screen now.
+        val subtitleNow = position - delay
+        val rawStart = mpv.getPropertyDouble("sub-start") ?: subtitleNow
+        val rawEnd = mpv.getPropertyDouble("sub-end") ?: (rawStart + 2)
+        val shift = listOf(0.0, delay).minBy { d ->
+            val s = rawStart - d
+            val e = rawEnd - d
+            if (subtitleNow >= s - 0.1 && subtitleNow < e + 0.1) 0.0 else minOf(kotlin.math.abs(s - subtitleNow), kotlin.math.abs(e - subtitleNow)) + 1
         }
-        if (start == null) { mpv.setPropertyDouble("sub-delay", old); result(null); return }
-        main.postDelayed({
-            val text = mpv.getPropertyString("sub-text")?.trim().orEmpty()
-            mpv.setPropertyDouble("sub-delay", old)
-            result(if (text.isEmpty()) null else SubtitleFile.Cue(start, start + 2_000, text))
-        }, 250)
+        val start = ((rawStart - shift) * 1000 / subSpeed).toLong()
+        val end = ((rawEnd - shift) * 1000 / subSpeed).toLong().coerceAtLeast(start + 1)
+        // The same line seen again (a seek back) keeps one entry.
+        if (seenLines.subMap(start - 300, start + 300).values.any { it.text == line }) return
+        seenLines[start] = SubtitleFile.Cue(start, end, line)
     }
 
     override val videoSize get() = if (width > 0 && height > 0) width.toInt() to height.toInt() else null
@@ -429,7 +438,10 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun selectAudio(key: String) = mpv.setPropertyString("aid", key.substringAfter(':'))
 
-    override fun selectText(key: String?) = mpv.setPropertyString("sid", key?.substringAfter(':') ?: "no")
+    override fun selectText(key: String?) {
+        seenLines.clear()
+        mpv.setPropertyString("sid", key?.substringAfter(':') ?: "no")
+    }
 
     override val drawsSubtitles = true
 

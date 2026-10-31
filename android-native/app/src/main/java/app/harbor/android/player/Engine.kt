@@ -79,11 +79,14 @@ interface Engine {
     fun cuesAt(positionMs: Long): List<UiCue>
 
     /**
-     * The next line of the selected embedded text subtitle starting after `afterMs` (subtitle time,
-     * before any delay), for the live sync guide. Null when the engine can't tell (image subtitles,
-     * nothing read yet). The answer may come a moment later (mpv has to show the line to read it).
+     * The lines of the selected embedded text subtitle the engine knows, by start, in subtitle time
+     * (before any delay), for the live sync list. Media3 knows everything read ahead; mpv can't look
+     * ahead, so it has the lines shown so far.
      */
-    fun nextSubtitleLine(afterMs: Long, result: (SubtitleFile.Cue?) -> Unit) = result(null)
+    fun subtitleLines(): List<SubtitleFile.Cue> = emptyList()
+
+    /** True when [subtitleLines] only grows as the video plays (mpv). */
+    val subtitleLinesAsPlayed: Boolean get() = false
 
     /** GLSL shaders (Anime4K); false when the engine has no shader support. */
     val supportsShaders: Boolean

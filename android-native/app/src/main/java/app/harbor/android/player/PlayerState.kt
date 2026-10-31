@@ -67,9 +67,9 @@ class PlayerState {
     var locked by mutableStateOf(false)
     var inPip by mutableStateOf(false)
     var panel by mutableStateOf<Panel?>(null)
-    /** Harbor's subtitle sync: the manual offset bar, the guided live-sync line, and a frame-rate fix. */
+    /** Harbor's subtitle sync: the manual offset bar, the live sync panel, and a frame-rate fix. */
     var syncBarOpen by mutableStateOf(false)
-    var liveSyncLine by mutableStateOf<String?>(null)
+    var liveSync by mutableStateOf<LiveSync?>(null)
     var subTimeScale by mutableStateOf(1.0)
     /** X-Ray's cast, crew and facts for what's playing; null until loaded. */
     var xray by mutableStateOf<app.harbor.android.data.TmdbDetails?>(null)

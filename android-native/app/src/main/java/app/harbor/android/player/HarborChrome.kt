@@ -1172,28 +1172,3 @@ private fun SyncChip(label: String, onClick: () -> Unit) {
     )
 }
 
-/** Harbor's guided live sync: the next line, and a button to tap the moment you hear it. */
-@Composable
-internal fun LiveSyncPrompt(state: PlayerState, actions: PlayerActions) {
-    val line = state.liveSyncLine ?: return
-    Box(Modifier.fillMaxWidth().padding(top = 18.dp, start = 24.dp, end = 24.dp), contentAlignment = Alignment.TopCenter) {
-        Column(
-            Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(14.dp)).background(Pop).border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)).padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("TAP WHEN YOU HEAR", color = Subtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
-            Text(line, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "Now",
-                    color = Color(0xFF121316),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Accent).clickable { actions.liveSyncNow() }.padding(horizontal = 34.dp, vertical = 11.dp),
-                )
-                Text("Cancel", color = Muted, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(50)).clickable { state.liveSyncLine = null }.padding(horizontal = 16.dp, vertical = 11.dp))
-            }
-        }
-    }
-}

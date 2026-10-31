@@ -297,6 +297,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 val parts = state.videoId.split(':')
                 parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 }?.let { repository.markAnimeWatched(parts[1], it) }
             }
+            refreshLiveSyncLines()
             // With Media3, Harbor draws the subtitles; mpv draws its own.
             if (!engine.drawsSubtitles) {
                 val subtitleTime = ((position - state.subDelayMs) * state.subTimeScale).toLong()
@@ -725,9 +726,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun setSubDelay(delayMs: Long) {
-        val clamped = delayMs.coerceIn(-30_000, 30_000)
-        state.subDelayMs = clamped
-        engine.setSubDelay(clamped)
+        val clamped = applySubDelay(delayMs)
         // Harbor's subtitle sync indicator: the offset on screen while nudging.
         if (state.settings.subSyncIndicator && clamped != 0L) {
             state.hint = "Subtitle sync  |  " + (if (clamped > 0) "+" else "") + "$clamped ms"
@@ -735,36 +734,103 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
-    private var liveSyncCue: SubtitleFile.Cue? = null
-
-    override fun startLiveSync() {
-        // The next line after where the subtitles currently are; you tap when you hear it.
-        val now = ((engine.positionMs - state.subDelayMs) * state.subTimeScale).toLong()
-        state.panel = null
-        val file = subtitleFile
-        if (file != null) return showLiveSyncLine(file.nextAfter(now + 1_500))
-        // Subtitles inside the video (any text format): ask the engine for its next line.
-        engine.nextSubtitleLine(now + 1_500) { showLiveSyncLine(it) }
+    private fun applySubDelay(delayMs: Long): Long {
+        val clamped = delayMs.coerceIn(-30_000, 30_000)
+        state.subDelayMs = clamped
+        engine.setSubDelay(clamped)
+        return clamped
     }
 
-    private fun showLiveSyncLine(cue: SubtitleFile.Cue?) {
-        if (cue == null) {
-            state.hint = "Live sync needs text subtitles turned on"
-            state.hintIcon = 0
-            return
+    // ---- Live sync: Harbor's panel of every line; tap the one you hear to align it ----
+
+    override fun startLiveSync() {
+        state.panel = null
+        val choice = state.subChoice
+        val file = subtitleFile
+        val session = when {
+            choice is SubChoice.Addon && file != null -> LiveSync(state.subDelayMs, state.subTimeScale, fromVideo = false).also { it.lines = file.lines }
+            choice is SubChoice.Embedded -> {
+                // Picture subtitles (PGS, VobSub) have no text to list.
+                val detail = state.embeddedSubs.firstOrNull { it.key == choice.key }?.detail.orEmpty()
+                if (detail.contains("image", ignoreCase = true)) {
+                    state.hint = "This subtitle is pictures, not text. Pick a text subtitle for live sync."
+                    state.hintIcon = 0
+                    return
+                }
+                LiveSync(state.subDelayMs, state.subTimeScale, fromVideo = true, asPlayed = engine.subtitleLinesAsPlayed)
+                    .also { it.lines = engine.subtitleLines() }
+            }
+            else -> {
+                state.hint = if (choice == SubChoice.Off) "Turn on subtitles first" else "Loading subtitle…"
+                state.hintIcon = 0
+                return
+            }
         }
-        liveSyncCue = cue
-        state.liveSyncLine = cue.text
+        state.liveSync = session
+    }
+
+    /** Lines from the video grow as the engine reads (Media3) or shows (mpv) them. */
+    private fun refreshLiveSyncLines() {
+        val session = state.liveSync ?: return
+        if (!session.fromVideo) return
+        val lines = engine.subtitleLines()
+        if (lines.size != session.lines.size) session.lines = lines
+    }
+
+    override fun liveSyncAlign(line: SubtitleFile.Cue) {
+        val session = state.liveSync ?: return
+        // The line is being heard now: one more point on the subtitle-to-video map.
+        session.points = (session.points.filter { it.lineMs != line.startMs } + SyncPoint(line.startMs, engine.positionMs))
+        applyLiveSync(session)
+    }
+
+    override fun liveSyncReset() {
+        val session = state.liveSync ?: return
+        session.points = emptyList()
+        applyLiveSync(session)
+    }
+
+    override fun liveSyncPlayFrom(line: SubtitleFile.Cue) {
+        engine.seekTo(((line.startMs / state.subTimeScale) + state.subDelayMs).toLong().coerceAtLeast(0))
         if (!state.playing) engine.play()
     }
 
-    override fun liveSyncNow() {
-        val cue = liveSyncCue ?: return
-        // The line was meant for now: shift subtitles so its start lands here.
-        val heardAt = engine.positionMs
-        setSubDelay(heardAt - (cue.startMs / state.subTimeScale).toLong())
-        liveSyncCue = null
-        state.liveSyncLine = null
+    override fun closeLiveSync(keep: Boolean) {
+        val session = state.liveSync ?: return
+        if (!keep) {
+            if (state.subTimeScale != session.baseScale) setSubTimeScale(session.baseScale)
+            applySubDelay(session.baseDelayMs)
+        }
+        state.liveSync = null
+    }
+
+    /**
+     * Harbor's text sync: one point is an offset; two far enough apart also fix drift (a frame-rate
+     * mismatch), as a subtitle speed. Points too close or too steep keep the latest as an offset.
+     */
+    private fun applyLiveSync(session: LiveSync) {
+        val points = session.points.sortedBy { it.lineMs }
+        var scale = session.baseScale
+        val delay: Double = when {
+            points.isEmpty() -> session.baseDelayMs.toDouble()
+            points.size == 1 -> points[0].heardAtMs - points[0].lineMs / scale
+            else -> {
+                val a = points.first()
+                val b = points.last()
+                val span = (b.lineMs - a.lineMs).toDouble()
+                // Video milliseconds per subtitle millisecond.
+                val rate = (b.heardAtMs - a.heardAtMs) / span
+                if (span < 3_000 || !rate.isFinite() || kotlin.math.abs(rate * session.baseScale - 1) > 0.05) {
+                    val latest = session.points.last()
+                    latest.heardAtMs - latest.lineMs / scale
+                } else {
+                    scale = 1 / rate
+                    a.heardAtMs - a.lineMs * rate
+                }
+            }
+        }
+        if (scale != state.subTimeScale) setSubTimeScale(scale)
+        applySubDelay(delay.toLong())
     }
 
     override fun setSubTimeScale(scale: Double) {
