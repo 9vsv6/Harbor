@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAddCheck
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
@@ -88,6 +89,7 @@ fun HeroActions(
 ) {
     val myList by repository.myList.collectAsState()
     val shelves by repository.shelves.collectAsState()
+    val queue by app.harbor.android.data.PlayQueue.items.collectAsState()
     val listed = myList.any { it.id == meta.id }
     val favourite = shelves.favorites.any { it.id == meta.id }
     val watched = meta.id in shelves.watched
@@ -127,6 +129,11 @@ fun HeroActions(
             repository.toggleFavorite(meta)
         }
         RoundButton(painterResource(R.drawable.ui_list), "Add to list", false) { listOpen = true }
+        // Harbor's play queue: a movie, or a series from your next episode.
+        val queued = queue.any { it.meta.id == meta.id && it.season == null }
+        RoundButton(rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), if (queued) "In your queue" else "Add to queue", queued) {
+            app.harbor.android.data.PlayQueue.toggle(meta)
+        }
         if (!isSeries) {
             RoundButton(painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched), if (watched) "Marked watched" else "Mark watched", watched) {
                 repository.toggleWatched(meta)

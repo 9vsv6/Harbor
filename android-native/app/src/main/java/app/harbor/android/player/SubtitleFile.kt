@@ -80,8 +80,9 @@ class SubtitleFile(private val cues: List<Cue>) {
             return ((h.ifEmpty { "0" }.toLong() * 60 + min.toLong()) * 60 + s.toLong()) * 1000 + ms
         }
 
-        /** SRT and WebVTT: a timing line, then text lines until a blank line. */
+        /** SRT and WebVTT: a timing line, then text lines until a blank line. ASS and SSA by their events. */
         fun parse(text: String): SubtitleFile {
+            if (text.contains("[Script Info]", ignoreCase = true) || text.contains("\nDialogue:")) return parseAss(text)
             val cues = ArrayList<Cue>()
             val lines = text.replace("\r\n", "\n").replace('\r', '\n').split('\n')
             var i = 0
@@ -103,6 +104,39 @@ class SubtitleFile(private val cues: List<Cue>) {
                 if (start != null && end != null && end > start && body.isNotBlank()) {
                     cues.add(Cue(start, end, body.toString().trim()))
                 }
+            }
+            cues.sortBy { it.startMs }
+            return SubtitleFile(cues)
+        }
+
+        private val assOverride = Regex("""\{[^}]*\}""")
+        private val assDrawing = Regex("""\\p[1-9]""")
+
+        /**
+         * ASS/SSA: each "Dialogue:" event, its fields in the [Events] Format line's order (Text last,
+         * so commas in it stay). Override tags go and \N becomes a line break; vector drawings (\p1)
+         * are skipped, being shapes rather than words.
+         */
+        private fun parseAss(text: String): SubtitleFile {
+            val cues = ArrayList<Cue>()
+            var format = listOf("layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text")
+            for (raw in text.replace("\r\n", "\n").replace('\r', '\n').split('\n')) {
+                val line = raw.trim()
+                if (line.startsWith("Format:", ignoreCase = true)) {
+                    val fields = line.substringAfter(':').split(',').map { it.trim().lowercase() }
+                    // [V4+ Styles] has a Format line too; only the events' one ends in Text.
+                    if (fields.lastOrNull() == "text") format = fields
+                    continue
+                }
+                if (!line.startsWith("Dialogue:", ignoreCase = true)) continue
+                val parts = line.substringAfter(':').split(',', limit = format.size)
+                if (parts.size < format.size) continue
+                val body = parts[format.size - 1]
+                if (assDrawing.containsMatchIn(body)) continue
+                val start = millis(parts[format.indexOf("start").coerceAtLeast(0)].trim()) ?: continue
+                val end = millis(parts[format.indexOf("end").coerceAtLeast(0)].trim()) ?: continue
+                val words = body.replace(assOverride, "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ").trim()
+                if (end > start && words.isNotBlank()) cues.add(Cue(start, end, words))
             }
             cues.sortBy { it.startMs }
             return SubtitleFile(cues)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAddCheck
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
@@ -263,6 +265,8 @@ private fun EpisodePreviewFor(query: EpisodeQuery, repository: Repository, meta:
             scope.launch { downloadSeason(context, repository, meta, listOf(v)) }
         },
         onWatched = { repository.setWatched(listOf(v.id), !watched); query.preview = null },
+        queued = app.harbor.android.data.PlayQueue.contains(meta, v.season, v.episode),
+        onQueue = { app.harbor.android.data.PlayQueue.toggle(meta, v); query.preview = null },
     )
 }
 
@@ -481,6 +485,8 @@ private fun EpisodePreview(
     onPlay: () -> Unit,
     onDownload: () -> Unit,
     onWatched: () -> Unit,
+    queued: Boolean = false,
+    onQueue: (() -> Unit)? = null,
 ) {
     val display = HarborDisplay.settings
     val upcoming = app.harbor.android.data.ReleaseCountdowns.upcoming(v.released)
@@ -530,6 +536,7 @@ private fun EpisodePreview(
                     }
                     PreviewAction(Icons.Rounded.Download, "Download episode", onDownload)
                     PreviewAction(Icons.Rounded.DoneAll, if (watched) "Mark as unwatched" else "Mark as watched", onWatched, active = watched)
+                    onQueue?.let { PreviewAction(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd, if (queued) "In your queue" else "Add to queue", it, active = queued) }
                 }
             }
         }

@@ -109,8 +109,8 @@ android {
         applicationId = "app.harbor.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "1.0.8"
+        versionCode = 19
+        versionName = "1.0.9"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }

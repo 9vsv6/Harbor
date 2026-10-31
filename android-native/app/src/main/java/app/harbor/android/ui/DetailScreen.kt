@@ -114,7 +114,16 @@ fun DetailScreen(
     var meta by remember { mutableStateOf(MetaPreview.get(id)) }
     var full by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
-    var details by remember { mutableStateOf<TmdbDetails?>(null) }
+    var details by remember {
+        mutableStateOf(id.substringBefore(':').takeIf { it.startsWith("tt") }?.let { Tmdb.cachedDetails(it, type) })
+    }
+    // In another language than English, the title, logo, genres and story wait for TMDB's (at most a
+    // few seconds) instead of showing the addon's English ones and swapping them a moment later.
+    var detailsSettled by remember { mutableStateOf(details != null) }
+    LaunchedEffect(id) {
+        kotlinx.coroutines.delay(2_500)
+        detailsSettled = true
+    }
     var awards by remember { mutableStateOf<List<AwardEntry>>(emptyList()) }
     var scores by remember { mutableStateOf<List<Score>>(emptyList()) }
     val omdbKey by repository.omdbKey.collectAsState()
@@ -241,7 +250,11 @@ fun DetailScreen(
         val key = tmdbKey
         details = (if (key != null) runCatching { Tmdb.details(key, imdb, current.type) }.getOrNull() else null)
             ?: if (HarborDisplay.settings.keylessDetails) runCatching { Keyless.details(current) }.getOrNull() else null
+        detailsSettled = true
     }
+    // Only TMDB (with your key) translates; the keyless sources are English, so nothing would swap.
+    val holdText = !detailsSettled && tmdbKey != null && Tmdb.localizes &&
+        id.substringBefore(':').startsWith("tt")
 
     Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
         val current = meta
@@ -263,6 +276,7 @@ fun DetailScreen(
                 network,
                 anime,
                 relatedKitsu,
+                holdText,
             )
             failed -> EmptyState("Couldn't load this title", "None of your addons has details for it.")
             else -> Loading(Modifier.padding(top = 160.dp))
@@ -296,6 +310,8 @@ private fun DetailBody(
     network: String? = null,
     anime: AnimeExtra? = null,
     relatedKitsu: Map<Int, Int> = emptyMap(),
+    /** The title, logo, genres and story are waiting for your language (see holdText). */
+    holdText: Boolean = false,
 ) {
     val videos = meta.videos.orEmpty()
     val isSeries = meta.type != "movie" && videos.isNotEmpty()
@@ -382,8 +398,8 @@ private fun DetailBody(
         val side = if (wide) 48.dp else 20.dp
         val heroHeight = if (wide) (maxHeight * 0.78f).coerceAtMost(680.dp) else (maxHeight * 0.68f).coerceIn(420.dp, 620.dp)
         LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 110.dp), verticalArrangement = Arrangement.spacedBy(30.dp)) {
-            item(key = "hero") { Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play) { onStreams(meta.id, meta.name) } }
-            (details?.overview ?: meta.description)?.let { synopsis ->
+            item(key = "hero") { Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play, holdText) { onStreams(meta.id, meta.name) } }
+            (details?.overview ?: meta.description)?.takeIf { !holdText }?.let { synopsis ->
                 item(key = "synopsis") { Synopsis(synopsis, details?.tagline, side) }
             }
             anime?.nextAiring?.let { (at, ep) -> item(key = "airing") { AnimeAiringBanner(at, ep, side) } }
@@ -508,6 +524,7 @@ private fun Hero(
     isSeries: Boolean,
     next: Video?,
     play: () -> Unit,
+    holdText: Boolean,
     /** Opens the sources, whose cards download (Harbor's download button on films). */
     download: () -> Unit,
 ) {
@@ -529,7 +546,9 @@ private fun Hero(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             val logo = details?.logo ?: meta.logoUrl
-            if (logo != null) {
+            // Waiting for your language: the title's space, empty, rather than the English one for a moment.
+            if (holdText) Box(Modifier.height(if (wide) 120.dp else 92.dp))
+            else if (logo != null) {
                 var failed by remember(logo) { mutableStateOf(false) }
                 if (!failed) {
                     AsyncImage(
@@ -562,7 +581,7 @@ private fun Hero(
                 ) }
                 if (isSeries) meta.videos.orEmpty().mapNotNull { it.season }.filter { it > 0 }.distinct().size.takeIf { it > 0 }?.let { Fact(if (it == 1) "1 season" else "$it seasons") }
                 else (details?.runtimeMinutes?.let { "$it min" } ?: meta.runtime)?.let { Fact(it) }
-                (details?.genres?.takeIf { it.isNotEmpty() } ?: meta.genres.orEmpty()).take(3).forEach { Fact(it) }
+                if (!holdText) (details?.genres?.takeIf { it.isNotEmpty() } ?: meta.genres.orEmpty()).take(3).forEach { Fact(it) }
             }
 
             AccoladePills(meta.id.substringBefore(':').takeIf { it.startsWith("tt") })

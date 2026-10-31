@@ -304,8 +304,29 @@ object Tmdb {
         return get(key, "$path/external_ids").string("imdb_id")?.takeIf { it.startsWith("tt") }
     }
 
+    /**
+     * Whether TMDB's details come in a language other than English (story, title or logo), so the
+     * addon's English text would be swapped out moments after it shows.
+     */
+    val localizes: Boolean get() = base(descLang) != "en" || titleLang?.let { base(it) != "en" } == true || posterBase != "en"
+
+    /** Details already fetched this session, per title and languages: a page opened again shows them at once. */
+    private val detailsCache = object : LinkedHashMap<String, TmdbDetails>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TmdbDetails>?) = size > 40
+    }
+
+    private fun detailsKey(imdbId: String, type: String) = "$imdbId|$type|$descLang|$titleLang|$posterLang|$region"
+
+    fun cachedDetails(imdbId: String, type: String): TmdbDetails? = synchronized(detailsCache) { detailsCache[detailsKey(imdbId, type)] }
+
     /** Everything Harbor's detail page shows from TMDB, for an IMDb title. */
     suspend fun details(key: String, imdbId: String, type: String): TmdbDetails? {
+        cachedDetails(imdbId, type)?.let { return it }
+        val cacheKey = detailsKey(imdbId, type)
+        return fetchDetails(key, imdbId, type)?.also { synchronized(detailsCache) { detailsCache[cacheKey] = it } }
+    }
+
+    private suspend fun fetchDetails(key: String, imdbId: String, type: String): TmdbDetails? {
         val found = get(key, "/find/$imdbId", mapOf("external_source" to "imdb_id"))
         val (kind, result) = if (type == "movie") {
             "movie" to (found["movie_results"] as? JsonArray)?.firstOrNull()

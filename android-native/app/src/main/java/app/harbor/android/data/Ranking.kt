@@ -31,6 +31,13 @@ object Ranking {
     )
     private val sizePattern = Regex("""(\d+(?:[.,]\d+)?)\s*(TB|GB|MB)\b""", RegexOption.IGNORE_CASE)
 
+    // ⚡ ✅ / ⬇ ⏳ ⌛ ⏬ 🔽 ☁, as in Harbor PC (escapes, so the source stays plain ASCII).
+    private val cachedMarker = Regex("[⚡✅]")
+    private val uncachedMarker = Regex(
+        """\b(?:rd|ad|pm|dl|tb|oc|ed)\s*download\b|\[(?:rd|ad|pm|tb|dl|ed) download]|\buncached\b|\bnot[\s_-]?cached\b|[⬇⏳⌛⏬☁]|🔽""",
+        RegexOption.IGNORE_CASE,
+    )
+
     fun traits(stream: Stream): Traits {
         val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename)
             .joinToString(" ")
@@ -46,9 +53,11 @@ object Ranking {
             bluray = has("""\b(blu-?ray|bdrip|brrip)\b"""),
             web = has("""\bweb[- .]?(dl|rip)?\b"""),
             cam = has("""\b(cam|camrip|hdcam|ts|telesync|hdts)\b"""),
-            // Torrentio-style markers: [RD+] / ⚡ cached, [RD download] / ⏳ not.
-            cached = text.contains("⚡") || has("""\[(rd|ad|pm|tb|dl|ed)\+]""") || has("""\bcached\b"""),
-            uncached = text.contains("⏳") || has("""\[(rd|ad|pm|tb|dl|ed) download]""") || has("""\buncached\b"""),
+            // Harbor PC's markers (streams/cached.ts): [RD+] / ⚡ / ✅ cached; [RD download] / ⏳ ⌛ ⬇ ⏬ 🔽 ☁
+            // / "uncached" / "not cached" not. A stream saying both is not cached.
+            uncached = uncachedMarker.containsMatchIn(text),
+            cached = !uncachedMarker.containsMatchIn(text) &&
+                (cachedMarker.containsMatchIn(text) || has("""\[(realdebrid|real-debrid|torbox|alldebrid|all-debrid|premiumize|debridlink|debrid-link|easydebrid|offcloud|rd|ad|pm|dl|tb|trb|oc|ed|putio)\+""") || has("""\bcached\b""")),
             sizeBytes = stream.behaviorHints?.videoSize ?: parseSize(text),
         )
     }

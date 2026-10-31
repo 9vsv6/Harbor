@@ -242,6 +242,8 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
     var sectionName by rememberSaveable { mutableStateOf(Section.Profiles.name) }
     var query by rememberSaveable { mutableStateOf("") }
     var target by remember { mutableStateOf<Section?>(null) }
+    // Tablets: the open group's sub-pages folded away (its header tapped again); the page stays open.
+    var railFolded by rememberSaveable { mutableStateOf(false) }
     val accountsShared by repository.accounts.shared.collectAsState()
     shownProvider = accountsShared.provider
 
@@ -271,11 +273,11 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
             Row(Modifier.fillMaxSize()) {
                 Column(
                     Modifier.width(340.dp).fillMaxHeight().background(HarborColors.Surface)
-                        .verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 32.dp),
+                        .verticalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 16.dp),
                 ) {
                     // Harbor's "← Back" out of Settings; the app's own rail is hidden here.
                     Row(
-                        Modifier.padding(bottom = 14.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onExit).padding(horizontal = 10.dp, vertical = 8.dp),
+                        Modifier.padding(bottom = 8.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onExit).padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -284,7 +286,10 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
                     }
                     SettingsSearchField(query) { query = it }
                     if (query.isNotBlank()) SearchResults(query) { open(groupOf(it), it) }
-                    else SettingsRail(repository, onOpenAddons, selected = group, selectedSection = section, onOpen = { g, s -> open(g, s) })
+                    else SettingsRail(repository, onOpenAddons, selected = group, selectedSection = section, folded = railFolded, compact = true, onOpen = { g, s ->
+                        // The open group's header folds or unfolds its list; anything else opens.
+                        if (s == null && g == group) railFolded = !railFolded else { railFolded = false; open(g, s) }
+                    })
                 }
                 // Harbor's page: the group's title, then the open sub-page, in a readable column.
                 Column(
@@ -324,16 +329,16 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
  * open group lists its sub-pages with their icons, as Harbor's desktop sidebar does.
  */
 @Composable
-private fun SettingsRail(repository: Repository, onOpenAddons: () -> Unit, selected: Group?, selectedSection: Section?, onOpen: (Group, Section?) -> Unit) {
+private fun SettingsRail(repository: Repository, onOpenAddons: () -> Unit, selected: Group?, selectedSection: Section?, folded: Boolean = false, compact: Boolean = false, onOpen: (Group, Section?) -> Unit) {
     val profile by repository.activeProfile.collectAsState()
     val account by repository.account.collectAsState()
     Column {
         Row(
-            Modifier.fillMaxWidth().padding(start = 2.dp, top = 14.dp, bottom = 14.dp),
+            Modifier.fillMaxWidth().padding(start = 2.dp, top = if (compact) 8.dp else 14.dp, bottom = if (compact) 8.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ProfileAvatar(profile, 58.dp)
+            ProfileAvatar(profile, if (compact) 44.dp else 58.dp)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(profile?.name ?: "Me", color = HarborColors.Ink, fontSize = 18.sp, fontWeight = FontWeight.Medium)
                 if (account != null) {
@@ -344,13 +349,13 @@ private fun SettingsRail(repository: Repository, onOpenAddons: () -> Unit, selec
                 }
             }
         }
-        NavRow(Icons.Outlined.Group, "Switch profile", chevron = false) { repository.showProfilePicker() }
-        NavRow(Icons.Outlined.Inventory2, "Addons", chevron = false, onClick = onOpenAddons)
+        NavRow(Icons.Outlined.Group, "Switch profile", chevron = false, compact = compact) { repository.showProfilePicker() }
+        NavRow(Icons.Outlined.Inventory2, "Addons", chevron = false, compact = compact, onClick = onOpenAddons)
         Group.entries.forEach { entry ->
             val on = entry == selected
-            NavRow(painterResource(entry.icon), entry.label, chevron = true, selected = on && selectedSection == null, expanded = on) { onOpen(entry, null) }
+            NavRow(painterResource(entry.icon), entry.label, chevron = true, selected = on && (selectedSection == null || folded), expanded = on && !folded, compact = compact) { onOpen(entry, null) }
             // Harbor's sub-page list: icon and label, the open one highlighted.
-            if (on && selectedSection != null) {
+            if (on && selectedSection != null && !folded) {
                 Column(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(HarborColors.Elevated.copy(alpha = 0.5f)).padding(6.dp),
                 ) {
@@ -1093,6 +1098,7 @@ private fun SubtitlesSection(repository: Repository, settings: AppSettings, set:
             listOf(
                 Triple("no", "Keep original", "Styled (ASS) subs keep their own font, colour and size. Truest to the release, but the size can vary a lot between files."),
                 Triple("scale", "Normalize embedded subtitle size", "Keep their style, at your size."),
+                Triple("font", "Change font only", "Keep their colours, sizes and sign placement; only the font becomes yours."),
                 Triple("force", "Use my style", "Draw styled subtitles in your style, like any other."),
             ),
             settings.assOverride,

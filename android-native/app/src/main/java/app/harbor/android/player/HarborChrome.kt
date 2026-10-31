@@ -834,7 +834,18 @@ private fun iso2(lang: String): String {
     return if (clean.length == 3) ISO3_TO_2[clean] ?: clean else clean
 }
 
-private fun subtitleTitle(sub: Subtitle): String = sub.id?.takeIf { it.isNotBlank() && it.length < 70 } ?: languageName(sub.lang)
+/**
+ * A release name when the addon gives one (dots as spaces, as Harbor PC names tracks); addons that give
+ * a database number or hash as the id get the language instead.
+ */
+private val hashId = Regex("""^[0-9a-fA-F-]{8,}$""")
+private val numberedId = Regex("""^[a-z]+[-_:]?\d+$""", RegexOption.IGNORE_CASE)
+
+private fun subtitleTitle(sub: Subtitle): String {
+    val id = sub.id?.trim().orEmpty()
+    val named = id.length in 3..69 && id.any { it.isLetter() } && !hashId.matches(id) && !numberedId.matches(id)
+    return if (named) id.replace('.', ' ').replace('_', ' ') else languageName(sub.lang)
+}
 
 private fun subtitleSource(sub: Subtitle): String? = when {
     sub.url.contains("opensubtitles", true) -> "OpenSubtitles"

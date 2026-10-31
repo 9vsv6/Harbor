@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -125,20 +126,37 @@ object AppUpdate {
         return false
     }
 
-    /** Downloads the release's APK and opens Android's install prompt. */
-    suspend fun downloadAndInstall(context: Context, release: Release) {
+    /** The app's own scope: closing the pop-up or leaving the screen doesn't stop a download halfway. */
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main)
+
+    /** Downloads the release's APK and opens Android's install prompt; a second press while it runs does nothing. */
+    fun downloadAndInstall(context: Context, release: Release) {
+        if (status is Status.Downloading) return
         status = Status.Downloading(release, 0f)
-        runCatching {
-            val file = download(context, release)
-            install(context, file)
-            status = Status.Available(release)
-        }.onFailure {
-            if (it is kotlinx.coroutines.CancellationException) {
+        val app = context.applicationContext
+        scope.launch {
+            runCatching {
+                val file = download(app, release)
+                verify(app, file, release)
+                install(app, file)
                 status = Status.Available(release)
-                throw it
+            }.onFailure {
+                Log.w(TAG, "Update failed", it)
+                status = Status.Failed(it.message?.takeIf { m -> m.startsWith("This download") } ?: "The update didn't download. Try again.")
             }
-            Log.w(TAG, "Update failed", it)
-            status = Status.Failed("The update didn't download. Try again.")
+        }
+    }
+
+    /** Only a newer Harbor goes to the installer, whatever the link pointed at. */
+    @Suppress("DEPRECATION")
+    private fun verify(context: Context, apk: File, release: Release) {
+        val info = context.packageManager.getPackageArchiveInfo(apk.path, 0)
+        val installed = context.packageManager.getPackageInfo(context.packageName, 0)
+        val newer = info != null && info.packageName == context.packageName &&
+            (if (Build.VERSION.SDK_INT >= 28) info.longVersionCode > installed.longVersionCode else info.versionCode > installed.versionCode)
+        if (!newer) {
+            apk.delete()
+            throw java.io.IOException("This download isn't a newer Harbor (${release.version}).")
         }
     }
 
@@ -182,16 +200,22 @@ object AppUpdate {
             setSize(apk.length())
         }
         val id = installer.createSession(params)
-        installer.openSession(id).use { session ->
-            apk.inputStream().use { input ->
-                session.openWrite("harbor.apk", 0, apk.length()).use { output ->
-                    input.copyTo(output)
-                    session.fsync(output)
+        try {
+            installer.openSession(id).use { session ->
+                apk.inputStream().use { input ->
+                    session.openWrite("harbor.apk", 0, apk.length()).use { output ->
+                        input.copyTo(output)
+                        session.fsync(output)
+                    }
                 }
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+                val callback = PendingIntent.getBroadcast(context, id, Intent(context, InstallResultReceiver::class.java), flags)
+                session.commit(callback.intentSender)
             }
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val callback = PendingIntent.getBroadcast(context, id, Intent(context, InstallResultReceiver::class.java), flags)
-            session.commit(callback.intentSender)
+        } catch (e: Exception) {
+            // A half-written session left open can block the next install on some TV boxes.
+            runCatching { installer.abandonSession(id) }
+            throw e
         }
     }
 

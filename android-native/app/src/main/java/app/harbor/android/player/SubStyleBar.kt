@@ -65,6 +65,9 @@ import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private val BarBg = Color(0xFF1C1E22)
+
+/** The styled-subtitle mode before "Override embedded styles" was switched on, to go back to. */
+@Volatile private var assLookBefore = "no"
 private val GroupBg = Color(0xFF2A2C31)
 private val Edge = Color(0x24FFFFFF)
 private val Ink = Color(0xFFF2F2F3)
@@ -406,7 +409,8 @@ private fun Advanced(
                         Text("Force your look onto subtitles that carry their own styling.", color = InkSubtle, fontSize = 12.sp, lineHeight = 16.sp)
                     }
                     Switch(
-                        s.assOverride == "force", { on -> onSettings { it.copy(assOverride = if (on) "force" else "scale") } },
+                        // As on the PC: off goes back to the mode you had (Keep, size or font only), not a fixed one.
+                        s.assOverride == "force", { on -> onSettings { if (on) { assLookBefore = it.assOverride; it.copy(assOverride = "force") } else it.copy(assOverride = assLookBefore) } },
                         colors = SwitchDefaults.colors(checkedTrackColor = HarborColors.Accent),
                     )
                 }

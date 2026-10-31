@@ -131,6 +131,8 @@ fun StreamsScreen(
     videoId: String,
     title: String,
     onBack: () -> Unit,
+    /** Start the best source without asking (the play queue), whatever the auto-play setting says. */
+    forceAutoPlay: Boolean = false,
     onPlay: (Ready) -> Unit,
 ) {
     val addons by repository.addons.collectAsState()
@@ -180,7 +182,8 @@ fun StreamsScreen(
         val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it }, onPartial = { ranked = it })
         loading = false
         ranked = list
-        if (autoPlay && !autoPlayed) {
+        // Nothing that can play here: the empty list says so, without a "wouldn't open" error on top.
+        if ((autoPlay || forceAutoPlay) && !autoPlayed && list.any { it.stream.playable(debrid != null) }) {
             autoPlayed = true
             status = "Playing the best source…"
             job = scope.launch {

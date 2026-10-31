@@ -17,7 +17,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -27,7 +26,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.harbor.android.data.AppUpdate
-import kotlinx.coroutines.launch
 
 /**
  * Checks GitHub for a newer Harbor once per launch and, when there is one, offers it: its notes,
@@ -50,7 +48,6 @@ fun UpdatePrompt() {
 @Composable
 fun UpdateDialog(release: AppUpdate.Release, downloading: AppUpdate.Status.Downloading?, onLater: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
     Dialog(onDismissRequest = { if (downloading == null) onLater() }) {
         Column(
@@ -81,7 +78,7 @@ fun UpdateDialog(release: AppUpdate.Release, downloading: AppUpdate.Status.Downl
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     HButton(onClick = {
-                        if (AppUpdate.canInstall(context)) scope.launch { AppUpdate.downloadAndInstall(context, release) }
+                        if (AppUpdate.canInstall(context)) AppUpdate.downloadAndInstall(context, release)
                         else android.widget.Toast.makeText(context, "Allow Harbor to install apps, then press Update again.", android.widget.Toast.LENGTH_LONG).show()
                     }, modifier = Modifier.focusRequester(focus)) { Text("Update") }
                     HGhostButton(onClick = onLater) { Text("Later") }

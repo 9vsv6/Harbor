@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -146,6 +148,39 @@ private fun HarborRoot(repository: Repository) {
     }
 
     fun open(meta: Meta) = resolve(meta) { nav.openDetail(it) }
+
+    /** Plays a queue item: a movie, the episode you queued, or a series' next unwatched episode. */
+    fun startQueueItem(item: app.harbor.android.data.PlayQueue.Item) {
+        scope.launch {
+            val meta = item.meta
+            if (meta.type == "movie") {
+                app.harbor.android.data.PlayQueue.markPlaying(item)
+                nav.openStreams(meta.type, meta.id, meta.id, meta.name, item.id)
+                return@launch
+            }
+            val videos = if (item.videoId != null) emptyList()
+            else runCatching { AddonClient.meta(repository.metaAddons(), meta.type, meta.id)?.videos }.getOrNull().orEmpty()
+            val progress = repository.continueWatching.value.firstOrNull { it.meta.id == meta.id }?.videoId
+            val video = app.harbor.android.data.PlayQueue.episodeFor(item, videos, progress, repository.shelves.value.watched)
+            if (video == null) {
+                Toast.makeText(context, "Nothing left to watch in ${meta.name}", Toast.LENGTH_SHORT).show()
+                // Skip it and carry on with the rest of the queue.
+                app.harbor.android.data.PlayQueue.after(item.id)?.let { app.harbor.android.data.PlayQueue.pendingStart.value = it }
+                return@launch
+            }
+            app.harbor.android.data.PlayQueue.markPlaying(item)
+            val code = if (video.season != null && video.episode != null) " · S${video.season} · E${video.episode}" else ""
+            nav.openStreams(meta.type, meta.id, video.id, meta.name + code, item.id)
+        }
+    }
+
+    // The player finished a queued video: the next item starts.
+    val queueNext by app.harbor.android.data.PlayQueue.pendingStart.collectAsState()
+    LaunchedEffect(queueNext) {
+        val item = queueNext ?: return@LaunchedEffect
+        app.harbor.android.data.PlayQueue.pendingStart.value = null
+        startQueueItem(item)
+    }
 
     // A stremio:// install link opens the Addons page, which shows the install sheet.
     val pendingInstall by repository.pendingInstall.collectAsState()
@@ -318,12 +353,13 @@ private fun HarborRoot(repository: Repository) {
                     )
                 }
                 composable(
-                    "streams/{type}/{metaId}/{videoId}?title={title}",
+                    "streams/{type}/{metaId}/{videoId}?title={title}&queue={queue}",
                     arguments = listOf(
                         navArgument("type") { type = NavType.StringType },
                         navArgument("metaId") { type = NavType.StringType },
                         navArgument("videoId") { type = NavType.StringType },
                         navArgument("title") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("queue") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { back ->
                     val args = back.arguments
@@ -331,8 +367,10 @@ private fun HarborRoot(repository: Repository) {
                     val metaId = args?.getString("metaId").orEmpty()
                     val videoId = args?.getString("videoId").orEmpty()
                     val title = args?.getString("title").orEmpty()
-                    StreamsScreen(repository, type, metaId, videoId, title, onBack = { nav.popBackStack() }) { ready ->
-                        context.startActivity(PlayerActivity.intent(context, ready, type, metaId, videoId, title))
+                    // Played from the queue: the best source starts on its own, and the player knows which item it is.
+                    val queueItem = args?.getString("queue").orEmpty().ifEmpty { null }
+                    StreamsScreen(repository, type, metaId, videoId, title, onBack = { nav.popBackStack() }, forceAutoPlay = queueItem != null) { ready ->
+                        context.startActivity(PlayerActivity.intent(context, ready, type, metaId, videoId, title).apply { queueItem?.let { putExtra(PlayerActivity.EXTRA_QUEUE_ITEM, it) } })
                     }
                 }
             }
@@ -343,6 +381,14 @@ private fun HarborRoot(repository: Repository) {
             if (wide && route != Tab.Profile.route && route != Tab.Search.route && route?.startsWith("streams") != true && !gridPage) {
                 app.harbor.android.ui.TopSearchBar(Modifier.align(Alignment.TopCenter)) { searchOpen = true }
             }
+            // Harbor's queue button (PC queue-basket): on Home, title pages and My Stuff while something is queued.
+            val queuePage = route == Tab.Home.route || route == Tab.MyStuff.route || route?.startsWith("detail") == true
+            if (queuePage) app.harbor.android.ui.QueueButton(
+                Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = if (showBar && !wide) 92.dp else 22.dp),
+                onPlay = { resume -> app.harbor.android.data.PlayQueue.startItem(resume)?.let(::startQueueItem) },
+                onPlayItem = ::startQueueItem,
+                onOpen = { open(it) },
+            )
             if (searchOpen) {
                 fun view(v: BrowseView) = { browseView = v; nav.selectTab(Tab.Home) }
                 fun page(route: String) = { nav.navigate(route) { popUpTo(Tab.Home.route); launchSingleTop = true } }
@@ -427,8 +473,8 @@ private fun NavHostController.selectTab(tab: Tab) = navigate(tab.route) {
 
 private fun NavHostController.openDetail(meta: Meta) = app.harbor.android.ui.MetaPreview.put(meta).let { navigate("detail/${enc(meta.type)}/${enc(meta.id)}") }
 
-private fun NavHostController.openStreams(type: String, metaId: String, videoId: String, title: String) =
-    navigate("streams/${enc(type)}/${enc(metaId)}/${enc(videoId)}?title=${enc(title)}")
+private fun NavHostController.openStreams(type: String, metaId: String, videoId: String, title: String, queueItem: String? = null) =
+    navigate("streams/${enc(type)}/${enc(metaId)}/${enc(videoId)}?title=${enc(title)}&queue=${enc(queueItem.orEmpty())}")
 
 private fun NavHostController.openCatalog(addonId: String, type: String, catalogId: String, genre: String?, title: String) =
     navigate("catalog/${enc(addonId)}/${enc(type)}/${enc(catalogId)}?genre=${enc(genre.orEmpty())}&title=${enc(title)}")
@@ -441,9 +487,10 @@ private fun SideRail(route: String?, view: BrowseView, onSelect: (Tab) -> Unit, 
         Modifier.width(88.dp).fillMaxSize().background(Color(0xFF0E0F11)).statusBarsPadding().navigationBarsPadding().padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // The sections scroll if a screen is short; the profile always stays at the foot.
+        // Every section shows at once: on a short screen the icons share the height (at most 56 dp each)
+        // instead of scrolling; the profile always stays at the foot.
         androidx.compose.foundation.layout.Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            Modifier.weight(1f),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -484,10 +531,11 @@ private fun SideRail(route: String?, view: BrowseView, onSelect: (Tab) -> Unit, 
 }
 
 @Composable
-private fun RailIcon(glyph: Int, label: String, on: Boolean, onClick: () -> Unit) {
+private fun androidx.compose.foundation.layout.ColumnScope.RailIcon(glyph: Int, label: String, on: Boolean, onClick: () -> Unit) {
     // Harbor's rail: the glyph alone, accent when active, no pill or label.
     Box(
-        Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        Modifier.weight(1f, fill = false).sizeIn(maxWidth = 56.dp, maxHeight = 56.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
+            .clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(androidx.compose.ui.res.painterResource(glyph), label, tint = if (on) HarborColors.Accent else HarborColors.Ink.copy(alpha = 0.82f), modifier = Modifier.size(24.dp))

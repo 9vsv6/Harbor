@@ -125,10 +125,14 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             opt("tls-verify", "yes")
             caBundle(context)?.let { opt("tls-ca-file", it.absolutePath) }
             opt("cache", "yes")
+            // Harbor PC keeps playback buffers in RAM, sized to the device's memory: TV boxes with
+            // 1–2 GB get the small buffer unless you chose otherwise.
+            val memory = android.app.ActivityManager.MemoryInfo().also { context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(it) }
+            val lowMemory = memory.totalMem in 1 until 2_500L * 1024 * 1024
             val bufferMb = when (s.bufferSize) {
                 "small" -> 32
-                "large" -> 160
-                else -> 64
+                "large" -> if (lowMemory) 96 else 160
+                else -> if (lowMemory) 32 else 64
             }
             opt("demuxer-max-bytes", "${bufferMb * 1024 * 1024}")
             opt("demuxer-max-back-bytes", "${bufferMb / 2 * 1024 * 1024}")
@@ -138,7 +142,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             opt("save-position-on-quit", "no")
             opt("alang", (setup.audioLanguages + "eng" + "en").distinct().joinToString(","))
             if (setup.subtitleLanguages.isEmpty()) opt("sid", "no") else opt("slang", setup.subtitleLanguages.joinToString(","))
-            opt("sub-ass-override", s.assOverride)
+            opt("sub-ass-override", if (s.assOverride == "font") "yes" else s.assOverride)
             // Fonts you uploaded, and Harbor's Arabic face (see rtlFont), for subtitles drawn by libass.
             opt("sub-fonts-dir", subtitleFontsDir(context).absolutePath)
             if (s.hideSdh) opt("sub-filter-sdh", "yes")
@@ -314,6 +318,26 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             mpv.setPropertyString("sub-font", if (use) ARABIC_FONT else styleFont)
             mpv.setPropertyDouble("sub-scale", subScale())
         }
+        applyAssFont()
+    }
+
+    // ---- "Change font only" (Harbor PC's sub-style.ts) ----
+
+    @Volatile private var assFontOnly = false
+
+    /** sub-ass-style-overrides from your own mpv options, which Harbor keeps and adds the font to. */
+    private val ownStyleOverrides: List<String> = settings.mpvExtraOptions.lines().map { it.trim() }
+        .filter { it.removePrefix("--").startsWith("sub-ass-style-overrides=") }
+        .flatMap { it.substringAfter('=').split(',') }.map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * Styled (ASS) subtitles keep their colours, sizes and sign placement, and only their font
+     * becomes yours: sub-ass-override=yes with FontName overridden. Left again, your own list returns.
+     */
+    private fun applyAssFont() {
+        val items = if (assFontOnly) ownStyleOverrides + "FontName=${if (arabicFont) ARABIC_FONT else styleFont}" else ownStyleOverrides
+        // mpv reads the list comma-separated; "\," is a comma inside an item.
+        runCatching { mpv.setPropertyString("sub-ass-style-overrides", items.joinToString(",") { it.replace(",", "\\,") }) }
     }
 
     override fun event(eventId: Int) {
@@ -550,6 +574,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         styleFontUploaded = uploaded != null
         if (styleFontUploaded) arabicFont = false
         mpv.setPropertyString("sub-font", if (arabicFont) ARABIC_FONT else styleFont)
+        assFontOnly = style.assOverride == "font"
+        runCatching { mpv.setPropertyString("sub-ass-override", if (assFontOnly) "yes" else style.assOverride) }
+        applyAssFont()
         when (prefs.subBackground) {
             "box" -> {
                 val box = argb(style.subBoxColor, style.subBoxOpacity)

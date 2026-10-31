@@ -94,6 +94,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var bufferingSince = 0L
     /** The addon and source playing now, for "keep the same source" and stall switching. */
     private var currentAddonId: String? = null
+    /** The play queue item this video is (PlayQueue), or null when it wasn't started from the queue. */
+    private var queueItemId: String? = null
     private var currentStreamKey: String? = null
     /** The source as Harbor fingerprints it for ad skip (ih_hash_file), null for direct links. */
     private var currentSource: String? = null
@@ -171,6 +173,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             .orEmpty()
         state.title = intent.getStringExtra(EXTRA_TITLE).orEmpty().substringBefore(" · ")
         currentAddonId = intent.getStringExtra(EXTRA_ADDON)
+        queueItemId = intent.getStringExtra(EXTRA_QUEUE_ITEM)
         currentStreamKey = intent.getStringExtra(EXTRA_STREAM_KEY)
         currentSource = intent.getStringExtra(EXTRA_SOURCE)
         currentStream = app.harbor.android.data.Stream(name = currentStreamKey, title = intent.getStringExtra(EXTRA_STREAM_TITLE))
@@ -267,7 +270,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val current = videos.firstOrNull { it.id == state.videoId }
         state.episodeLine = current?.let { "${episodeCode(it)}  ·  ${it.label}" }
         state.year = meta.year
-        state.next = if (state.isSeries) nextAfter(videos, state.videoId) else null
+        // Playing from the queue, the next queue item comes before the next episode (PC queue-next precedence).
+        state.next = if (state.isSeries && app.harbor.android.data.PlayQueue.after(queueItemId) == null) nextAfter(videos, state.videoId) else null
     }
 
     // ---- Progress, skip segments, sleep timer ----
@@ -395,6 +399,20 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             state.sleepAt = null
             return
         }
+        // Played from the queue: the next queue item starts (PC use-queue-advance).
+        app.harbor.android.data.PlayQueue.after(queueItemId)?.let { next ->
+            state.hint = "Next in queue: ${next.meta.name}"
+            state.hintIcon = 0
+            ticker.postDelayed({
+                if (!isFinishing && state.ended) {
+                    app.harbor.android.data.PlayQueue.pendingStart.value = next
+                    // The player has its own task: bring Harbor forward, where the next item opens.
+                    startActivity(Intent(this, app.harbor.android.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                    finish()
+                }
+            }, 1_500)
+            return
+        }
         if (state.next == null || !state.settings.autoPlayNextEpisode || state.endScreen != null) return
         autoAdvanced++
         val limit = prefs.stillWatchingAfter
@@ -499,6 +517,14 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     // Media3: Harbor loads and draws addon subtitles itself.
                     engine.selectText(null)
                     loadAddonSubtitle(choice)
+                } else {
+                    // mpv draws it; Harbor reads the same file for live sync's list of every line.
+                    subtitleJob?.cancel()
+                    subtitleFile = null
+                    subtitleJob = lifecycleScope.launch {
+                        val file = runCatching { SubtitleFile.load(choice.subtitle.url) }.getOrNull()
+                        if (state.subChoice == choice) subtitleFile = file?.takeUnless { it.isEmpty }
+                    }
                 }
                 repository.updatePlayerPrefs { it.copy(subLanguage = choice.subtitle.lang) }
             }
@@ -821,6 +847,21 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val file = subtitleFile
         val session = when {
             choice is SubChoice.Addon && file != null -> LiveSync(state.subDelayMs, state.subTimeScale, fromVideo = false).also { it.lines = file.lines }
+            choice is SubChoice.Addon && subtitleJob?.isActive == true -> {
+                // Still reading the file: open once it's in.
+                state.hint = "Loading subtitle…"
+                state.hintIcon = 0
+                val job = subtitleJob
+                lifecycleScope.launch {
+                    job?.join()
+                    if (state.subChoice == choice && state.liveSync == null) startLiveSync()
+                }
+                return
+            }
+            // mpv shows an addon subtitle Harbor couldn't read itself: its lines as they play.
+            choice is SubChoice.Addon && engine.drawsSubtitles ->
+                LiveSync(state.subDelayMs, state.subTimeScale, fromVideo = true, asPlayed = engine.subtitleLinesAsPlayed)
+                    .also { it.lines = engine.subtitleLines() }
             choice is SubChoice.Embedded -> {
                 // Picture subtitles (PGS, VobSub) have no text to list.
                 val detail = state.embeddedSubs.firstOrNull { it.key == choice.key }?.detail.orEmpty()
@@ -1395,6 +1436,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     companion object {
         private const val EXTRA_URL = "url"
+        const val EXTRA_QUEUE_ITEM = "queueItem"
         private const val EXTRA_TYPE = "type"
         private const val EXTRA_META = "meta"
         private const val EXTRA_VIDEO = "video"

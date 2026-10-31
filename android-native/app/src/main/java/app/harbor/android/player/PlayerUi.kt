@@ -483,7 +483,7 @@ private fun BottomPills(state: PlayerState, prefs: PlayerPrefs, actions: PlayerA
             state.creditsAtMs > 0 -> state.durationMs - state.creditsAtMs
             else -> 45_000L
         }
-        val upNext = next != null && state.durationMs > 0 && (remaining <= leadMs || state.ended) && (skip == null || !s.showSkipButton)
+        val upNext = next != null && state.durationMs > 0 && (remaining <= leadMs || state.ended) && (skip == null || !s.showSkipButton) && state.liveSync == null
         if (upNext) UpNext(next!!, state, actions)
         // Harbor's ad report button: on torrent sources of new releases (or always, if asked), when nothing else sits here.
         val reportable = s.adSkipEnabled && state.adSource != null && (s.adReportAlwaysShow || state.recentRelease)

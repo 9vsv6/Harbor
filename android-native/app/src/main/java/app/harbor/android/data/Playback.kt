@@ -1,6 +1,7 @@
 package app.harbor.android.data
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 
 /** A stream ready to hand to the player: where it came from and the URL to open. */
@@ -201,7 +202,11 @@ object Playback {
      */
     suspend fun best(ranked: List<RankedStream>, debrid: DebridAccount?, attempts: Int = 3): Ready? {
         for (candidate in ranked.filter { it.stream.playable(debrid != null) }.take(attempts)) {
-            runCatching { resolve(candidate.stream, debrid, candidate.addon.manifest.id) }.getOrNull()?.let { return it }
+            // Cancelled (you picked another source meanwhile): stop, rather than open the next candidate too.
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            runCatching { resolve(candidate.stream, debrid, candidate.addon.manifest.id) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                .getOrNull()?.let { return it }
         }
         return null
     }

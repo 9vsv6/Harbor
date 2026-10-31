@@ -120,8 +120,9 @@ fun NavRow(
     chevron: Boolean,
     selected: Boolean = false,
     expanded: Boolean = false,
+    compact: Boolean = false,
     onClick: () -> Unit,
-) = NavRow(androidx.compose.ui.graphics.vector.rememberVectorPainter(icon), label, chevron, selected, expanded, onClick)
+) = NavRow(androidx.compose.ui.graphics.vector.rememberVectorPainter(icon), label, chevron, selected, expanded, compact, onClick)
 
 /** The same row with one of Harbor's settings icons (res/drawable/set_*). */
 @Composable
@@ -131,12 +132,13 @@ fun NavRow(
     chevron: Boolean,
     selected: Boolean = false,
     expanded: Boolean = false,
+    compact: Boolean = false,
     onClick: () -> Unit,
 ) {
     val ink = if (selected) HarborColors.Ink else HarborColors.InkMuted
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (selected) HarborColors.Elevated else Color.Transparent).clickable(onClick = onClick)
-            .heightIn(min = 54.dp).padding(start = 14.dp, end = 10.dp, top = 7.dp, bottom = 7.dp),
+            .heightIn(min = if (compact) 42.dp else 54.dp).padding(start = 14.dp, end = 10.dp, top = if (compact) 4.dp else 7.dp, bottom = if (compact) 4.dp else 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
