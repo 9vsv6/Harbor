@@ -239,7 +239,7 @@ fun StreamsScreen(
                         color = HarborColors.Ink,
                         fontSize = if (wide) 60.sp else 42.sp,
                         lineHeight = if (wide) 60.sp else 44.sp,
-                        fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif,
+                        fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
                         fontWeight = FontWeight.Medium,
                         letterSpacing = (-0.5).sp,
                     )

@@ -9,15 +9,18 @@ import androidx.compose.ui.text.font.FontWeight
 import java.io.File
 
 /**
- * Harbor's typography (lib/theme.ts FONT_PAIRS): a heading face and a body face, from the
- * Google Fonts Harbor loads (bundled here as variable TTFs, OFL), plus fonts you upload.
+ * Harbor's typography (lib/theme.ts FONT_PAIRS): a heading face and a body face, as variable TTFs
+ * (the Fontshare faces fetched at build time, see build.gradle.kts; the Google ones bundled, OFL),
+ * plus fonts you upload. Sentient + Switzer is the default, as on the desktop.
  */
 object HarborFonts {
     data class Pair(val id: String, val name: String, val display: String, val sans: String)
 
     val pairs = listOf(
-        Pair("inter", "Inter", "inter", "inter"),
+        Pair("sentient-switzer", "Sentient + Switzer", "sentient", "switzer"),
         Pair("fraunces-inter", "Fraunces + Inter", "fraunces", "inter"),
+        Pair("general-sans", "General Sans", "general-sans", "general-sans"),
+        Pair("cabinet-switzer", "Cabinet Grotesk + Switzer", "cabinet-grotesk", "switzer"),
         Pair("plex", "IBM Plex", "plex", "plex"),
         Pair("plus-jakarta", "Plus Jakarta Sans", "plusjakarta", "plusjakarta"),
         Pair("system", "System UI", "system", "system"),
@@ -46,6 +49,7 @@ object HarborFonts {
         runCatching { FontFamily(Font(File(path))) }.getOrDefault(FontFamily.Default)
     }
 
+    /** Unknown ids (and "inter", Android's old default) get the default pair. */
     fun pair(id: String) = pairs.firstOrNull { it.id == id } ?: pairs.first()
 
     /** The body face for the chosen pair, or an uploaded font ("file:/…"). */

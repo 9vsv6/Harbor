@@ -284,7 +284,7 @@ private fun GroupEditor(group: LibraryGroup?, onCancel: () -> Unit, onSave: (nam
             Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 18.dp, bottom = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (group != null) "Edit group" else "New group", color = HarborColors.Ink, fontSize = 24.sp, fontWeight = FontWeight.Medium,
-                    fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif,
+                    fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
                     modifier = Modifier.weight(1f),
                 )
                 Icon(

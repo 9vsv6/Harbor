@@ -315,7 +315,7 @@ fun CollectionScreen(repository: Repository, id: Int, onBack: () -> Unit, onOpen
                     Box(Modifier.fillMaxWidth().padding(horizontal = 0.dp).aspectRatio(16f / 8f).clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))) {
                         c.backdrop?.let { AsyncImage(it, c.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                         Box(Modifier.matchParentSize().background(Brush.verticalGradient(0.3f to Color.Transparent, 1f to HarborColors.Canvas)))
-                        Text(c.name, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif, modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
+                        Text(c.name, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {

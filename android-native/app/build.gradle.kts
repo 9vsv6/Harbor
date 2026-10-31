@@ -1,4 +1,6 @@
 import java.util.Properties
+import java.net.URI
+import java.util.zip.ZipInputStream
 
 plugins {
     id("com.android.application")
@@ -61,6 +63,40 @@ val buildHarborCore by tasks.registering {
 }
 tasks.named("preBuild") { dependsOn(buildHarborCore) }
 
+// Harbor's own typefaces (Sentient, Switzer, General Sans, Cabinet Grotesk) come from Fontshare, as
+// the desktop app loads them. Their licence (ITF FFL) allows embedding them in an app but not
+// publishing the files, so they are fetched at build time into the APK, never committed.
+val fontshareDir = layout.buildDirectory.dir("fontshareAssets")
+val fontshareFonts = mapOf(
+    "sentient" to "Sentient-Variable.ttf",
+    "switzer" to "Switzer-Variable.ttf",
+    "general-sans" to "GeneralSans-Variable.ttf",
+    "cabinet-grotesk" to "CabinetGrotesk-Variable.ttf",
+)
+val fetchFontshareFonts by tasks.registering {
+    description = "Downloads Harbor's Fontshare typefaces into the app's assets."
+    outputs.dir(fontshareDir)
+    doLast {
+        val out = fontshareDir.get().asFile.resolve("fonts").apply { mkdirs() }
+        fontshareFonts.forEach { (slug, variable) ->
+            val target = out.resolve("$slug.ttf")
+            if (target.length() > 0) return@forEach
+            val zip = URI("https://api.fontshare.com/v2/fonts/download/$slug").toURL().openStream()
+            ZipInputStream(zip).use { entries ->
+                while (true) {
+                    val entry = entries.nextEntry ?: break
+                    if (entry.name.endsWith("/TTF/$variable")) {
+                        target.outputStream().use { entries.copyTo(it) }
+                        break
+                    }
+                }
+            }
+            check(target.length() > 0) { "Fontshare's $slug download has no $variable" }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(fetchFontshareFonts) }
+
 android {
     namespace = "app.harbor.android"
     compileSdk = 36
@@ -109,6 +145,7 @@ android {
 
     // harbor-core's library (buildHarborCore above) ships beside mpv's.
     sourceSets["main"].jniLibs.srcDir(coreLibsDir)
+    sourceSets["main"].assets.srcDir(fontshareDir)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

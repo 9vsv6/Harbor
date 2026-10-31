@@ -1706,6 +1706,8 @@ fun KeyCard(
 @Composable
 private fun FontPairGrid(selected: String, custom: List<String>, onPick: (String) -> Unit) {
     val options = HarborFonts.pairs.map { Triple(it.id, it.name, it.id) } + custom.map { Triple("file:$it", java.io.File(it).nameWithoutExtension, "file:$it") }
+    // A pair id the grid no longer has (Android's old "inter") shows as the default it falls back to.
+    val selected = if (selected.startsWith("file:")) selected else HarborFonts.pair(selected).id
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val columns = if (maxWidth >= 760.dp) 3 else if (maxWidth >= 480.dp) 2 else 1
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

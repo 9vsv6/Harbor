@@ -592,7 +592,7 @@ private fun ShowsMast() {
     val (kicker, title, subtitle) = variants[(now.get(java.util.Calendar.DAY_OF_YEAR) + bucket * 3) % variants.size]
     androidx.compose.foundation.layout.Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(kicker.uppercase(), color = HarborColors.InkSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
-        Text(title, color = HarborColors.Ink, fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Medium, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: androidx.compose.ui.text.font.FontFamily.Serif)
+        Text(title, color = HarborColors.Ink, fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Medium, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair))
         Text(subtitle, color = HarborColors.InkMuted, fontSize = 15.sp, lineHeight = 22.sp)
     }
 }

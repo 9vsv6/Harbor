@@ -193,7 +193,7 @@ private fun Header(tab: LibTab, tabs: List<LibTab>, onTab: (LibTab) -> Unit) {
         Text("MY LIBRARY", color = HarborColors.InkSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
         Text(
             "Your collection.", color = HarborColors.Ink, fontSize = 36.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium,
-            fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif,
+            fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
         )
         Text(
             "Library is everything from Stremio and this device. Watchlist is only titles you haven't watched yet. History is what you've watched.",

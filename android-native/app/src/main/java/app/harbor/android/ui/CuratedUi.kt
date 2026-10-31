@@ -127,7 +127,7 @@ private fun ListMark(list: CuratedList, size: Dp) {
         Modifier.size(size).clip(RoundedCornerShape(14.dp)).background(Brush.linearGradient(listOf(Color(0xFF2A2B30), Color(0xFF1C1D21)))),
         contentAlignment = Alignment.Center,
     ) {
-        if (list.nyt) Text("T", color = HarborColors.Ink, fontSize = (size.value * 0.62f).sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif, fontWeight = FontWeight.Bold)
+        if (list.nyt) Text("T", color = HarborColors.Ink, fontSize = (size.value * 0.62f).sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), fontWeight = FontWeight.Bold)
         else {
             val initials = list.curator.split(' ').filter { it.firstOrNull()?.isUpperCase() == true }.take(3).joinToString("") { it.take(1) }
             Text(initials.ifEmpty { "★" }, color = HarborColors.Accent, fontSize = (size.value * 0.3f).sp, fontWeight = FontWeight.Bold)
@@ -222,7 +222,7 @@ fun CuratedListScreen(id: String, onBack: () -> Unit, onOpen: (Meta) -> Unit) {
                         ListMark(list, 44.dp)
                         Text(list.curator.uppercase(), color = HarborColors.InkSubtle, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
                     }
-                    Text(list.title, color = HarborColors.Ink, fontSize = 30.sp, lineHeight = 36.sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif, fontWeight = FontWeight.SemiBold)
+                    Text(list.title, color = HarborColors.Ink, fontSize = 30.sp, lineHeight = 36.sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), fontWeight = FontWeight.SemiBold)
                     Text(list.blurb, color = HarborColors.InkMuted, fontSize = 15.sp, lineHeight = 22.sp)
                     Text(
                         listOfNotNull("${list.count} titles", list.year?.toString(), when (list.ordering) {

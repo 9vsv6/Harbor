@@ -341,7 +341,7 @@ data class AppSettings(
     val aiModel: String = "google/gemma-4-26b-a4b-it:free",
     val aiWebContext: Boolean = false,
     /** Harbor's typography: a font pair id, or "file:<path>" for a font you uploaded. */
-    val fontPair: String = "inter",
+    val fontPair: String = "sentient-switzer",
     /** Fonts you uploaded (paths in the app's storage), for the app and subtitles. */
     val customFonts: List<String> = emptyList(),
     /** Streaming catalogs you turned on or off (StreamingServices); missing keys use Harbor's default. */

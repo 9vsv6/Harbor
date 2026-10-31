@@ -592,7 +592,7 @@ private fun HeroTitle(name: String, wide: Boolean) {
         color = Color.White,
         fontSize = if (wide) 64.sp else 40.sp,
         lineHeight = if (wide) 66.sp else 44.sp,
-        fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif,
+        fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
         fontWeight = FontWeight.Medium,
         letterSpacing = if (wide) 10.sp else 5.sp,
     )
@@ -621,7 +621,7 @@ private fun Eyebrow(text: String) {
 private fun Synopsis(text: String, tagline: String?, side: Dp) {
     var expanded by remember { mutableStateOf(HarborDisplay.settings.fullDescriptions) }
     Column(Modifier.padding(horizontal = side).widthIn(max = 820.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        tagline?.let { Text(it, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair).takeIf { HarborDisplay.settings.fontPair != "inter" } ?: FontFamily.Serif) }
+        tagline?.let { Text(it, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair)) }
         Text(
             text,
             color = HarborColors.InkMuted,
