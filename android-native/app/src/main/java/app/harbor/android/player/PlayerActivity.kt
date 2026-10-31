@@ -738,13 +738,23 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var liveSyncCue: SubtitleFile.Cue? = null
 
     override fun startLiveSync() {
-        val file = subtitleFile ?: run { state.hint = "Live sync works with subtitles from your sources"; state.hintIcon = 0; return }
         // The next line after where the subtitles currently are; you tap when you hear it.
         val now = ((engine.positionMs - state.subDelayMs) * state.subTimeScale).toLong()
-        val cue = file.nextAfter(now + 1_500) ?: return
+        state.panel = null
+        val file = subtitleFile
+        if (file != null) return showLiveSyncLine(file.nextAfter(now + 1_500))
+        // Subtitles inside the video (any text format): ask the engine for its next line.
+        engine.nextSubtitleLine(now + 1_500) { showLiveSyncLine(it) }
+    }
+
+    private fun showLiveSyncLine(cue: SubtitleFile.Cue?) {
+        if (cue == null) {
+            state.hint = "Live sync needs text subtitles turned on"
+            state.hintIcon = 0
+            return
+        }
         liveSyncCue = cue
         state.liveSyncLine = cue.text
-        state.panel = null
         if (!state.playing) engine.play()
     }
 

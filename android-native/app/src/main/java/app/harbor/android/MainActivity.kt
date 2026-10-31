@@ -178,6 +178,8 @@ private fun HarborRoot(repository: Repository) {
                 tmdb != null -> nav.navigate("tmdbrow?spec=${enc(Net.json.encodeToString(Tmdb.RowSpec.serializer(), tmdb))}&title=${enc(row.title)}")
                 row.addon != null && row.catalog != null ->
                     nav.openCatalog(row.addon.manifest.id, row.catalog.type, row.catalog.id, row.genre, row.title)
+                // Rows with no catalog behind them (AniList, MyAnimeList, Top Picks…): their own titles, as a grid.
+                else -> nav.navigate("rowgrid/${enc(app.harbor.android.ui.RowGrid.put(row))}")
             }
         }
     }
@@ -216,6 +218,9 @@ private fun HarborRoot(repository: Repository) {
                     }
                 }
                 composable("collections") { app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() }) }
+                composable("rowgrid/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                    app.harbor.android.ui.RowGridScreen(back.arguments?.getString("key").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) })
+                }
                 composable("plugins") {
                     app.harbor.android.ui.PluginsScreen(
                         onBack = if (wide) null else ({ nav.popBackStack() }),
@@ -331,7 +336,9 @@ private fun HarborRoot(repository: Repository) {
             }
             }
             // Tablets: Harbor's search bar at the top of every page, opening its search panel.
-            if (wide && route != Tab.Profile.route && route != Tab.Search.route && route?.startsWith("streams") != true) {
+            // Not over the "See all" grids, whose titles sit where the bar would.
+            val gridPage = listOf("catalog/", "tmdbrow", "rowgrid/").any { route?.startsWith(it) == true }
+            if (wide && route != Tab.Profile.route && route != Tab.Search.route && route?.startsWith("streams") != true && !gridPage) {
                 app.harbor.android.ui.TopSearchBar(Modifier.align(Alignment.TopCenter)) { searchOpen = true }
             }
             if (searchOpen) {

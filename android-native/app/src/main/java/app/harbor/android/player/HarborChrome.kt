@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -378,6 +379,10 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
 @Composable
 internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
     val panel = state.panel
+    // The menu the popover shows: the open one, or while it fades out, the one that was open.
+    // (Falling back to Audio here flashed the Audio menu whenever a menu opened or closed.)
+    var shown by remember { mutableStateOf(Panel.Audio) }
+    if (panel != null && panel != Panel.Sources && panel != Panel.SubStyle) shown = panel
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val maxH = maxHeight
         val maxW = maxWidth
@@ -394,7 +399,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
             exit = fadeOut() + scaleOut(targetScale = 0.96f),
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 96.dp),
         ) {
-            val current = state.panel ?: Panel.Audio
+            val current = shown
             val width = when (current) {
                 Panel.Subtitles, Panel.Episodes, Panel.XRay -> minOf(640.dp, maxW - 36.dp)
                 Panel.Audio, Panel.SubStyle, Panel.Chapters -> minOf(360.dp, maxW - 36.dp)
@@ -765,7 +770,11 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, actions: PlayerActi
                 val showEmbedded = tab != SubTab.External
                 val showExternal = tab != SubTab.Embedded
                 val inLanguage: (String?) -> Boolean = { lang -> language == null || languageKey(lang ?: "und") == language }
-                LazyColumn(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                // A new tab or language starts the list at its top (Compose would otherwise keep the
+                // selected row in place, so the list looked unchanged).
+                val listState = rememberLazyListState()
+                LaunchedEffect(tab, language) { listState.scrollToItem(0) }
+                LazyColumn(Modifier.padding(horizontal = 8.dp), state = listState, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     var index = 0
                     if (showEmbedded) {
                         val rows = embedded.filter { inLanguage(it.language) }

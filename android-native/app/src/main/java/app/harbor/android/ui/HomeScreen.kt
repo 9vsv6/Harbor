@@ -279,7 +279,9 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                     items(lead, key = { it.key }) { row ->
                         Rail(row.title, row.metas.distinctBy { it.id }.take(18), nav::openMeta) { nav.openCatalog(row) }
                     }
-                    items(trackerRows, key = { it.key }) { row -> Rail(row.title, row.metas.distinctBy { it.id }, nav::openMeta) }
+                    items(trackerRows, key = { it.key }) { row ->
+                        Rail(row.title, row.metas.distinctBy { it.id }.take(18), nav::openMeta) { nav.openCatalog(row) }
+                    }
                     // Harbor's curated lists: the NYT's TV 100 for shows, the Registry's newest for films, and the shelf.
                     val curated = when (view) {
                         BrowseView.Home -> listOf("nyt-tv-100", "national-film-registry-latest")

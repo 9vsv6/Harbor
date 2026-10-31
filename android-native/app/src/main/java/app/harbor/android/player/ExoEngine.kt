@@ -182,6 +182,8 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
 
     override fun cuesAt(positionMs: Long): List<UiCue> = cueStore.at(positionMs).mapNotNull { it.toUi() }
 
+    override fun nextSubtitleLine(afterMs: Long, result: (SubtitleFile.Cue?) -> Unit) = result(cueStore.nextAfter(afterMs))
+
     private fun Cue.toUi(): UiCue? {
         val image = bitmap?.let { bmp -> bitmaps.getOrPut(bmp) { bmp.asImageBitmap() } }
         val words = text?.toString()?.trim()?.takeIf { it.isNotEmpty() }

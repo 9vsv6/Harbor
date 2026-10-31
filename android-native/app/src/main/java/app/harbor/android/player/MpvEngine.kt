@@ -350,7 +350,35 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun setAudioDelay(delayMs: Long) = mpv.setPropertyDouble("audio-delay", delayMs / 1000.0)
     override fun setSubDelay(delayMs: Long) = mpv.setPropertyDouble("sub-delay", delayMs / 1000.0)
 
-    override fun setSubSpeed(speed: Double) { runCatching { mpv.setPropertyDouble("sub-speed", speed) } }
+    private var subSpeed = 1.0
+
+    override fun setSubSpeed(speed: Double) { subSpeed = speed; runCatching { mpv.setPropertyDouble("sub-speed", speed) } }
+
+    /**
+     * mpv has no look-ahead for subtitle lines, but `sub-step` shifts sub-delay so a later line shows
+     * now: the delay it picks gives that line's start, and the line on screen gives its text. The old
+     * delay goes back once the text has been read.
+     */
+    override fun nextSubtitleLine(afterMs: Long, result: (SubtitleFile.Cue?) -> Unit) {
+        val old = mpv.getPropertyDouble("sub-delay") ?: 0.0
+        val now = positionMs
+        var start: Long? = null
+        for (skip in 1..4) {
+            runCatching { mpv.command(arrayOf("sub-step", skip.toString())) }
+            val delay = mpv.getPropertyDouble("sub-delay") ?: break
+            if (delay == old) break
+            // Shown at file time * speed + delay; the step made that land on `now`.
+            val fileStart = ((now - delay * 1000) / subSpeed).toLong()
+            if (fileStart > afterMs) { start = fileStart; break }
+            mpv.setPropertyDouble("sub-delay", old)
+        }
+        if (start == null) { mpv.setPropertyDouble("sub-delay", old); result(null); return }
+        main.postDelayed({
+            val text = mpv.getPropertyString("sub-text")?.trim().orEmpty()
+            mpv.setPropertyDouble("sub-delay", old)
+            result(if (text.isEmpty()) null else SubtitleFile.Cue(start, start + 2_000, text))
+        }, 250)
+    }
 
     override val videoSize get() = if (width > 0 && height > 0) width.toInt() to height.toInt() else null
 

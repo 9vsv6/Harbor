@@ -78,6 +78,13 @@ interface Engine {
     /** Subtitle events for Harbor to draw at `positionMs` (engines that don't draw them). */
     fun cuesAt(positionMs: Long): List<UiCue>
 
+    /**
+     * The next line of the selected embedded text subtitle starting after `afterMs` (subtitle time,
+     * before any delay), for the live sync guide. Null when the engine can't tell (image subtitles,
+     * nothing read yet). The answer may come a moment later (mpv has to show the line to read it).
+     */
+    fun nextSubtitleLine(afterMs: Long, result: (SubtitleFile.Cue?) -> Unit) = result(null)
+
     /** GLSL shaders (Anime4K); false when the engine has no shader support. */
     val supportsShaders: Boolean
     fun setShaders(paths: List<String>)
