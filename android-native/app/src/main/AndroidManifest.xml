@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- To load addons once the connection returns after an offline start. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Installs Harbor's own updates from GitHub (Settings → Updates); Android asks you first. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Runs on Android TV too: a remote instead of a touch screen. -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -58,5 +60,8 @@
             android:taskAffinity="app.harbor.android.player"
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
+        <receiver
+            android:name=".data.AppUpdate$InstallResultReceiver"
+            android:exported="false" />
     </application>
 </manifest>

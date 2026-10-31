@@ -1539,8 +1539,31 @@ private fun BackupSection(repository: Repository) {
         }
     }
 
-    SettingsSection("Updates", "Harbor native ${version ?: "?"}. New previews are posted on GitHub; install them over this one.") {
-        HGhostButton(onClick = { uri.openUri("https://github.com/9vsv6/Harbor/releases") }) { Text("See releases") }
+    SettingsSection("Updates", "Harbor native ${version ?: "?"}. Harbor looks for a new version each time it opens, and installs it over this one when you say so.") {
+        val update = app.harbor.android.data.AppUpdate.status
+        val note = when (update) {
+            app.harbor.android.data.AppUpdate.Status.Checking -> "Checking…"
+            app.harbor.android.data.AppUpdate.Status.UpToDate -> "You have the newest version."
+            is app.harbor.android.data.AppUpdate.Status.Available -> "Harbor ${update.release.version} is available."
+            is app.harbor.android.data.AppUpdate.Status.Downloading -> "Downloading Harbor ${update.release.version}… ${(update.fraction * 100).toInt()}%"
+            is app.harbor.android.data.AppUpdate.Status.Failed -> update.message
+            app.harbor.android.data.AppUpdate.Status.Idle -> null
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            note?.let { Text(it, color = HarborColors.InkMuted, fontSize = 13.5.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (update is app.harbor.android.data.AppUpdate.Status.Available) {
+                    // Brings the update pop-up back, even after Later.
+                    HButton(onClick = { app.harbor.android.data.AppUpdate.dismissed = null }) { Text("Update") }
+                } else {
+                    HButton(
+                        onClick = { scope.launch { app.harbor.android.data.AppUpdate.check(context, manual = true) } },
+                        enabled = update !is app.harbor.android.data.AppUpdate.Status.Checking && update !is app.harbor.android.data.AppUpdate.Status.Downloading,
+                    ) { Text("Check for updates") }
+                }
+                HGhostButton(onClick = { uri.openUri("https://github.com/9vsv6/Harbor/releases") }) { Text("See releases") }
+            }
+        }
     }
     SettingsSection("Backup & restore", "Saves your profiles, lists, progress, settings and sign-ins to a file. It holds your account keys, so keep it private. Restore also takes a backup from Harbor or Harbor on the desktop: every profile with its picture, settings, keys, addons, watchlist, watch positions and tracker sign-ins come over.") {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

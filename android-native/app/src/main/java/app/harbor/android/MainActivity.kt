@@ -94,6 +94,8 @@ class MainActivity : ComponentActivity() {
             HarborTheme {
                 val chosen by repository.profileChosen.collectAsState()
                 if (chosen) HarborRoot(repository) else WhosWatching(repository)
+                // A newer Harbor on GitHub, offered once per launch.
+                app.harbor.android.ui.UpdatePrompt()
             }
         }
         handleLink(intent)

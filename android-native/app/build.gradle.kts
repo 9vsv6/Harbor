@@ -17,7 +17,8 @@ val keyProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
-val abis = listOf("arm64-v8a", "x86_64")
+// armeabi-v7a: TVs and TV boxes, which mostly run 32-bit Android even on 64-bit chips.
+val abis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 val splitAbis = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 
 // ---- Harbor's shared core (../../harbor-core), built for Android through harbor-core-jni ----
@@ -28,7 +29,9 @@ val sdkDir: String = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: ""
-val rustTargets = mapOf("arm64-v8a" to "aarch64-linux-android", "x86_64" to "x86_64-linux-android")
+val rustTargets = mapOf("arm64-v8a" to "aarch64-linux-android", "armeabi-v7a" to "armv7-linux-androideabi", "x86_64" to "x86_64-linux-android")
+// The NDK names its 32-bit ARM compilers armv7a-…, where Rust says armv7-….
+val clangPrefix = mapOf("armv7-linux-androideabi" to "armv7a-linux-androideabi")
 val coreJniDir = rootProject.file("harbor-core-jni")
 val coreLibsDir = layout.buildDirectory.dir("harborCoreJniLibs")
 
@@ -49,7 +52,7 @@ val buildHarborCore by tasks.registering {
         val cargoHome = File(System.getProperty("user.home"), ".cargo/bin")
         val cargo = File(cargoHome, if (windows) "cargo.exe" else "cargo").takeIf { it.exists() }?.path ?: "cargo"
         rustTargets.forEach { (abi, triple) ->
-            val linker = File(clangDir, "${triple}26-clang" + if (windows) ".cmd" else "")
+            val linker = File(clangDir, "${clangPrefix[triple] ?: triple}26-clang" + if (windows) ".cmd" else "")
             providers.exec {
                 workingDir = coreJniDir
                 commandLine(cargo, "build", "--release", "--target", triple)
@@ -106,9 +109,9 @@ android {
         applicationId = "app.harbor.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.0.7"
-        // Phones (arm64) and the x86_64 emulator; mpv adds about 25 MB per ABI.
+        versionCode = 18
+        versionName = "1.0.8"
+        // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
 
