@@ -47,6 +47,10 @@ object StremioApi {
         runCatching { call("logout", buildJsonObject { put("authKey", authKey) }) }
     }
 
+    /** The account's Stremio ID (user._id), which its library and addon collection are kept under. */
+    suspend fun userId(authKey: String): String? =
+        (call("getUser", buildJsonObject { put("authKey", authKey) }) as? JsonObject)?.string("_id")
+
     suspend fun addons(authKey: String): List<Addon> {
         val result = call(
             "addonCollectionGet",
@@ -110,5 +114,31 @@ object StremioApi {
         return (items as? JsonArray)?.mapNotNull {
             runCatching { Net.json.decodeFromJsonElement(LibraryItem.serializer(), it) }.getOrNull()
         } ?: emptyList()
+    }
+
+    /** One library item as Stremio stores it, every field kept (PC stremio.ts libraryGetOneStrict). */
+    suspend fun libraryItem(authKey: String, id: String): JsonObject? {
+        val items = call(
+            "datastoreGet",
+            buildJsonObject {
+                put("authKey", authKey)
+                put("collection", "libraryItem")
+                put("all", false)
+                putJsonArray("ids") { add(kotlinx.serialization.json.JsonPrimitive(id)) }
+            },
+        )
+        return (items as? JsonArray)?.mapNotNull { it as? JsonObject }?.firstOrNull { it.string("_id") == id }
+    }
+
+    /** Writes a library item back (PC stremio.ts libraryPut). */
+    suspend fun putLibraryItem(authKey: String, item: JsonObject) {
+        call(
+            "datastorePut",
+            buildJsonObject {
+                put("authKey", authKey)
+                put("collection", "libraryItem")
+                put("changes", JsonArray(listOf(item)))
+            },
+        )
     }
 }

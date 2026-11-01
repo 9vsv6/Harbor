@@ -69,7 +69,7 @@ import kotlinx.coroutines.launch
  * first connect asks for the user's own app id (kept per profile).
  */
 
-private enum class Tracker(val label: String, val logo: Int, val blurb: String, val site: String) {
+enum class Tracker(val label: String, val logo: Int, val blurb: String, val site: String) {
     Trakt("Trakt", R.drawable.logo_trakt, "Scrobbles what you play, syncs your watchlist, and powers recommendations.", "https://trakt.tv"),
     Simkl("Simkl", R.drawable.logo_simkl, "Marks finished shows as watched and keeps plan-to-watch in step across apps.", "https://simkl.com"),
     AniList("AniList", R.drawable.logo_anilist, "Shows your anime lists as rails and keeps episode progress up to date.", "https://anilist.co"),
@@ -79,7 +79,7 @@ private enum class Tracker(val label: String, val logo: Int, val blurb: String, 
 }
 
 @Composable
-fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
+fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit, only: Tracker? = null) {
     val trackers by repository.trackers.collectAsState()
     fun authOf(t: Tracker): TrackerAuth? = when (t) {
         Tracker.Trakt -> trackers.trakt
@@ -94,9 +94,11 @@ fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSetti
         Tracker.PublicMetaDb -> pmdb != null
         else -> authOf(t)?.accessToken != null
     }
-    var active by rememberSaveable { mutableStateOf(Tracker.Trakt) }
+    var picked by rememberSaveable { mutableStateOf(Tracker.Trakt) }
+    // Harbor PC's sidebar gives each tracker its own page; the tab bar is for the combined page.
+    val active = only ?: picked
 
-    TrackerTabs(active, ::connected) { active = it }
+    if (only == null) TrackerTabs(active, ::connected) { picked = it }
     val count = Tracker.entries.count(::connected)
     if (count > 0) StatusDot("$count of ${Tracker.entries.size} connected")
 

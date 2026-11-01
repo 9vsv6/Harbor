@@ -2,6 +2,7 @@ package app.harbor.android.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -87,39 +89,58 @@ import kotlinx.coroutines.launch
 
 private enum class SourceMode(val label: String) { Both("Both"), Direct("Direct/debrid"), P2P("P2P") }
 
-/** Harbor's facet filters, read from each source's name and title. */
+/** Harbor PC's stream facets (play-picker/stream-facets.ts): one value per source each, in this order. */
 private enum class Facet(val label: String, val values: List<String>) {
     Resolution("Resolution", listOf("4K", "1080p", "720p", "SD")),
-    Source("Source", listOf("Remux", "Blu-ray", "WEB")),
-    Codec("Codec", listOf("HEVC", "AV1", "H.264")),
-    Hdr("HDR", listOf("Dolby Vision", "HDR", "SDR")),
-    Audio("Audio", listOf("Atmos", "TrueHD", "DTS", "DD+", "5.1")),
+    Source("Source", listOf("Remux", "BluRay", "WEB-DL", "WEBRip", "HDTV", "CAM")),
+    Codec("Codec", listOf("HEVC", "AV1", "AVC")),
+    Hdr("HDR", listOf("HDR", "SDR")),
+    Audio("Audio", listOf("Atmos", "TrueHD", "DTS-HD", "DTS", "DD+")),
+    Availability("Availability", listOf("Cached", "Debrid", "P2P")),
 }
 
-private fun facetValues(stream: Stream): Map<Facet, Set<String>> {
+private fun facetValues(stream: Stream): Map<Facet, String?> {
     val t = Ranking.traits(stream)
     val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" ")
     fun has(pattern: String) = Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(text)
     return mapOf(
-        Facet.Resolution to setOf(
-            when {
-                t.resolution >= 2160 -> "4K"
-                t.resolution >= 1080 -> "1080p"
-                t.resolution >= 720 -> "720p"
-                t.resolution > 0 -> "SD"
-                else -> ""
-            },
-        ),
-        Facet.Source to setOfNotNull("Remux".takeIf { t.remux }, "Blu-ray".takeIf { t.bluray && !t.remux }, "WEB".takeIf { t.web }),
-        Facet.Codec to setOf(if (t.hevc) "HEVC" else if (t.av1) "AV1" else "H.264"),
-        Facet.Hdr to setOfNotNull("Dolby Vision".takeIf { t.dolbyVision }, "HDR".takeIf { t.hdr }, "SDR".takeIf { !t.hdr && !t.dolbyVision }),
-        Facet.Audio to setOfNotNull(
-            "Atmos".takeIf { has("""\batmos\b""") },
-            "TrueHD".takeIf { has("""\btrue-?hd\b""") },
-            "DTS".takeIf { has("""\bdts""") },
-            "DD+".takeIf { has("""\b(dd\+|ddp|e-?ac-?3|eac3)""") },
-            "5.1".takeIf { has("""\b5[ .]1\b""") },
-        ),
+        Facet.Resolution to when {
+            t.resolution >= 2160 -> "4K"
+            t.resolution >= 1080 -> "1080p"
+            t.resolution >= 720 -> "720p"
+            t.resolution > 0 -> "SD"
+            else -> null
+        },
+        Facet.Source to when {
+            t.remux -> "Remux"
+            t.bluray -> "BluRay"
+            has("""\bweb[- .]?rip\b""") -> "WEBRip"
+            t.web -> "WEB-DL"
+            has("""\bhdtv\b""") -> "HDTV"
+            t.cam -> "CAM"
+            else -> null
+        },
+        Facet.Codec to when {
+            t.hevc -> "HEVC"
+            t.av1 -> "AV1"
+            has("""\b(x264|h\.?264|avc)\b""") -> "AVC"
+            else -> null
+        },
+        Facet.Hdr to if (t.hdr || t.dolbyVision) "HDR" else "SDR",
+        Facet.Audio to when {
+            has("""\batmos\b""") -> "Atmos"
+            has("""\btrue-?hd\b""") -> "TrueHD"
+            has("""\bdts[- ]?(hd|ma|x)\b""") -> "DTS-HD"
+            has("""\bdts\b""") -> "DTS"
+            has("""(\bdd\+|\bddp\b|\be-?ac-?3\b)""") -> "DD+"
+            else -> null
+        },
+        // A torrent with no link is P2P; cached debrid sources say so; the rest go through debrid as they are.
+        Facet.Availability to when {
+            stream.infoHash != null && !stream.direct && !t.cached -> "P2P"
+            t.cached -> "Cached"
+            else -> "Debrid"
+        },
     )
 }
 
@@ -153,7 +174,8 @@ fun StreamsScreen(
     var refreshKey by remember { mutableIntStateOf(0) }
     var mode by rememberSaveable { mutableStateOf(SourceMode.entries.firstOrNull { it.name == settings.defaultSourceMode } ?: SourceMode.Both) }
     var addonFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var facets by remember { mutableStateOf<Map<Facet, Set<String>>>(emptyMap()) }
+    // Harbor PC's facets: one value per filter, none = All.
+    var facets by remember { mutableStateOf<Map<Facet, String>>(emptyMap()) }
     // Auto-play once per visit: coming back from the player shows the list instead.
     var autoPlayed by rememberSaveable(videoId) { mutableStateOf(false) }
 
@@ -195,7 +217,12 @@ fun StreamsScreen(
     }
 
     val all = ranked
-    val shown = remember(all, mode, addonFilter, facets, debrid, settings.pickerLayout) {
+    // Each source's facet values, worked out once per list.
+    val valuesOf = remember(all) { java.util.IdentityHashMap<RankedStream, Map<Facet, String?>>().apply { all.orEmpty().forEach { put(it, facetValues(it.stream)) } } }
+    fun matches(item: RankedStream, except: Facet? = null) =
+        facets.all { (facet, value) -> facet == except || valuesOf[item]?.get(facet) == value }
+    // The source mode and addon narrow first; the facets then work within them.
+    val narrowed = remember(all, mode, addonFilter, debrid, settings.pickerLayout) {
         all.orEmpty().filter { item ->
             val torrent = item.stream.infoHash != null && !item.stream.direct
             val modeOk = when (mode) {
@@ -205,9 +232,22 @@ fun StreamsScreen(
             }
             // The Condensed drawer has its own addon pills.
             val addonOk = addonFilter == null || settings.pickerLayout == "condensed" || item.addon.manifest.id == addonFilter
-            val values = facetValues(item.stream)
-            modeOk && addonOk && facets.all { (facet, picked) -> picked.isEmpty() || values[facet].orEmpty().any { it in picked } }
+            modeOk && addonOk
         }
+    }
+    val shown = remember(narrowed, facets) { narrowed.filter { matches(it) } }
+    // Harbor PC's facet menus: each counts what the other filters leave, and offers only values present.
+    val facetRows = remember(narrowed, facets) {
+        Facet.entries.map { facet ->
+            val base = narrowed.filter { matches(it, except = facet) }
+            val counts = base.mapNotNull { valuesOf[it]?.get(facet) }.groupingBy { it }.eachCount()
+            FacetRow(facet, facet.values.filter { it in counts }.map { it to counts.getValue(it) }, base.size, facets[facet])
+        }
+    }
+    // A choice nothing matches any more (another filter changed) goes back to All.
+    LaunchedEffect(facetRows) {
+        val stale = facetRows.filter { r -> r.value != null && r.options.none { it.first == r.value } }.map { it.facet }
+        if (stale.isNotEmpty()) facets = facets - stale.toSet()
     }
 
     val listState = rememberLazyListState()
@@ -312,9 +352,17 @@ fun StreamsScreen(
             val condensed = settings.pickerLayout == "condensed"
             if (!condensed) item(key = "addon") { AddonPicker(all.orEmpty(), addonFilter) { addonFilter = it } }
             item(key = "facets") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(Facet.entries) { facet ->
-                        FacetChip(facet, facets[facet].orEmpty()) { picked -> facets = facets + (facet to picked) }
+                // facet-menu-row.tsx: a filter shows when it has two values to choose between, or one is chosen.
+                val visible = facetRows.filter { it.options.size >= 2 || it.value != null }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    items(visible, key = { it.facet.name }) { row ->
+                        FacetChip(row) { v -> facets = if (v == null) facets - row.facet else facets + (row.facet to v) }
+                    }
+                    if (facets.isNotEmpty()) item(key = "reset") {
+                        Text(
+                            "Reset", color = HarborColors.InkSubtle, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).clickable { facets = emptyMap() }.padding(horizontal = 10.dp, vertical = 8.dp),
+                        )
                     }
                 }
             }
@@ -397,47 +445,90 @@ private fun AddonPicker(all: List<RankedStream>, selected: String?, onPick: (Str
             Text("${(selected?.let { byAddon[it] } ?: all).size}", color = HarborColors.InkSubtle, fontSize = 13.sp)
             Icon(Icons.Rounded.KeyboardArrowDown, null, tint = HarborColors.InkMuted, modifier = Modifier.padding(end = 6.dp))
         }
-        DropdownMenu(open, onDismissRequest = { open = false }, containerColor = HarborColors.Elevated) {
-            DropdownMenuItem(text = { Text("All  ·  ${all.size}") }, onClick = { onPick(null); open = false })
+        // Harbor PC's source drawer: All sources, then each addon with its logo and how many it found.
+        DropdownMenu(open, onDismissRequest = { open = false }, containerColor = HarborColors.Elevated, shape = RoundedCornerShape(18.dp)) {
+            AddonMenuItem(null, "All sources", all.size, selected == null) { onPick(null); open = false }
             byAddon.forEach { (id, items) ->
-                DropdownMenuItem(text = { Text("${items.first().addon.manifest.name}  ·  ${items.size}") }, onClick = { onPick(id); open = false })
+                val addon = items.first().addon
+                AddonMenuItem(addon.manifest.logo, addon.manifest.name, items.size, selected == id) { onPick(id); open = false }
             }
         }
     }
 }
 
 @Composable
-private fun FacetChip(facet: Facet, picked: Set<String>, onChange: (Set<String>) -> Unit) {
+private fun AddonMenuItem(logo: String?, name: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        leadingIcon = {
+            Box(Modifier.size(32.dp).clip(CircleShape).background(HarborColors.Surface), contentAlignment = Alignment.Center) {
+                if (logo != null) AsyncImage(logo, null, contentScale = ContentScale.Fit, modifier = Modifier.size(24.dp).clip(CircleShape))
+                else Icon(Icons.Rounded.GridView, null, tint = HarborColors.InkMuted, modifier = Modifier.size(16.dp))
+            }
+        },
+        text = { Text(name, color = if (selected) HarborColors.Ink else HarborColors.InkMuted, fontSize = 15.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium) },
+        trailingIcon = { Text("$count", color = HarborColors.InkSubtle, fontSize = 12.sp, modifier = Modifier.padding(start = 24.dp)) },
+        onClick = onClick,
+    )
+}
+
+/** One filter's menu: its values present now with their counts, how many it covers, and the choice. */
+private class FacetRow(val facet: Facet, val options: List<Pair<String, Int>>, val total: Int, val value: String?)
+
+/**
+ * facet-menu-row.tsx's FacetMenu: the filter's name, or once one is chosen its value on a white
+ * pill; the menu lists All and each value with its badge and count, the choice ticked.
+ */
+@Composable
+private fun FacetChip(row: FacetRow, onPick: (String?) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val active = row.value != null
+    val badgeSlot = row.options.any { facetBadge(row.facet, it.first) != null }
     Box {
         Row(
-            Modifier.clip(RoundedCornerShape(12.dp)).background(if (picked.isEmpty()) HarborColors.Surface else HarborColors.Raised)
-                .clickable { open = true }.padding(start = 14.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+            Modifier.clip(RoundedCornerShape(50)).background(if (active) HarborColors.Ink else HarborColors.Elevated.copy(alpha = 0.5f))
+                .then(if (active) Modifier else Modifier.border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(50)))
+                .clickable { open = true }.padding(start = 14.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                if (picked.isEmpty()) facet.label else "${facet.label}: ${picked.joinToString(", ")}",
-                color = if (picked.isEmpty()) HarborColors.InkMuted else HarborColors.Ink,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
+            Text(row.value ?: row.facet.label, color = if (active) HarborColors.Canvas else HarborColors.InkMuted, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+            Icon(
+                if (open) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown, null,
+                tint = if (active) HarborColors.Canvas.copy(alpha = 0.7f) else HarborColors.InkSubtle, modifier = Modifier.size(16.dp),
             )
-            Icon(Icons.Rounded.KeyboardArrowDown, null, tint = HarborColors.InkSubtle, modifier = Modifier.size(16.dp))
         }
-        DropdownMenu(open, onDismissRequest = { open = false }, containerColor = HarborColors.Elevated) {
-            facet.values.forEach { value ->
-                val on = value in picked
-                DropdownMenuItem(
-                    // Harbor's format badge before each option (facet-menu-row.tsx).
-                    leadingIcon = facetBadge(facet, value)?.let { badge -> { androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(badge), value, modifier = Modifier.height(18.dp).widthIn(max = 72.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit) } },
-                    text = { Text(value) },
-                    trailingIcon = { if (on) Icon(Icons.Rounded.Check, null, tint = HarborColors.Accent) },
-                    onClick = { onChange(if (on) picked - value else picked + value) },
-                )
+        DropdownMenu(open, onDismissRequest = { open = false }, containerColor = HarborColors.Elevated, shape = RoundedCornerShape(14.dp)) {
+            FacetMenuItem("All", row.total, selected = !active, badge = null, badgeSlot = badgeSlot) { onPick(null); open = false }
+            row.options.forEach { (value, count) ->
+                FacetMenuItem(value, count, selected = row.value == value, badge = facetBadge(row.facet, value), badgeSlot = badgeSlot) { onPick(value); open = false }
             }
-            if (picked.isNotEmpty()) DropdownMenuItem(text = { Text("Clear", color = HarborColors.InkMuted) }, onClick = { onChange(emptySet()); open = false })
         }
     }
+}
+
+@Composable
+private fun FacetMenuItem(label: String, count: Int, selected: Boolean, badge: Int?, badgeSlot: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        // The badge column keeps every label lined up, All's too.
+        leadingIcon = if (badgeSlot) ({
+            Box(Modifier.width(44.dp).height(18.dp), contentAlignment = Alignment.CenterStart) {
+                badge?.let {
+                    androidx.compose.foundation.Image(
+                        androidx.compose.ui.res.painterResource(it), label,
+                        modifier = Modifier.height(16.dp).widthIn(max = 44.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    )
+                }
+            }
+        }) else null,
+        text = { Text(label, color = if (selected) HarborColors.Ink else HarborColors.InkMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium) },
+        trailingIcon = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("$count", color = HarborColors.InkSubtle, fontSize = 12.sp)
+                Box(Modifier.size(16.dp)) { if (selected) Icon(Icons.Rounded.Check, null, tint = HarborColors.Ink, modifier = Modifier.size(16.dp)) }
+            }
+        },
+        onClick = onClick,
+    )
 }
 
 /** stremio-row.tsx: logo, the addon's own text, badges, copy link and the round Play button. */
@@ -543,8 +634,9 @@ private fun Badges(stream: Stream, settings: app.harbor.android.data.AppSettings
 /** filter-builder/badge-maps.ts: the badge picture for a facet value, where Harbor has one. */
 private fun facetBadge(facet: Facet, value: String): Int? = when (facet) {
     Facet.Resolution -> mapOf("4K" to app.harbor.android.R.drawable.badge_4k_uhd, "1080p" to app.harbor.android.R.drawable.badge_1080p_fhd, "720p" to app.harbor.android.R.drawable.badge_720p_hd, "SD" to app.harbor.android.R.drawable.badge_sd)[value]
-    Facet.Source -> mapOf("Remux" to app.harbor.android.R.drawable.badge_remux, "Blu-ray" to app.harbor.android.R.drawable.badge_bluray, "WEB" to app.harbor.android.R.drawable.badge_webdl)[value]
+    Facet.Source -> mapOf("Remux" to app.harbor.android.R.drawable.badge_remux, "BluRay" to app.harbor.android.R.drawable.badge_bluray, "WEB-DL" to app.harbor.android.R.drawable.badge_webdl, "WEBRip" to app.harbor.android.R.drawable.badge_webrip, "HDTV" to app.harbor.android.R.drawable.badge_hdtv, "CAM" to app.harbor.android.R.drawable.badge_cam)[value]
     Facet.Codec -> mapOf("HEVC" to app.harbor.android.R.drawable.badge_hevc, "AV1" to app.harbor.android.R.drawable.badge_av1)[value]
-    Facet.Hdr -> mapOf("Dolby Vision" to app.harbor.android.R.drawable.badge_dv, "HDR" to app.harbor.android.R.drawable.badge_hdr, "SDR" to app.harbor.android.R.drawable.badge_sdr)[value]
-    Facet.Audio -> mapOf("Atmos" to app.harbor.android.R.drawable.badge_atmos, "TrueHD" to app.harbor.android.R.drawable.badge_truehd, "DTS" to app.harbor.android.R.drawable.badge_dts, "DD+" to app.harbor.android.R.drawable.badge_ddplus, "5.1" to app.harbor.android.R.drawable.badge_5_1)[value]
+    Facet.Hdr -> mapOf("HDR" to app.harbor.android.R.drawable.badge_hdr, "SDR" to app.harbor.android.R.drawable.badge_sdr)[value]
+    Facet.Audio -> mapOf("Atmos" to app.harbor.android.R.drawable.badge_atmos, "TrueHD" to app.harbor.android.R.drawable.badge_truehd, "DTS-HD" to app.harbor.android.R.drawable.badge_dtshd, "DTS" to app.harbor.android.R.drawable.badge_dts, "DD+" to app.harbor.android.R.drawable.badge_ddplus)[value]
+    Facet.Availability -> null
 }

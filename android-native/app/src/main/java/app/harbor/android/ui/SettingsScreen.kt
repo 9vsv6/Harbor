@@ -37,9 +37,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.ui.res.painterResource
 import app.harbor.android.R
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Article
@@ -145,15 +150,23 @@ private enum class Section(
     @androidx.annotation.DrawableRes val icon: Int,
     val keywords: String,
     val parts: Set<String>? = null,
+    /** A service's own logo (trackers), drawn in its colours rather than tinted. */
+    val logo: Boolean = false,
 ) {
-    Essentials("Essentials", "Four things worth checking once.", R.drawable.set_rocket, "get started essentials basics stremio account metadata engine languages play instant theme"),
+    Essentials("Get started", "Four things worth checking once.", R.drawable.set_rocket, "get started essentials basics stremio account metadata engine languages play instant theme"),
     YourProfile("Your profile", "Your name, colour and the accounts you're signed in with.", R.drawable.set_user_round, "your profile identity name colour color avatar"),
     Profiles("Profiles", "The profiles on this device, and who's watching.", R.drawable.set_users, "profile who's watching privileges secondary nuvio cloud profiles", setOf("Profiles")),
     HarborAccount("Harbor account", "Your handle across Harbor.", R.drawable.harbor_mark, "harbor account handle sign in register recovery key discord"),
     Provider("Account provider", "Stremio or Nuvio behind your profiles, progress and addons.", R.drawable.set_refresh_cw, "account provider stremio nuvio cloud switch"),
     Stremio("Stremio", "Your Stremio sign-in: addons and library come from it.", R.drawable.set_play, "stremio sign in email password", setOf("Stremio")),
     Nuvio("Nuvio", "Your Nuvio account, profile slot and synced addons.", R.drawable.set_play, "nuvio cloud account profile slot mapping synced addons"),
-    Trackers("Trackers", "Trakt, Simkl, AniList, MyAnimeList, Letterboxd and PublicMetaDB.", R.drawable.set_activity, "trakt simkl anilist myanimelist mal letterboxd stremboxd publicmetadb pmdb scrobble watched comments reviews avatar"),
+    // Harbor PC's trackers, one page each (tab-registry.ts "trackers").
+    TrackTrakt("Trakt", "Scrobbles what you play, syncs your watchlist, and powers recommendations.", R.drawable.logo_trakt, "trakt scrobble watched watchlist history comments", logo = true),
+    TrackSimkl("Simkl", "Keep your movie, show, and anime lists in sync.", R.drawable.logo_simkl, "simkl watched plan to watch sync", logo = true),
+    TrackAniList("AniList", "Your anime lists as rails, and episode progress kept up to date.", R.drawable.logo_anilist, "anilist anime lists progress", logo = true),
+    TrackMal("MyAnimeList", "Anime progress, and your MAL list inside Harbor.", R.drawable.logo_mal, "myanimelist mal anime list progress", logo = true),
+    TrackLetterboxd("Letterboxd", "Your watchlist, diary, likes and lists, through Stremboxd.", R.drawable.logo_letterboxd, "letterboxd stremboxd watchlist diary likes lists reviews", logo = true),
+    TrackPmdb("PublicMetaDB", "Watch history, resume points and a watchlist on PublicMetaDB.", R.drawable.logo_publicmetadb, "publicmetadb pmdb history resume watchlist", logo = true),
     Play("When you press Play", "What Play does, resuming, and which source plays.", R.drawable.set_play_start, "play button instant manual picker resume start over remember source stalled", setOf("Play")),
     Engine("Player engine", "mpv or Android's player.", R.drawable.set_cpu, "engine mpv media3 player", setOf("Engine")),
     Aspect("Aspect ratio", "How the picture fills the screen.", R.drawable.set_rectangle_horizontal, "aspect ratio fit fill stretch zoom", setOf("Aspect")),
@@ -203,13 +216,19 @@ private enum class Section(
 }
 
 private enum class Group(val label: String, val section: String, @androidx.annotation.DrawableRes val icon: Int, val children: List<Section>) {
-    GetStarted("Get started", "Setup", R.drawable.set_rocket, listOf(Section.Essentials)),
-    Account("Account & sync", "Setup", R.drawable.set_account_setup, listOf(Section.YourProfile, Section.Profiles, Section.HarborAccount, Section.Provider, Section.Stremio, Section.Nuvio, Section.Trackers)),
+    // Harbor PC's "Account & setup" band: Get started, the account pages, then each tracker.
+    Account(
+        "Account & setup", "Setup", R.drawable.set_account_setup,
+        listOf(
+            Section.Essentials, Section.YourProfile, Section.Profiles, Section.HarborAccount, Section.Provider, Section.Stremio, Section.Nuvio,
+            Section.TrackTrakt, Section.TrackSimkl, Section.TrackAniList, Section.TrackMal, Section.TrackLetterboxd, Section.TrackPmdb,
+        ),
+    ),
     Playback(
         "Playback", "Watching", R.drawable.set_play,
         listOf(Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.AdSkip, Section.Intros, Section.UpNext, Section.Trailers, Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders, Section.MoreShaders, Section.Motion),
     ),
-    Languages("Languages & subtitles", "Language", R.drawable.set_languages, listOf(Section.AppLanguage, Section.AudioLanguage, Section.WhatYouSee, Section.SubtitleLanguages, Section.SubtitleSources, Section.SubtitleTiming, Section.SubtitleLook)),
+    Languages("Languages", "Language", R.drawable.set_languages, listOf(Section.AppLanguage, Section.AudioLanguage, Section.WhatYouSee, Section.SubtitleLanguages, Section.SubtitleSources, Section.SubtitleTiming, Section.SubtitleLook)),
     Sources(
         "Sources & library", "Content", R.drawable.set_library,
         listOf(Section.Services, Section.SourcePreferences, Section.Sorting, Section.Picker, Section.StreamFilters, Section.HomeRows, Section.PosterCards, Section.DetailPages, Section.Metadata, Section.AiSearchPage, Section.LibraryContent),
@@ -217,8 +236,8 @@ private enum class Group(val label: String, val section: String, @androidx.annot
     Plugins("Plugins", "Plugins", R.drawable.set_puzzle, listOf(Section.InstalledPlugins, Section.PluginRepos)),
     Appearance("Appearance", "Look & feel", R.drawable.set_palette, listOf(Section.Theme, Section.StreamBadges, Section.BadgeRules, Section.BadgePacks)),
     System("System", "System", R.drawable.set_sliders_horizontal, listOf(Section.Storage)),
+    Help("Help & about", "Help", R.drawable.set_help_about, listOf(Section.About, Section.Support, Section.Licences)),
     Updates("Updates & backup", "Updates", R.drawable.set_arrow_up_circle, listOf(Section.Backup)),
-    Help("Help & support", "Help", R.drawable.set_help_about, listOf(Section.About, Section.Support, Section.Licences)),
 }
 
 private fun groupOf(section: Section) = Group.entries.first { section in it.children }
@@ -242,8 +261,8 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
     var sectionName by rememberSaveable { mutableStateOf(Section.Profiles.name) }
     var query by rememberSaveable { mutableStateOf("") }
     var target by remember { mutableStateOf<Section?>(null) }
-    // Tablets: the open group's sub-pages folded away (its header tapped again); the page stays open.
-    var railFolded by rememberSaveable { mutableStateOf(false) }
+    // Tablets: the sidebar bands that are open (Harbor PC: each opens and closes on its own).
+    var openBands by rememberSaveable { mutableStateOf(setOf(Group.Account.name)) }
     val accountsShared by repository.accounts.shared.collectAsState()
     shownProvider = accountsShared.provider
 
@@ -255,6 +274,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
         fun open(g: Group, s: Section? = null) {
             query = ""
             groupName = g.name
+            openBands = openBands + g.name
             if (wide) sectionName = (s ?: g.shown.first()).name
             target = s
         }
@@ -286,10 +306,13 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
                     }
                     SettingsSearchField(query) { query = it }
                     if (query.isNotBlank()) SearchResults(query) { open(groupOf(it), it) }
-                    else SettingsRail(repository, onOpenAddons, selected = group, selectedSection = section, folded = railFolded, compact = true, onOpen = { g, s ->
-                        // The open group's header folds or unfolds its list; anything else opens.
-                        if (s == null && g == group) railFolded = !railFolded else { railFolded = false; open(g, s) }
-                    })
+                    else TabletRail(
+                        repository,
+                        current = section,
+                        open = openBands.mapNotNull { n -> Group.entries.firstOrNull { it.name == n } }.toSet(),
+                        onToggle = { g -> openBands = if (g.name in openBands) openBands - g.name else openBands + g.name },
+                        onOpen = { s -> open(groupOf(s), s) },
+                    )
                 }
                 // Harbor's page: the group's title, then the open sub-page, in a readable column.
                 Column(
@@ -321,6 +344,78 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
             }
         }
         }
+    }
+}
+
+/**
+ * Harbor PC's settings sidebar (settings-sidebar.tsx) on tablets: who you are, then each band
+ * ("Account & setup", "Playback"…) that opens and closes on its own, listing its pages with their
+ * icons (trackers with their logos). A band of one page is a single row.
+ */
+@Composable
+private fun TabletRail(repository: Repository, current: Section, open: Set<Group>, onToggle: (Group) -> Unit, onOpen: (Section) -> Unit) {
+    val profile by repository.activeProfile.collectAsState()
+    val harbor by repository.accounts.harbor.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            ProfileAvatar(profile, 50.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(profile?.name ?: "Me", color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (harbor != null) "Signed in to Harbor" else "Signed out of Harbor", color = HarborColors.InkMuted, fontSize = 13.sp, maxLines = 1)
+            }
+        }
+        Group.entries.forEach { g ->
+            val single = g.children.singleOrNull()
+            if (single != null) {
+                // A band of one page: the page itself.
+                BandHeader(g, on = current == single, caret = null) { onOpen(single) }
+                return@forEach
+            }
+            val isOpen = g in open
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                    .background(if (isOpen) HarborColors.Elevated.copy(alpha = 0.55f) else Color.Transparent),
+            ) {
+                BandHeader(g, on = false, caret = isOpen) { onToggle(g) }
+                if (isOpen) Column(Modifier.padding(start = 6.dp, end = 6.dp, bottom = 6.dp)) {
+                    g.shown.forEach { s ->
+                        val on = s == current
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (on) HarborColors.Raised else Color.Transparent)
+                                .clickable { onOpen(s) }.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            if (s.logo) androidx.compose.foundation.Image(painterResource(s.icon), null, Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)))
+                            else Icon(painterResource(s.icon), null, tint = if (on) HarborColors.Ink else HarborColors.InkMuted, modifier = Modifier.size(20.dp))
+                            Text(s.label, color = if (on) HarborColors.Ink else HarborColors.InkMuted, fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A band's row: its icon and name, and a caret when it opens (null: a single page). */
+@Composable
+private fun BandHeader(g: Group, on: Boolean, caret: Boolean?, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (on) HarborColors.Raised else Color.Transparent)
+            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(painterResource(g.icon), null, tint = HarborColors.Ink, modifier = Modifier.size(20.dp))
+        Text(g.label, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        if (caret != null) Icon(
+            if (caret) Icons.Rounded.KeyboardArrowDown else Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
+            tint = HarborColors.InkSubtle, modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -470,9 +565,14 @@ private fun SectionBody(
             Section.Profiles -> AccountSection(repository, settings, set)
             Section.HarborAccount -> AccountGate(repository, AccountTab.Harbor) { HarborAccountPage(repository) { openSection(Section.Stremio) } }
             Section.Provider -> AccountGate(repository, AccountTab.Provider) { AccountProviderPage(repository) { openSection(Section.Stremio) } }
-            Section.Stremio -> AccountGate(repository, AccountTab.ProviderAccount) { AccountSection(repository, settings, set) }
+            Section.Stremio -> AccountGate(repository, AccountTab.ProviderAccount) { AccountSection(repository, settings, set, onOpenAddons) }
             Section.Nuvio -> AccountGate(repository, AccountTab.ProviderAccount) { NuvioPage(repository, onOpenAddons) }
-            Section.Trackers -> TrackersPanel(repository, settings, set)
+            Section.TrackTrakt -> TrackersPanel(repository, settings, set, Tracker.Trakt)
+            Section.TrackSimkl -> TrackersPanel(repository, settings, set, Tracker.Simkl)
+            Section.TrackAniList -> TrackersPanel(repository, settings, set, Tracker.AniList)
+            Section.TrackMal -> TrackersPanel(repository, settings, set, Tracker.Mal)
+            Section.TrackLetterboxd -> TrackersPanel(repository, settings, set, Tracker.Letterboxd)
+            Section.TrackPmdb -> TrackersPanel(repository, settings, set, Tracker.PublicMetaDb)
             Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.Intros, Section.UpNext, Section.Trailers,
             Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders -> PlayerSection(repository, settings, set)
             Section.AppLanguage, Section.AudioLanguage, Section.WhatYouSee -> LanguageSection(repository, settings, set)
@@ -566,13 +666,13 @@ private fun languageOptions(extra: List<String> = emptyList()): List<Pair<String
 // ---------------- Account & setup ----------------
 
 @Composable
-private fun AccountSection(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
+private fun AccountSection(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit, onOpenAddons: () -> Unit = {}) {
     val profile by repository.activeProfile.collectAsState()
     val shared by repository.accounts.shared.collectAsState()
     val nuvio by repository.accounts.nuvio.collectAsState()
     val primary = profile?.id == app.harbor.android.data.MAIN_PROFILE
     val privileges = if (shared.provider == "nuvio") shared.nuvioPrivileges else shared.privileges
-    Part("Stremio") { StremioCard(repository) }
+    Part("Stremio") { StremioCard(repository, onOpenAddons) }
     // Nuvio mode: the account's cloud profiles, and which one this profile watches as.
     if (shared.provider == "nuvio" && nuvio.session != null) Part("Profiles") { NuvioProfilesSection(repository) }
     Part("Profiles") { ProfilesCard(repository, canAdd = primary || privileges.canAddProfiles) }
@@ -586,55 +686,130 @@ private fun AccountSection(repository: Repository, settings: AppSettings, set: (
     if (primary) Card("Profiles") { SecondaryPrivilegesCard(repository) }
 }
 
+/** Harbor's Stremio page (account/stremio-card.tsx and synced-addons-card.tsx). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StremioCard(repository: Repository) {
+private fun StremioCard(repository: Repository, onOpenAddons: () -> Unit = {}) {
     val account by repository.account.collectAsState()
+    val addons by repository.addons.collectAsState()
+    val syncedAt by repository.addonsSyncedAt.collectAsState()
     val scope = rememberCoroutineScope()
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var reveal by remember { mutableStateOf(false) }
+    var reauth by remember { mutableStateOf(false) }
+    var syncing by remember { mutableStateOf(false) }
     val current = account
-    SettingsSection(
-        if (current != null) "Your Stremio account" else "Sign in to Stremio",
-        if (current != null) "Your addons and library come from this account." else "Sign in to use your Stremio addons and library.",
-    ) {
-        if (current != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(current.email, color = HarborColors.Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                HGhostButton(onClick = { scope.launch { busy = true; repository.signOut(); busy = false } }, enabled = !busy) { Text("Sign out") }
-            }
-        } else {
-            HTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("Email") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            HTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            error?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp) }
-            HButton(
-                onClick = {
-                    scope.launch {
-                        busy = true
-                        error = runCatching { repository.signIn(email.trim(), password) }.exceptionOrNull()?.message
-                        if (error == null) password = ""
-                        busy = false
+    var userId by remember(current?.authKey) { mutableStateOf<String?>(null) }
+    LaunchedEffect(current?.authKey) { userId = current?.let { runCatching { app.harbor.android.data.StremioApi.userId(it.authKey) }.getOrNull() } }
+
+    val signInForm: @Composable () -> Unit = {
+        HTextField(
+            value = email, onValueChange = { email = it }, label = { Text("Email") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth(),
+        )
+        HTextField(
+            value = password, onValueChange = { password = it }, label = { Text("Password") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        error?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp) }
+        HButton(
+            onClick = {
+                scope.launch {
+                    busy = true
+                    error = runCatching { repository.signIn(email.trim(), password) }.exceptionOrNull()?.message
+                    if (error == null) {
+                        password = ""
+                        reauth = false
                     }
-                },
-                enabled = !busy && email.isNotBlank() && password.isNotEmpty(),
-            ) { Text(if (busy) "Signing in…" else "Sign in") }
+                    busy = false
+                }
+            },
+            enabled = !busy && email.isNotBlank() && password.isNotEmpty(),
+        ) { Text(if (busy) "Signing in…" else "Sign in") }
+    }
+
+    if (current == null) {
+        SettingsSection("Stremio account", "Sign in to sync your library, watch progress, and addons.") { signInForm() }
+        return
+    }
+    SettingsSection("Stremio account", "Library, watch progress, and addon collection sync from this account.") {
+        // "w***************@gmail.com", as Harbor shows it until you ask.
+        val masked = current.email.split('@').let { p -> if (p.size < 2) "*****" else p[0].take(1) + "*".repeat(maxOf(p[0].length - 1, 4)) + "@" + p[1] }
+        AccountInfoRow(Icons.Outlined.Person, "Signed in", if (reveal) current.email else masked, mono = true) {
+            HGhostButton(onClick = { reveal = !reveal }) { Text(if (reveal) "Hide" else "Reveal") }
+            HGhostButton(onClick = { reauth = !reauth }) { Text("Re-authenticate") }
         }
+        if (reauth) Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { signInForm() }
+        AccountInfoRow(Icons.Outlined.Fingerprint, "Stremio ID", "The account identifier Stremio uses for your library and addon collection.") {
+            Text(userId ?: "…", color = HarborColors.InkMuted, fontSize = 13.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+        }
+        AccountInfoRow(Icons.AutoMirrored.Outlined.Logout, "Sign out of Stremio", "Stops syncing on this device. Your library stays safe in your Stremio account.") {
+            HGhostButton(onClick = { scope.launch { busy = true; repository.signOut(); busy = false } }, enabled = !busy) { Text("Sign out", color = Color(0xFFE57373)) }
+        }
+    }
+    SettingsSection("Synced addons", "Harbor pulls your addon collection from Stremio. Manage individual addons in Streaming services.") {
+        val ago = if (syncedAt == 0L) "Not synced yet." else "Last synced ${agoText(System.currentTimeMillis() - syncedAt)}."
+        AccountInfoRow(Icons.Outlined.Extension, "Your collection", ago) {}
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.align(Alignment.CenterVertically)) {
+                Text("${addons.size}", color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                Text("ADDONS SYNCED", color = HarborColors.InkSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                // Their logos, overlapping, as Harbor's stack.
+                Box(Modifier.padding(start = 6.dp)) {
+                    addons.filter { it.manifest.logo != null }.take(6).forEachIndexed { i, a ->
+                        coil.compose.AsyncImage(
+                            a.manifest.logo, a.manifest.name,
+                            modifier = Modifier.padding(start = (i * 22).dp).size(34.dp).clip(RoundedCornerShape(8.dp)).background(HarborColors.Elevated)
+                                .border(1.5.dp, HarborColors.Surface, RoundedCornerShape(8.dp)),
+                        )
+                    }
+                }
+            }
+            Box(Modifier.weight(1f))
+            HButton(onClick = { scope.launch { syncing = true; runCatching { repository.refresh() }; syncing = false } }, enabled = !syncing) {
+                Text(if (syncing) "Syncing…" else "Sync now")
+            }
+            HGhostButton(onClick = onOpenAddons) { Text("Manage") }
+        }
+    }
+}
+
+private fun agoText(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    return when {
+        s < 60 -> "${s}s ago"
+        s < 3600 -> "${s / 60}m ago"
+        s < 86_400 -> "${s / 3600}h ago"
+        else -> "${s / 86_400}d ago"
+    }
+}
+
+/** A Harbor setting row: icon, label and what it is, the actions at the end. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AccountInfoRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, desc: String, mono: Boolean = false, actions: @Composable () -> Unit) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.widthIn(min = 240.dp).weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Icon(icon, null, tint = HarborColors.InkMuted, modifier = Modifier.padding(top = 2.dp).size(20.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(label, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    desc,
+                    color = if (mono) HarborColors.Ink else HarborColors.InkMuted,
+                    fontSize = if (mono) 14.sp else 13.5.sp,
+                    fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else null,
+                )
+            }
+        }
+        Row(Modifier.align(Alignment.CenterVertically), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) { actions() }
     }
 }
 

@@ -304,6 +304,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 }?.let { repository.markAnimeWatched(parts[1], it) }
             }
             refreshLiveSyncLines()
+            // Stremio gets your progress every 30 seconds while you watch (PC TICK_MS).
+            if (state.playing && System.currentTimeMillis() - stremioSyncedAt > 30_000) syncStremio()
             // With Media3, Harbor draws the subtitles; mpv draws its own.
             if (!engine.drawsSubtitles) {
                 val subtitleTime = ((position - state.subDelayMs) * state.subTimeScale).toLong()
@@ -388,6 +390,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun onEnded() {
         state.ended = true
+        // The finish reaches Stremio as "watched".
+        syncStremio()
         stopScrobble()
         // Harbor's "Delete after I finish watching", for a downloaded file.
         if (state.settings.deleteAfterWatching && state.currentUrl.startsWith("file:")) {
@@ -406,7 +410,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             ticker.postDelayed({
                 if (!isFinishing && state.ended) {
                     app.harbor.android.data.PlayQueue.pendingStart.value = next
-                    // The player has its own task: bring Harbor forward, where the next item opens.
+                    // Harbor comes forward (from picture-in-picture too), where the next item opens.
                     startActivity(Intent(this, app.harbor.android.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
                     finish()
                 }
@@ -1285,9 +1289,25 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         state.inPip = isInPictureInPictureMode
         if (!isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-            // The picture-in-picture window was closed.
+            // The picture-in-picture window was closed: the player goes, nothing else opens.
+            pipClosed = true
             finish()
         }
+    }
+
+    private var pipClosed = false
+
+    /**
+     * The player runs in Harbor's own task, but Android moves it to a task of its own for
+     * picture-in-picture. Leaving it from there would land on the home screen, so Harbor comes back.
+     */
+    override fun finish() {
+        if (isTaskRoot && !pipClosed) {
+            runCatching {
+                startActivity(Intent(this, app.harbor.android.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            }
+        }
+        super.finish()
     }
 
     override fun onStop() {
@@ -1419,7 +1439,26 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val duration = engine.durationMs.takeIf { it > 0 } ?: return
         if (state.videoId.isNotEmpty()) {
             repository.saveResume(state.videoId, engine.positionMs, duration, meta, meta?.videos?.firstOrNull { it.id == state.videoId })
+            syncStremio()
         }
+    }
+
+    private var stremioSyncedAt = 0L
+
+    /** Your place in this title, written to your Stremio library too (StremioSync), as Harbor PC does. */
+    private fun syncStremio() {
+        val account = repository.account.value ?: return
+        // In Nuvio mode, progress belongs to the Nuvio account instead.
+        if (repository.accounts.shared.value.provider == "nuvio") return
+        val duration = engine.durationMs.takeIf { it > 0 } ?: return
+        if (state.videoId.isEmpty()) return
+        stremioSyncedAt = System.currentTimeMillis()
+        val episodes = meta?.videos.orEmpty().filter { (it.season ?: 0) >= 1 }
+        val last = episodes.maxWithOrNull(compareBy({ it.season }, { it.episode }))?.id == state.videoId
+        app.harbor.android.data.StremioSync.record(
+            account.authKey, metaId, type, meta?.name ?: state.title, meta?.poster,
+            state.videoId.takeIf { it != metaId }, engine.positionMs, duration, last,
+        )
     }
 
     private fun hideSystemBars() {

@@ -31,6 +31,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         app.harbor.android.ui.HarborFonts.assets = assets
         app.harbor.android.data.Curated.init(this)
         app.harbor.android.data.PlayQueue.init(this)
+        app.harbor.android.data.StremioSync.init(this)
         // The curated lists and last launch's Home rows are parsed now, off the main thread,
         // so the first Home frame doesn't wait on them.
         Thread({

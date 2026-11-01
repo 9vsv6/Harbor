@@ -101,7 +101,7 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
         delay(350) // Wait for typing to pause.
         loading = true
         val sources = repository.metaAddons()
-        results = coroutineScope {
+        val found = coroutineScope {
             sources.flatMap { addon -> addon.manifest.catalogs.filter { it.supportsSearch }.map { addon to it } }
                 .map { (addon, catalog) ->
                     async {
@@ -114,6 +114,14 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
                 .let { lists -> (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } } }
                 .distinctBy { it.id }
         }
+        // Your title and poster languages, as Home's rows have them (TMDB key needed). Shown together
+        // with the results rather than swapped in after, and never holding them up for long.
+        val tmdb = repository.tmdbKey.value
+        results = if (tmdb != null && app.harbor.android.data.Tmdb.localizes) {
+            kotlinx.coroutines.withTimeoutOrNull(2_500) {
+                runCatching { app.harbor.android.data.Tmdb.localizeSearch(tmdb, q, found) }.getOrNull()
+            } ?: found
+        } else found
         loading = false
     }
 

@@ -247,7 +247,7 @@ private fun HarborRoot(repository: Repository) {
                         onGenre = { type, genre -> nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre Movies") },
                     )
                 }
-                composable("calendar") { app.harbor.android.ui.CalendarScreen(repository, onBack = if (wide) null else ({ nav.popBackStack() }), onOpen = { open(it) }) }
+                composable("calendar") { app.harbor.android.ui.CalendarScreen(repository, onBack = if (wide) null else ({ nav.popBackStack() }), onOpen = { open(it) }, onSettings = { nav.selectTab(Tab.Profile) }) }
                 composable("downloads") {
                     app.harbor.android.ui.DownloadsScreen(onBack = if (wide) null else ({ nav.popBackStack() })) { d ->
                         val uri = android.net.Uri.fromFile(java.io.File(d.file)).toString()

@@ -8,7 +8,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -20,14 +22,31 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import java.util.Locale
 
 data class CatalogCollection(val id: Int, val name: String, val cats: List<String>)
 
 /** One of Discover's shelves: a title, Harbor's kicker line, and where its titles come from. */
 data class Shelf(val id: String, val title: String, val kicker: String?, val spec: Tmdb.RowSpec?, val cinemeta: Pair<String, String?>? = null)
 
-/** A day's entry on the calendar: an episode, an anime airing or a film's release. */
-data class CalendarItem(val date: LocalDate, val meta: Meta, val label: String, val kind: String, val videoId: String? = null)
+/**
+ * A day's entry on the calendar: an episode, an anime airing, a show's premiere ("series") or
+ * a film's release. [time] and [atMs] are the local air time when the source has one, as
+ * Harbor's releaseTime / releaseAtMs.
+ */
+data class CalendarItem(
+    val date: LocalDate,
+    val meta: Meta,
+    val label: String,
+    val kind: String,
+    val videoId: String? = null,
+    val time: String? = null,
+    val atMs: Long? = null,
+    val overview: String? = null,
+    val rating: Double = 0.0,
+)
 
 /**
  * Harbor's Discover feed (lib/feed/themes.ts): a daily mix of TMDB shelves with a key, Cinemeta's
@@ -239,24 +258,49 @@ object Discover {
     // ---- Calendar ----
 
     private val gate = Semaphore(4)
+    private val clock = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
 
-    /** New episodes this month of the shows in your library and list (Cinemeta's dates). */
-    suspend fun libraryCalendar(shows: List<Meta>, metaAddons: List<Addon>, month: YearMonth): List<CalendarItem> = coroutineScope {
-        val from = month.atDay(1)
-        val to = month.atEndOfMonth()
-        shows.distinctBy { it.id }.take(60).map { show ->
+    /** A release as its local day, time ("8:00 PM") and instant, as Harbor's calendar-time.ts; a bare date has no time. */
+    private fun whenOf(iso: String?): Triple<LocalDate, String?, Long?>? {
+        if (iso.isNullOrBlank()) return null
+        val day = runCatching { LocalDate.parse(iso.take(10)) }.getOrNull()
+        if ('T' !in iso) return day?.let { Triple(it, null, null) }
+        val at = runCatching { Instant.parse(iso) }.getOrNull() ?: return day?.let { Triple(it, null, null) }
+        val local = at.atZone(ZoneId.systemDefault())
+        return Triple(local.toLocalDate(), local.format(clock), at.toEpochMilli())
+    }
+
+    private fun episodeLabel(season: Int, episode: Int, title: String?) =
+        "S%02dE%02d".format(season, episode) + (title?.takeIf { it.isNotBlank() && !it.startsWith("Episode") }?.let { ": $it" } ?: "")
+
+    /**
+     * My library: this month's episodes of the shows in your library and list, and the saved
+     * films released in it (Cinemeta's dates, as Harbor's calendar-library.ts).
+     */
+    suspend fun libraryCalendar(shows: List<Meta>, metaAddons: List<Addon>, month: YearMonth, movies: List<Meta> = emptyList()): List<CalendarItem> = coroutineScope {
+        val episodes = shows.distinctBy { it.id }.take(60).map { show ->
             async {
                 gate.withPermit {
                     val meta = runCatching { AddonClient.meta(metaAddons, "series", show.id) }.getOrNull() ?: return@withPermit emptyList()
                     meta.videos.orEmpty().mapNotNull { v ->
-                        val date = v.released?.take(10)?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return@mapNotNull null
-                        if (date < from || date > to || (v.season ?: 0) == 0) return@mapNotNull null
-                        val name = v.title?.takeIf { it.isNotBlank() && !it.startsWith("Episode") }
-                        CalendarItem(date, meta.copy(videos = null), "S${v.season} · E${v.episode}" + (name?.let { " · $it" } ?: ""), "episode", v.id)
+                        val (date, time, at) = whenOf(v.released) ?: return@mapNotNull null
+                        if (YearMonth.from(date) != month || (v.season ?: 0) == 0) return@mapNotNull null
+                        CalendarItem(date, meta.copy(videos = null), episodeLabel(v.season ?: 0, v.episode ?: 0, v.title), "episode", v.id, time, at, meta.description, meta.imdbRating?.toDoubleOrNull() ?: 0.0)
                     }
                 }
             }
-        }.awaitAll().flatten()
+        }
+        val films = movies.distinctBy { it.id }.take(40).map { film ->
+            async {
+                gate.withPermit {
+                    val meta = runCatching { AddonClient.meta(metaAddons, "movie", film.id) }.getOrNull() ?: return@withPermit null
+                    val (date, time, at) = whenOf(meta.released ?: meta.releaseDate) ?: return@withPermit null
+                    if (YearMonth.from(date) != month) return@withPermit null
+                    CalendarItem(date, meta.copy(videos = null), "Release", "movie", null, time, at, meta.description, meta.imdbRating?.toDoubleOrNull() ?: 0.0)
+                }
+            }
+        }
+        episodes.awaitAll().flatten() + films.awaitAll().filterNotNull()
     }
 
     /** Home's "New Episodes": the shows with an episode out in the last [days], newest first. */
@@ -270,9 +314,90 @@ object Discover {
             .distinctBy { it.meta.id }
     }
 
+    /**
+     * All upcoming (lib/calendar.ts fetchCalendarRange): TMDB's most popular films and new
+     * shows of the month, plus its upcoming list. Needs a TMDB key.
+     */
+    suspend fun allUpcoming(tmdbKey: String, month: YearMonth): List<CalendarItem> = coroutineScope {
+        val from = month.atDay(1).toString()
+        val to = month.atEndOfMonth().toString()
+        val movies = Tmdb.RowSpec("", "/discover/movie", mapOf("primary_release_date.gte" to from, "primary_release_date.lte" to to, "sort_by" to "popularity.desc", "include_adult" to "false", "with_runtime.gte" to "30"), "movie")
+        val upcoming = Tmdb.RowSpec("", "/movie/upcoming", type = "movie")
+        val shows = Tmdb.RowSpec("", "/discover/tv", mapOf("first_air_date.gte" to from, "first_air_date.lte" to to, "sort_by" to "popularity.desc", "include_adult" to "false"), "series")
+        listOf(movies to 1, movies to 2, upcoming to 1, shows to 1, shows to 2)
+            .map { (spec, page) -> async { runCatching { Tmdb.row(tmdbKey, spec, page) }.getOrDefault(emptyList()) } }
+            .awaitAll().flatten().distinctBy { it.id }
+            .mapNotNull { m ->
+                val date = m.releaseDate?.let { runCatching { LocalDate.parse(it.take(10)) }.getOrNull() } ?: return@mapNotNull null
+                if (YearMonth.from(date) != month) return@mapNotNull null
+                val film = m.type == "movie"
+                CalendarItem(date, m, if (film) "Release" else "Premiere", if (film) "movie" else "series", overview = m.description)
+            }
+    }
+
+    private const val HARBOR_TRAKT = "71ef7ea86333eab031c8830f8200df1f2f16ef9a3335a67470be4950ac80b925"
+
+    private suspend fun traktRows(path: String, clientId: String?, token: String?): List<JsonObject> = runCatching {
+        val request = Request.Builder().url("https://api.trakt.tv$path")
+            .header("trakt-api-version", "2")
+            .header("trakt-api-key", clientId?.takeIf { it.isNotBlank() } ?: HARBOR_TRAKT)
+            .apply { token?.let { header("Authorization", "Bearer $it") } }
+            .build()
+        Net.json.parseToJsonElement(Net.call(request)).jsonArray.mapNotNull { it as? JsonObject }
+    }.getOrDefault(emptyList())
+
+    private fun JsonObject.imdb() = (this["ids"] as? JsonObject)?.string("imdb")
+    private fun JsonObject.rating() = this["rating"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+
+    /**
+     * My Trakt (calendar-sources.ts fetchTraktCalendar): your Trakt calendar's episodes and
+     * films. Trakt's feed only looks forward, up to six months.
+     */
+    suspend fun traktCalendar(auth: TrackerAuth, month: YearMonth): List<CalendarItem> = coroutineScope {
+        val today = LocalDate.now()
+        val ahead = ChronoUnit.MONTHS.between(YearMonth.from(today), month)
+        if (ahead < 0 || ahead > 6) return@coroutineScope emptyList()
+        val days = maxOf(31, (ahead + 1) * 31)
+        val shows = async { traktRows("/calendars/my/shows/$today/$days?extended=full", auth.clientId, auth.accessToken) }
+        val movies = async { traktRows("/calendars/my/movies/$today/$days?extended=full", auth.clientId, auth.accessToken) }
+        val episodes = shows.await().mapNotNull { r ->
+            val show = r["show"] as? JsonObject ?: return@mapNotNull null
+            val ep = r["episode"] as? JsonObject ?: return@mapNotNull null
+            val imdb = show.imdb() ?: return@mapNotNull null
+            val (date, time, at) = whenOf(r.string("first_aired")) ?: return@mapNotNull null
+            if (YearMonth.from(date) != month) return@mapNotNull null
+            val s = ep["season"]?.jsonPrimitive?.intOrNull ?: 0
+            val n = ep["number"]?.jsonPrimitive?.intOrNull ?: 0
+            CalendarItem(date, Trakt.metahubMeta(imdb, "series", show.string("title").orEmpty()), episodeLabel(s, n, ep.string("title")), "episode", "$imdb:$s:$n", time, at, show.string("overview"), show.rating())
+        }
+        val films = movies.await().mapNotNull { r ->
+            val movie = r["movie"] as? JsonObject ?: return@mapNotNull null
+            val imdb = movie.imdb() ?: return@mapNotNull null
+            val (date, time, at) = whenOf(r.string("released")) ?: return@mapNotNull null
+            if (YearMonth.from(date) != month) return@mapNotNull null
+            CalendarItem(date, Trakt.metahubMeta(imdb, "movie", movie.string("title").orEmpty()), "Release", "movie", null, time, at, movie.string("overview"), movie.rating())
+        }
+        episodes + films
+    }
+
+    /** Trakt anticipated (fetchAnticipatedCalendar): Trakt's most anticipated premieres and films landing this month. */
+    suspend fun anticipatedCalendar(clientId: String?, month: YearMonth): List<CalendarItem> = coroutineScope {
+        val shows = async { traktRows("/shows/anticipated?extended=full&limit=100", clientId, null) }
+        val movies = async { traktRows("/movies/anticipated?extended=full&limit=100", clientId, null) }
+        fun items(rows: List<JsonObject>, key: String, dateKey: String, type: String) = rows.mapNotNull { r ->
+            val o = r[key] as? JsonObject ?: return@mapNotNull null
+            val imdb = o.imdb() ?: return@mapNotNull null
+            val date = o.string(dateKey)?.let { runCatching { LocalDate.parse(it.take(10)) }.getOrNull() } ?: return@mapNotNull null
+            if (YearMonth.from(date) != month) return@mapNotNull null
+            val film = type == "movie"
+            CalendarItem(date, Trakt.metahubMeta(imdb, type, o.string("title").orEmpty()), if (film) "Release" else "Premiere", if (film) "movie" else "series", overview = o.string("overview"), rating = o.rating())
+        }
+        items(shows.await(), "show", "first_aired", "series") + items(movies.await(), "movie", "released", "movie")
+    }
+
     private const val AIRING ="query(\$s:Int,\$e:Int,\$p:Int){Page(page:\$p,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater:\$s,airingAt_lesser:\$e,sort:TIME){airingAt episode media{id isAdult popularity format title{english romaji} coverImage{large} bannerImage}}}}"
 
-    /** Anime airing this month (AniList's schedule), opened through the Kitsu addon. */
+    /** Anime, Sub: what AniList's schedule airs this month, opened through the Kitsu addon. */
     suspend fun animeCalendar(month: YearMonth): List<CalendarItem> {
         val zone = ZoneId.systemDefault()
         val start = month.atDay(1).atStartOfDay(zone).toEpochSecond()
@@ -302,10 +427,12 @@ object Discover {
         return media.mapNotNull { (r, m) ->
             val anilist = m["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
             val k = kitsu[anilist] ?: return@mapNotNull null
-            val at = r["airingAt"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null
+            val at = Instant.ofEpochSecond(r["airingAt"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null)
             val title = (m["title"] as? JsonObject)?.let { it.string("english") ?: it.string("romaji") } ?: return@mapNotNull null
+            val local = at.atZone(zone)
+            val episode = r["episode"]?.jsonPrimitive?.intOrNull ?: 0
             CalendarItem(
-                Instant.ofEpochSecond(at).atZone(zone).toLocalDate(),
+                local.toLocalDate(),
                 Meta(
                     id = "kitsu:$k",
                     type = if (m.string("format") == "MOVIE") "movie" else "series",
@@ -313,26 +440,42 @@ object Discover {
                     poster = (m["coverImage"] as? JsonObject)?.string("large"),
                     background = m.string("bannerImage"),
                 ),
-                "Episode ${r["episode"]?.jsonPrimitive?.intOrNull ?: ""}",
+                episodeLabel(1, episode, null),
                 "anime",
+                "kitsu:$k:$episode",
+                local.format(clock),
+                at.toEpochMilli(),
             )
         }
     }
 
-    /** The month's film releases (TMDB, with a key). */
-    suspend fun movieCalendar(tmdbKey: String, month: YearMonth): List<CalendarItem> {
-        val spec = Tmdb.RowSpec(
-            "",
-            "/discover/movie",
-            mapOf(
-                "primary_release_date.gte" to month.atDay(1).toString(),
-                "primary_release_date.lte" to month.atEndOfMonth().toString(),
-                "sort_by" to "popularity.desc",
-                "with_release_type" to "2|3",
-            ),
-            "movie",
-        )
-        return (1..2).flatMap { page -> runCatching { Tmdb.row(tmdbKey, spec, page) }.getOrDefault(emptyList()) }
-            .mapNotNull { m -> m.releaseDate?.let { runCatching { LocalDate.parse(it.take(10)) }.getOrNull() }?.let { CalendarItem(it, m, "In cinemas", "movie") } }
+    /** Anime, Dub (fetchAnimeDubCalendar): this month's English dub episodes from AniSchedule's feed. */
+    suspend fun animeDubCalendar(month: YearMonth): List<CalendarItem> {
+        val feed = runCatching { Net.json.parseToJsonElement(Net.get("https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/raw/dub-schedule.json")).jsonArray }
+            .getOrNull().orEmpty().mapNotNull { it as? JsonObject }
+        data class Dub(val entry: JsonObject, val media: JsonObject, val date: LocalDate, val time: String?, val at: Long?, val episode: Int)
+        val rows = feed.mapNotNull { e ->
+            val m = (e["media"] as? JsonObject)?.get("media") as? JsonObject ?: return@mapNotNull null
+            if (m["isAdult"]?.jsonPrimitive?.content == "true" || m.string("format") == "MOVIE") return@mapNotNull null
+            val episode = e["episodeNumber"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val (date, time, at) = whenOf(e.string("episodeDate")) ?: return@mapNotNull null
+            if (YearMonth.from(date) != month) return@mapNotNull null
+            Dub(e, m, date, time, at, episode)
+        }
+        val kitsu = AnimeInfo.kitsuFor(rows.mapNotNull { it.media["id"]?.jsonPrimitive?.intOrNull }.distinct())
+        return rows.mapNotNull { d ->
+            val k = d.media["id"]?.jsonPrimitive?.intOrNull?.let { kitsu[it] } ?: return@mapNotNull null
+            val title = (d.media["title"] as? JsonObject)?.let { it.string("english") ?: it.string("romaji") } ?: d.entry.string("english") ?: d.entry.string("romaji") ?: return@mapNotNull null
+            val cover = d.media["coverImage"] as? JsonObject
+            CalendarItem(
+                d.date,
+                Meta(id = "kitsu:$k", type = "series", name = title, poster = cover?.string("extraLarge") ?: cover?.string("medium"), background = d.media.string("bannerImage")),
+                episodeLabel(1, d.episode, null),
+                "anime",
+                "kitsu:$k:${d.episode}",
+                d.time,
+                d.at,
+            )
+        }.distinctBy { it.videoId }
     }
 }

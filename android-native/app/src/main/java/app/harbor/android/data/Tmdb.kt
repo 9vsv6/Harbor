@@ -310,6 +310,45 @@ object Tmdb {
      */
     val localizes: Boolean get() = base(descLang) != "en" || titleLang?.let { base(it) != "en" } == true || posterBase != "en"
 
+    /**
+     * Addon search results (IMDb titles, in English) in your title and poster languages: TMDB's own
+     * search for the same words, asked in each language, matched to them by type, title and year.
+     * Titles TMDB doesn't find keep the addon's title and poster.
+     */
+    suspend fun localizeSearch(key: String, query: String, metas: List<Meta>): List<Meta> {
+        val langs = listOfNotNull(titleLang, posterLang).filter { base(it) != base(language) }.distinctBy { base(it) }
+        if (langs.isEmpty() || metas.isEmpty()) return metas
+        val params = mapOf("query" to query, "include_adult" to "false")
+        val (main, pages) = coroutineScope {
+            val first = async { get(key, "/search/multi", params) }
+            val others = langs.map { l -> async { base(l) to runCatching { get(key, "/search/multi", params, l) }.getOrNull() } }
+            first.await() to others.awaitAll().toMap()
+        }
+        fun results(o: JsonObject?) = (o?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }
+        fun keyOf(o: JsonObject) = "${o.string("media_type")}:${o["id"]?.jsonPrimitive?.intOrNull}"
+        fun byKey(lang: String?) = results(lang?.let { pages[base(it)] }).associateBy(::keyOf)
+        val titles = byKey(titleLang)
+        val art = byKey(posterLang)
+        fun norm(s: String?) = s?.lowercase()?.replace(Regex("""[^\p{L}\p{N}]"""), "")?.takeIf { it.isNotEmpty() }
+        val candidates = results(main).filter { it.string("media_type") == "movie" || it.string("media_type") == "tv" }
+        return metas.map { meta ->
+            val kind = when (meta.type) { "movie" -> "movie"; "series" -> "tv"; else -> return@map meta }
+            val name = norm(meta.name) ?: return@map meta
+            val hit = candidates.firstOrNull { c ->
+                val year = (c.string("release_date") ?: c.string("first_air_date"))?.take(4)?.takeIf { it.isNotEmpty() }
+                c.string("media_type") == kind &&
+                    (norm(c.string("title") ?: c.string("name")) == name || norm(c.string("original_title") ?: c.string("original_name")) == name) &&
+                    (meta.year == null || year == null || meta.year == year)
+            } ?: return@map meta
+            val t = titles[keyOf(hit)]
+            val a = art[keyOf(hit)]
+            meta.copy(
+                name = (if (titleLang != null) (t?.string("title") ?: t?.string("name"))?.takeIf { it.isNotBlank() } else null) ?: meta.name,
+                poster = a?.string("poster_path")?.let { "$IMAGES/w342$it" } ?: meta.poster,
+            )
+        }
+    }
+
     /** Details already fetched this session, per title and languages: a page opened again shows them at once. */
     private val detailsCache = object : LinkedHashMap<String, TmdbDetails>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TmdbDetails>?) = size > 40
@@ -373,7 +412,25 @@ object Tmdb {
             .distinctBy { it.string("provider_name") }
             .mapNotNull { p -> p.string("provider_name")?.let { WatchProvider(it, p.string("logo_path")?.let { l -> "$IMAGES/w92$l" }, watchLink) } }
         val forced = if (kind == "movie") "movie" else "series"
-        fun rail(name: String) = (d[name]?.jsonObject?.get("results") as? JsonArray).orEmpty().mapNotNull { toMeta(it.jsonObject, forced) }
+        // More Like This and You Might Also Like in your title and poster languages, as Home's rows are:
+        // the two lists asked again in each language that differs.
+        val railPages = coroutineScope {
+            listOfNotNull(titleLang, posterLang).filter { base(it) != base(language) }.distinctBy { base(it) }.map { l ->
+                async {
+                    base(l) to runCatching { get(key, "/$kind/$id", mapOf("append_to_response" to "recommendations,similar"), l) }.getOrNull()
+                }
+            }.awaitAll().toMap()
+        }
+        fun railIn(lang: String?, name: String): Map<Int?, JsonObject> = lang?.let { railPages[base(it)] }?.get(name)?.jsonObject?.get("results")
+            .let { it as? JsonArray }.orEmpty().map { it.jsonObject }.associateBy { it["id"]?.jsonPrimitive?.intOrNull }
+        fun rail(name: String): List<Meta> {
+            val titles = railIn(titleLang, name)
+            val art = railIn(posterLang, name)
+            return (d[name]?.jsonObject?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { item ->
+                val itemId = item["id"]?.jsonPrimitive?.intOrNull
+                toMeta(item, forced, titleFrom = titles[itemId], artFrom = art[itemId])
+            }
+        }
         val runtime = d["runtime"]?.jsonPrimitive?.intOrNull ?: (d["episode_run_time"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.intOrNull
         val originalLanguage = d.string("original_language")?.let { Locale(it).getDisplayLanguage(Locale.getDefault()).ifBlank { null } }
         return TmdbDetails(

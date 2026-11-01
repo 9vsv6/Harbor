@@ -364,6 +364,10 @@ class Repository(private val context: Context) {
         }
     }
 
+    private val _addonsSyncedAt = MutableStateFlow(0L)
+    /** When the addon collection last came from the account (Settings → Stremio's "Last synced"). */
+    val addonsSyncedAt: StateFlow<Long> = _addonsSyncedAt.asStateFlow()
+
     /** Reloads the addon collection and the library for the current account. */
     suspend fun refresh() {
         val account = _account.value
@@ -387,6 +391,7 @@ class Repository(private val context: Context) {
         if (fetched.isNotEmpty()) runCatching { cache.writeText(kotlinx.serialization.json.JsonArray(fetched).toString()) }
         _addons.value = decodeCollection(rawCollection)
         _library.value = account?.let { runCatching { StremioApi.library(it.authKey) }.getOrNull() }.orEmpty()
+        if (remote != null) _addonsSyncedAt.value = System.currentTimeMillis()
     }
 
     // ---- Addon collection, managed like Harbor's Addons page ----

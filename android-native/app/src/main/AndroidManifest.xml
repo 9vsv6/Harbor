@@ -57,8 +57,6 @@
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:launchMode="singleTask"
-            android:taskAffinity="app.harbor.android.player"
-            android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" />
         <receiver
             android:name=".data.AppUpdate$InstallResultReceiver"
