@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -281,6 +283,8 @@ fun DetailScreen(
             failed -> EmptyState("Couldn't load this title", "None of your addons has details for it.")
             else -> Loading(Modifier.padding(top = 160.dp))
         }
+        // TV: Big Picture's top bar sits over the page and the remote's Back key goes back.
+        if (!app.harbor.android.perf.Perf.isTv) {
         // Past the hero, a solid bar keeps the page out from under the status bar and Back.
         if (scrolled) Box(Modifier.fillMaxWidth().background(HarborColors.Canvas.copy(alpha = 0.97f)).statusBarsPadding().height(60.dp))
         // Harbor's "← Back".
@@ -293,10 +297,11 @@ fun DetailScreen(
             Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(18.dp))
             Text("Back", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
+        }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun DetailBody(
     repository: Repository,
@@ -394,18 +399,79 @@ private fun DetailBody(
     val seasonList = seasonItems(seasons, videos, details, if (showExplorer) explorer else null)
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        // TV: Harbor PC's Big Picture title page (ui/tv/TvDetail.kt) over the title's ambient backdrop.
+        val tv = app.harbor.android.perf.Perf.isTv
         val wide = maxWidth >= 720.dp
-        val side = if (wide) 48.dp else 20.dp
+        val side = if (tv) app.harbor.android.ui.tv.TvInsets.Gutter else if (wide) 48.dp else 20.dp
         val heroHeight = if (wide) (maxHeight * 0.78f).coerceAtMost(680.dp) else (maxHeight * 0.68f).coerceIn(420.dp, 620.dp)
-        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 110.dp), verticalArrangement = Arrangement.spacedBy(30.dp)) {
-            item(key = "hero") { Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play, holdText) { onStreams(meta.id, meta.name) } }
-            (details?.overview ?: meta.description)?.takeIf { !holdText }?.let { synopsis ->
+        // The screen, not this box: the page can be measured shorter while it settles in.
+        val screenH = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.toFloat()
+        val unit = (screenH / 540f).coerceIn(0.8f, 2.2f)
+        val tvPlay = remember { androidx.compose.ui.focus.FocusRequester() }
+        // Big Picture's scrollHeroIntoView: while the hero's buttons hold focus, the page sits at its top.
+        val heroScope = androidx.compose.runtime.rememberCoroutineScope()
+        androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.tv.LocalUnit provides unit) {
+        if (tv) app.harbor.android.ui.tv.TvAmbient(meta.copy(background = details?.backdrop ?: meta.background ?: meta.poster))
+        val pageScroll = with(androidx.compose.ui.platform.LocalDensity.current) {
+            remember(unit) { app.harbor.android.ui.tv.tvPageScroll((110 * unit).dp.toPx(), (48 * unit).dp.toPx()) }
+        }
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides (if (tv) pageScroll else androidx.compose.foundation.gestures.LocalBringIntoViewSpec.current),
+        ) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 110.dp), verticalArrangement = Arrangement.spacedBy(if (tv) 26.dp else 30.dp)) {
+            item(key = "hero") {
+                if (tv) Box(Modifier.onFocusChanged { if (it.hasFocus) heroScope.launch { listState.animateScrollToItem(0) } }) {
+                    val uri = LocalUriHandler.current
+                    val playLabel = when {
+                        isSeries && next != null && repository.resumeFor(next.id, meta.id) > 0 -> "Resume S${next.season}:E${next.episode}"
+                        isSeries && next != null -> "Play S${next.season}:E${next.episode}"
+                        repository.resumeFor(meta.id, meta.id) > 0 -> "Resume"
+                        else -> "Play"
+                    }
+                    val tvScores = buildList {
+                        meta.imdbRating?.takeIf { it.isNotBlank() }?.let { add("IMDb" to it) }
+                        scores.filter { it.source != "IMDb" }.forEach { add(it.source to it.value) }
+                    }
+                    val facts = listOfNotNull(
+                        meta.year,
+                        if (isSeries) meta.videos.orEmpty().mapNotNull { it.season }.filter { it > 0 }.distinct().size.takeIf { it > 0 }?.let { if (it == 1) "1 season" else "$it seasons" }
+                        else (details?.runtimeMinutes?.let { "$it min" } ?: meta.runtime),
+                        (details?.genres?.takeIf { it.isNotEmpty() } ?: meta.genres.orEmpty()).take(3).takeIf { it.isNotEmpty() && !holdText }?.joinToString(", "),
+                    )
+                    app.harbor.android.ui.tv.TvDetailHero(
+                        meta, details?.logo ?: meta.logoUrl, details?.tagline, tvScores, facts, details?.overview ?: meta.description, holdText,
+                        height = (screenH * 0.74f).dp,
+                    ) {
+                        TvHeroActions(
+                            repository, meta, details, isSeries, playLabel, 0f, play,
+                            trailer = (meta.trailerYouTube ?: details?.trailerYouTube)?.let { yt -> { uri.openUri("https://www.youtube.com/watch?v=$yt") } },
+                            download = { onStreams(meta.id, meta.name) },
+                            playFocus = tvPlay,
+                        )
+                    }
+                    LaunchedEffect(Unit) { runCatching { tvPlay.requestFocus() } }
+                } else Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play, holdText) { onStreams(meta.id, meta.name) }
+            }
+            // TV: Big Picture's episode strip comes straight after the hero (bp-detail's row order).
+            if (tv && isSeries && seasons.isNotEmpty()) item(key = "tv-episodes") {
+                val counts = remember(videos) { videos.groupingBy { it.season ?: -1 }.eachCount() }
+                app.harbor.android.ui.tv.TvEpisodes(
+                    seasons, counts, season,
+                    onSeason = { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() },
+                    episodes = episodes.sortedBy { it.episode ?: 0 },
+                    backdrop = details?.backdrop ?: meta.background,
+                    rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
+                    onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
+                )
+            }
+            if (!tv) (details?.overview ?: meta.description)?.takeIf { !holdText }?.let { synopsis ->
                 item(key = "synopsis") { Synopsis(synopsis, details?.tagline, side) }
             }
             anime?.nextAiring?.let { (at, ep) -> item(key = "airing") { AnimeAiringBanner(at, ep, side) } }
             // Watch on: TMDB's providers for your region; for anime, Kitsu's streaming links.
             details?.watchOn.orEmpty().ifEmpty { animeStreamers }.takeIf { it.isNotEmpty() }?.let { providers ->
-                item(key = "watch") {
+                if (tv) item(key = "watch") { app.harbor.android.ui.tv.TvWatchOnRow(providers) { uri.openUri(it) } }
+                else item(key = "watch") {
                     Column(Modifier.padding(horizontal = side), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Eyebrow("Watch on")
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -445,13 +511,13 @@ private fun DetailBody(
                 }
             }
             val crew = crewOf(meta, details)
-            if (crew.isNotEmpty()) item(key = "crew") { CrewGrid(crew, if (wide) 3 else 2, side) }
-            if (showExplorer) {
+            if (crew.isNotEmpty()) item(key = "crew") { if (tv) app.harbor.android.ui.tv.TvCrewRow(crew) else CrewGrid(crew, if (wide) 3 else 2, side) }
+            if (showExplorer && !tv) {
                 item(key = "season-explorer") {
                     SeasonExplorer(seasonList, explorer, season, meta.background, side, wide) { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() }
                 }
             }
-            if (isSeries && seasons.isNotEmpty()) {
+            if (isSeries && seasons.isNotEmpty() && !tv) {
                 // Harbor's episode section: the season's tools, then each episode as a row of this list.
                 episodesSection(
                     episodeQuery, repository, meta, videos, seasons, season,
@@ -467,10 +533,10 @@ private fun DetailBody(
                 )
             }
             val cast = details?.cast?.takeIf { it.isNotEmpty() } ?: meta.castNames.map { CastMember(it, null, null) }
-            if (cast.isNotEmpty()) item(key = "cast") { CastRail(cast, details?.castCount?.takeIf { it > 0 } ?: cast.size, side, wide) }
+            if (cast.isNotEmpty()) item(key = "cast") { if (tv) app.harbor.android.ui.tv.TvCastRow(cast) else CastRail(cast, details?.castCount?.takeIf { it > 0 } ?: cast.size, side, wide) }
             anime?.characters?.takeIf { it.isNotEmpty() }?.let { item(key = "characters") { AnimeCharactersRail(it, side, wide) } }
-            details?.recommendations?.takeIf { it.isNotEmpty() }?.let { item(key = "more") { Rail("More Like This", it, onOpen) } }
-            details?.similar?.takeIf { it.isNotEmpty() }?.let { item(key = "also") { Rail("You Might Also Like", it, onOpen) } }
+            details?.recommendations?.takeIf { it.isNotEmpty() }?.let { item(key = "more") { if (tv) app.harbor.android.ui.tv.TvPosterRow("More Like This", it, onOpen) else Rail("More Like This", it, onOpen) } }
+            details?.similar?.takeIf { it.isNotEmpty() }?.let { item(key = "also") { if (tv) app.harbor.android.ui.tv.TvPosterRow("You Might Also Like", it, onOpen) else Rail("You Might Also Like", it, onOpen) } }
             anime?.related?.takeIf { it.isNotEmpty() }?.let { nodes ->
                 item(key = "related") {
                     AnimeRelatedRail(nodes, relatedKitsu, side) { node, kitsu ->
@@ -504,6 +570,9 @@ private fun DetailBody(
             if (HarborDisplay.settings.showAnilistComments && anilistThreads.isNotEmpty()) {
                 item(key = "anilist-comments") { AniListThreadsSection(anilistThreads, "https://anilist.co/anime/${anime?.anilistId}/discussions", side) }
             }
+        }
+        }
+        if (tv) app.harbor.android.ui.tv.HintBar(Modifier.align(Alignment.BottomEnd), listOf("OK" to "Select", "Back" to "Back"))
         }
     }
 }

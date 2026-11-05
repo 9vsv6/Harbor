@@ -361,6 +361,8 @@ data class AppSettings(
     val spooktoberDismissed: Boolean = false,
     val showTop10: Boolean = false,
     val heroAutoRotate: Boolean = true,
+    /** Big Picture's Edge margin on a TV: the share of the screen kept clear for overscan (0 to 0.05). */
+    val tvOverscan: Float = 0.05f,
     val hideUnreleased: Boolean = false,
     val hideAnime: Boolean = false,
     val traktInContinueWatching: Boolean = true,

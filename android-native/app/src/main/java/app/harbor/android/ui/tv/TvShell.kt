@@ -26,7 +26,10 @@ import app.harbor.android.ui.BrowseView
 import app.harbor.android.ui.HarborColors
 
 /** The pages the TV bar sits over: its own destinations. Settings keeps its sidebar; sub-pages keep their headers. */
-private val barRoutes = setOf(Tab.Home.route, Tab.Search.route, Tab.MyStuff.route, "discover", "collections", "calendar", "downloads", "plugins")
+private val barRoutes = setOf(Tab.Home.route, Tab.Search.route, Tab.MyStuff.route, "discover", "collections", "calendar", "downloads", "plugins", DETAIL_ROUTE, Tab.Profile.route)
+
+/** The title page: Big Picture keeps its bar over it, with the backdrop running full-bleed underneath. */
+private const val DETAIL_ROUTE = "detail/{type}/{id}"
 
 /**
  * The TV chrome: Big Picture's top bar over the page. Home runs full-bleed under the bar (its hero
@@ -48,6 +51,8 @@ internal fun TvShell(
     var barFocused by remember { mutableStateOf(false) }
     val showBar = route in barRoutes
     val home = route == Tab.Home.route
+    // Pages that draw their own ambient backdrop under the bar.
+    val fullBleed = home || route == DETAIL_ROUTE || route?.startsWith("streams/") == true
 
     // A removed bar sends no focus change, so forget its focus when it hides.
     androidx.compose.runtime.LaunchedEffect(showBar) { if (!showBar) barFocused = false }
@@ -58,7 +63,7 @@ internal fun TvShell(
         Box(
             Modifier.fillMaxSize()
                 .then(
-                    if (home) Modifier
+                    if (fullBleed) Modifier
                     else Modifier.padding(
                         start = TvInsets.SafeX, end = TvInsets.SafeX, bottom = TvInsets.SafeY,
                         top = if (showBar) TvInsets.BarHeight else TvInsets.SafeY,
@@ -71,12 +76,16 @@ internal fun TvShell(
             // Home's backdrop runs under the bar: one Canvas-to-clear fill keeps the tabs legible.
             // Always drawn (one flat gradient is cheap, and without it the hero's meta row collides
             // with the icons at 3 m even on the low-end profile).
-            if (home) {
-                // Solid behind the bar itself, then a short fade: keeps scrolled content from
-                // colliding with the icons at 3 m without painting a heavy layer.
+            if (fullBleed) {
+                // Big Picture's TOP_FADE: the backdrop still shows through under the bar. The title
+                // page scrolls its text up under the bar, so there the bar's band is near solid.
+                val detail = route == DETAIL_ROUTE
                 Box(
-                    Modifier.fillMaxWidth().height(160.dp)
-                        .background(Brush.verticalGradient(0f to HarborColors.Canvas, 0.55f to HarborColors.Canvas, 1f to Color.Transparent)),
+                    Modifier.fillMaxWidth().height(TvInsets.BarHeight + if (detail) 36.dp else 24.dp)
+                        .background(
+                            if (detail) Brush.verticalGradient(0f to Color(0xF20E0F11), 0.72f to Color(0xD90E0F11), 1f to Color.Transparent)
+                            else Brush.verticalGradient(0f to Color(0xCC0E0F11), 1f to Color.Transparent),
+                        ),
                 )
             }
             TvNavBar(

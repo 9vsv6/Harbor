@@ -1752,6 +1752,12 @@ private fun BackupSection(repository: Repository) {
             HGhostButton(onClick = { importer.launch(arrayOf("application/json", "*/*")) }) { Text("Restore") }
         }
     }
+    // Harbor to Harbor on the home network: this phone's setup straight onto a TV.
+    var sendToTv by remember { mutableStateOf(false) }
+    SettingsSection("Send to a TV", "Sets up Harbor on a TV from this phone: your sign-ins, settings, lists and progress go straight over your home network, sealed with the code the TV shows. Nothing goes through the internet.") {
+        HButton(onClick = { sendToTv = true }) { Text("Send to a TV") }
+    }
+    if (sendToTv) SendToTvDialog(repository, null) { sendToTv = false }
 }
 
 // ---------------- Help & about ----------------

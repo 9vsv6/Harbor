@@ -48,6 +48,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="harbor" android:host="mal" />
             </intent-filter>
+            <!-- A TV's setup QR code: opens Harbor on the phone to send its setup to that TV. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="harbor" android:host="send-to-tv" />
+            </intent-filter>
         </activity>
         <activity
             android:name=".player.PlayerActivity"

@@ -118,6 +118,13 @@ class MainActivity : ComponentActivity() {
     /** stremio://…/manifest.json from an addon's configure page: open the Addons page to install it. */
     private fun handleLink(intent: Intent?) {
         intent?.data?.takeIf { it.scheme == "harbor" && it.host == "mal" }?.let { app.harbor.android.data.Mal.incoming.value = it.toString(); return }
+        // A TV's setup QR code, scanned with the phone's camera: ask to send this phone's setup to it.
+        intent?.data?.takeIf { it.scheme == "harbor" && it.host == "send-to-tv" }?.let { uri ->
+            val host = uri.getQueryParameter("h")?.takeIf { h -> Regex("^[0-9a-fA-F.:]{3,45}$").matches(h) } ?: return
+            val port = uri.getQueryParameter("p")?.toIntOrNull()?.takeIf { it in 1024..65535 } ?: app.harbor.android.data.PhoneSetup.PORT
+            app.harbor.android.ui.IncomingTvLink.value = app.harbor.android.ui.TvLink(host, port, uri.getQueryParameter("c").orEmpty().take(16))
+            return
+        }
         val link = intent?.data?.takeIf { it.scheme == "stremio" } ?: return
         (application as HarborApp).repository.pendingInstall.value = link.toString()
     }
@@ -198,6 +205,10 @@ private fun HarborRoot(repository: Repository) {
     }
 
     // A title picked on the player's "More like this" screen.
+    // A TV's setup QR code opened this app: offer to send the setup there.
+    val tvLink by app.harbor.android.ui.IncomingTvLink.collectAsState()
+    tvLink?.let { link -> app.harbor.android.ui.SendToTvDialog(repository, link) { app.harbor.android.ui.IncomingTvLink.value = null } }
+
     val pendingOpen by repository.pendingOpen.collectAsState()
     LaunchedEffect(pendingOpen) {
         val (meta, play) = pendingOpen ?: return@LaunchedEffect
@@ -325,7 +336,11 @@ private fun HarborRoot(repository: Repository) {
                         },
                     )
                 }
-                composable(Tab.Profile.route) { SettingsScreen(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) }) }
+                composable(Tab.Profile.route) {
+                    // TV: Big Picture's settings (ui/tv/TvSettings.kt); "Every setting" opens these.
+                    if (tv) app.harbor.android.ui.tv.TvSettings(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) })
+                    else SettingsScreen(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) })
+                }
                 composable("addons") { AddonsScreen(repository, onBack = { nav.popBackStack() }) }
                 composable(
                     "detail/{type}/{id}",

@@ -1,5 +1,15 @@
 package app.harbor.android.ui
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -179,8 +189,12 @@ fun StreamsScreen(
     // Auto-play once per visit: coming back from the player shows the list instead.
     var autoPlayed by rememberSaveable(videoId) { mutableStateOf(false) }
 
+    // TV: the source whose link is being fetched, for Big Picture's Connecting screen.
+    var connecting by remember { mutableStateOf<RankedStream?>(null) }
+
     fun play(item: RankedStream) {
         val stream = item.stream
+        connecting = item
         repository.rememberStream(metaId, item.addon.manifest.id, Playback.streamKey(stream))
         job?.cancel()
         error = null
@@ -190,6 +204,7 @@ fun StreamsScreen(
                 .onSuccess { onPlay(it) }
                 .onFailure { error = it.message }
             status = null
+            connecting = null
         }
     }
 
@@ -252,6 +267,19 @@ fun StreamsScreen(
 
     val listState = rememberLazyListState()
     val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
+
+    // TV: Harbor PC's Big Picture Sources page, from the same list and filters.
+    if (app.harbor.android.perf.Perf.isTv) {
+        TvSourcesPage(
+            title, meta, all, narrowed, shown, loading, facetRows, facets, { facets = it }, addonFilter, { addonFilter = it }, mode, { mode = it },
+            remembered, debrid, status, error, connecting,
+            onCancel = { job?.cancel(); status = null; connecting = null },
+            onRefresh = { refreshKey++; failures = emptyList() },
+            onBack = onBack,
+            onPlay = { play(it) },
+        )
+        return
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
         val wide = maxWidth >= 600.dp
@@ -639,4 +667,311 @@ private fun facetBadge(facet: Facet, value: String): Int? = when (facet) {
     Facet.Hdr -> mapOf("HDR" to app.harbor.android.R.drawable.badge_hdr, "SDR" to app.harbor.android.R.drawable.badge_sdr)[value]
     Facet.Audio -> mapOf("Atmos" to app.harbor.android.R.drawable.badge_atmos, "TrueHD" to app.harbor.android.R.drawable.badge_truehd, "DTS-HD" to app.harbor.android.R.drawable.badge_dtshd, "DTS" to app.harbor.android.R.drawable.badge_dts, "DD+" to app.harbor.android.R.drawable.badge_ddplus)[value]
     Facet.Availability -> null
+}
+
+// ---------------- TV: Big Picture's Sources page (bp-streams.tsx, bp-stream-row.tsx, bp-stream-chips.tsx) ----------------
+
+private fun resolutionLabel(value: String) = if (value == "4K") "4K UHD" else value
+
+/** The size a source names in its text ("20.58 GB"), for the connecting screen. */
+internal fun streamSize(stream: Stream): String? {
+    val text = listOfNotNull(stream.name, stream.title, stream.description).joinToString(" ")
+    return Regex("""(\d+(?:[.,]\d+)?)\s?(GB|MB|TB)\b""", RegexOption.IGNORE_CASE).find(text)?.let { "${it.groupValues[1]} ${it.groupValues[2].uppercase()}" }
+}
+
+/**
+ * Big Picture's source picker for a television: the title and count, one row of chips (Back, the
+ * resolutions, Cached, the addon, the format menus, Direct/debrid only, Refresh) and a wide card per
+ * source. OK on a card plays it; while its link is fetched the Connecting screen covers the page.
+ */
+@Composable
+private fun TvSourcesPage(
+    title: String,
+    meta: Meta?,
+    all: List<RankedStream>?,
+    narrowed: List<RankedStream>,
+    shown: List<RankedStream>,
+    loading: Boolean,
+    facetRows: List<FacetRow>,
+    facets: Map<Facet, String>,
+    onFacets: (Map<Facet, String>) -> Unit,
+    addonFilter: String?,
+    onAddon: (String?) -> Unit,
+    mode: SourceMode,
+    onMode: (SourceMode) -> Unit,
+    remembered: Pair<String, String?>?,
+    debrid: app.harbor.android.data.DebridAccount?,
+    status: String?,
+    error: String?,
+    connecting: RankedStream?,
+    onCancel: () -> Unit,
+    onRefresh: () -> Unit,
+    onBack: () -> Unit,
+    onPlay: (RankedStream) -> Unit,
+) {
+    val name = meta?.name?.takeIf { it.isNotBlank() } ?: title.substringBefore(" · ")
+    val unit = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp / 540f).coerceIn(0.8f, 2.2f)
+    var menu by remember { mutableStateOf<Facet?>(null) }
+    var addonMenu by remember { mutableStateOf(false) }
+    val firstCard = remember { androidx.compose.ui.focus.FocusRequester() }
+    androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.tv.LocalUnit provides unit) {
+        Box(Modifier.fillMaxSize().background(app.harbor.android.ui.tv.Void)) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = app.harbor.android.ui.tv.TvInsets.Gutter, end = app.harbor.android.ui.tv.TvInsets.Gutter, top = app.harbor.android.ui.tv.u(24f), bottom = app.harbor.android.ui.tv.u(40f)),
+                verticalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(6f)),
+            ) {
+                item(key = "title") {
+                    Column(verticalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(3f))) {
+                        Text("Sources", color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(16f), fontWeight = FontWeight.SemiBold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair))
+                        val count = if (all == null) "Looking for sources…" else "${shown.size} of ${all.size} sources" + if (loading) " · still looking" else ""
+                        Text("$name  ·  $count", color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(9f), fontWeight = FontWeight.Medium)
+                    }
+                }
+                item(key = "chips") {
+                    val resolution = facetRows.firstOrNull { it.facet == Facet.Resolution }
+                    val availability = facetRows.firstOrNull { it.facet == Facet.Availability }
+                    LazyRow(
+                        Modifier.padding(top = app.harbor.android.ui.tv.u(14f), bottom = app.harbor.android.ui.tv.u(14f)),
+                        horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(7f)),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        item { TvChip("Back", null, false, icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, onClick = onBack) }
+                        item { TvDivider() }
+                        item { TvChip("All", narrowed.size, facets[Facet.Resolution] == null) { onFacets(facets - Facet.Resolution) } }
+                        resolution?.options?.forEach { (value, count) ->
+                            item(key = "res-$value") {
+                                TvChip(resolutionLabel(value), count, facets[Facet.Resolution] == value) {
+                                    onFacets(if (facets[Facet.Resolution] == value) facets - Facet.Resolution else facets + (Facet.Resolution to value))
+                                }
+                            }
+                        }
+                        availability?.options?.firstOrNull { it.first == "Cached" }?.let { (value, count) ->
+                            item(key = "cached") {
+                                TvChip("Cached", count, facets[Facet.Availability] == value) {
+                                    onFacets(if (facets[Facet.Availability] == value) facets - Facet.Availability else facets + (Facet.Availability to value))
+                                }
+                            }
+                        }
+                        item { TvDivider() }
+                        item {
+                            val addonName = all.orEmpty().firstOrNull { it.addon.manifest.id == addonFilter }?.addon?.manifest?.name
+                            TvChip(addonName ?: "Every addon", null, addonFilter != null) { addonMenu = true }
+                        }
+                        listOf(Facet.Source, Facet.Codec, Facet.Hdr, Facet.Audio).forEach { facet ->
+                            val row = facetRows.firstOrNull { it.facet == facet } ?: return@forEach
+                            if (row.options.size < 2 && row.value == null) return@forEach
+                            item(key = "facet-${facet.name}") { TvChip(row.value ?: facet.label, null, row.value != null) { menu = facet } }
+                        }
+                        item { TvChip("Direct/debrid only", null, mode == SourceMode.Direct) { onMode(if (mode == SourceMode.Direct) SourceMode.Both else SourceMode.Direct) } }
+                        item { TvDivider() }
+                        item { TvChip("Refresh", null, false, icon = Icons.Rounded.Refresh, onClick = onRefresh) }
+                    }
+                }
+                error?.let { message -> item(key = "error") { Text(message, color = Color(0xFFE57373), fontSize = app.harbor.android.ui.tv.s(9.5f), modifier = Modifier.padding(bottom = app.harbor.android.ui.tv.u(6f))) } }
+                when {
+                    all == null || (loading && shown.isEmpty()) -> item(key = "loading") { Loading() }
+                    shown.isEmpty() -> item(key = "empty") {
+                        Text(
+                            if (all.isNotEmpty()) "No source matches these filters." else "Your stream addons found nothing for this title.",
+                            color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(11f), modifier = Modifier.padding(top = app.harbor.android.ui.tv.u(20f)),
+                        )
+                    }
+                    else -> items(shown.size, key = { i -> shown[i].let { it.addon.manifest.id + "|" + (it.stream.url ?: it.stream.infoHash) + "|" + it.stream.name + "|" + it.stream.title } }) { i ->
+                        val item = shown[i]
+                        val last = remembered != null && item.addon.manifest.id == remembered.first &&
+                            (remembered.second == null || Playback.streamKey(item.stream) == remembered.second) && i == 0
+                        TvSourceCard(item, last, debrid, if (i == 0) firstCard else null) { onPlay(item) }
+                    }
+                }
+            }
+            if (connecting != null || status != null) TvConnecting(meta, connecting?.stream, status, onCancel)
+        }
+    }
+    // The page opens on its first source, as Big Picture's.
+    androidx.compose.runtime.LaunchedEffect(shown.isNotEmpty()) { if (shown.isNotEmpty()) runCatching { firstCard.requestFocus() } }
+    menu?.let { facet ->
+        val row = facetRows.first { it.facet == facet }
+        val options = listOf(Triple("All", "${row.total}", row.value == null)) + row.options.map { (v, c) -> Triple(v, "$c", row.value == v) }
+        app.harbor.android.ui.tv.TvChoiceDialog(facet.label, options, onClose = { menu = null }) { i ->
+            onFacets(if (i == 0) facets - facet else facets + (facet to row.options[i - 1].first))
+            menu = null
+        }
+    }
+    if (addonMenu) {
+        val counts = all.orEmpty().groupBy { it.addon.manifest.id }
+        val ids = counts.keys.toList()
+        val options = listOf(Triple("Every addon", "${all.orEmpty().size}", addonFilter == null)) +
+            ids.map { id -> Triple(counts.getValue(id).first().addon.manifest.name, "${counts.getValue(id).size}", addonFilter == id) }
+        app.harbor.android.ui.tv.TvChoiceDialog("Addons", options, onClose = { addonMenu = false }) { i ->
+            onAddon(if (i == 0) null else ids[i - 1])
+            addonMenu = false
+        }
+    }
+}
+
+@Composable
+private fun TvDivider() {
+    Box(Modifier.width(1.dp).height(app.harbor.android.ui.tv.u(16f)).background(HarborColors.Ink.copy(alpha = 0.14f)))
+}
+
+/** A Big Picture chip: ringed at rest, solid white when it's the choice or holds focus. */
+@Composable
+private fun TvChip(label: String, count: Int?, on: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, onClick: () -> Unit) {
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val fill = when {
+        focused -> HarborColors.Ink
+        on -> HarborColors.Ink.copy(alpha = 0.9f)
+        else -> Color.Transparent
+    }
+    val ink = if (focused || on) HarborColors.Canvas else HarborColors.InkMuted
+    Row(
+        Modifier.height(app.harbor.android.ui.tv.u(25f)).clip(RoundedCornerShape(50)).background(fill)
+            .then(if (!focused && !on) Modifier.border(1.dp, HarborColors.Ink.copy(alpha = 0.14f), RoundedCornerShape(50)) else Modifier)
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .padding(horizontal = app.harbor.android.ui.tv.u(12f)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(5f)),
+    ) {
+        icon?.let { Icon(it, null, tint = ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(11f))) }
+        Text(label, color = ink, fontSize = app.harbor.android.ui.tv.s(9f), fontWeight = FontWeight.SemiBold, maxLines = 1)
+        count?.let { Text("$it", color = ink.copy(alpha = 0.6f), fontSize = app.harbor.android.ui.tv.s(6.5f), fontWeight = FontWeight.SemiBold) }
+    }
+}
+
+/** bp-stream-row: the addon's mark, the quality, the addon, the format badges, the name and text; cached and Play at the end. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TvSourceCard(item: RankedStream, last: Boolean, debrid: app.harbor.android.data.DebridAccount?, focus: androidx.compose.ui.focus.FocusRequester?, onPlay: () -> Unit) {
+    val stream = item.stream
+    val settings = HarborDisplay.settings
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val playable = stream.playable(debrid != null)
+    val values = remember(stream) { facetValues(stream) }
+    val shape = RoundedCornerShape(app.harbor.android.ui.tv.u(8f))
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = app.harbor.android.ui.tv.u(2f)).alpha(if (playable) 1f else 0.5f)
+            .then(with(app.harbor.android.ui.tv.u(8f)) { Modifier.tvRing(focused, this) })
+            .then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+            .clip(shape).background(app.harbor.android.ui.tv.Panel)
+            .clickable(interactionSource = source, indication = null, enabled = playable, onClick = onPlay)
+            .padding(app.harbor.android.ui.tv.u(12f)),
+        horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(12f)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.align(Alignment.Top).size(app.harbor.android.ui.tv.u(27f)).clip(RoundedCornerShape(app.harbor.android.ui.tv.u(6f))).background(HarborColors.Elevated), contentAlignment = Alignment.Center) {
+            item.addon.manifest.logo?.let { AsyncImage(it, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                ?: Text(item.addon.manifest.name.take(1), color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(11f), fontWeight = FontWeight.Bold)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(3f))) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(7f)), verticalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(3f))) {
+                values[Facet.Resolution]?.let { res ->
+                    Text(
+                        resolutionLabel(res), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.CenterVertically).clip(RoundedCornerShape(app.harbor.android.ui.tv.u(4f))).background(HarborColors.Elevated)
+                            .padding(horizontal = app.harbor.android.ui.tv.u(6f), vertical = app.harbor.android.ui.tv.u(2f)),
+                    )
+                }
+                Text(
+                    item.addon.manifest.name.uppercase(), color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(7f), fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.4.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.align(Alignment.CenterVertically).widthIn(max = app.harbor.android.ui.tv.u(130f)),
+                )
+                shownBadges(stream, settings).forEach { FormatBadge(it, app.harbor.android.ui.tv.u(13f), Modifier.align(Alignment.CenterVertically)) }
+                RuleBadges(stream, settings, app.harbor.android.ui.tv.u(13f))
+            }
+            Text((stream.name ?: stream.behaviorHints?.filename ?: item.addon.manifest.name).trim(), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(10.5f), fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val body = listOfNotNull(stream.title, stream.description).joinToString("\n").trim()
+            if (body.isNotEmpty()) Text(body, color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(8f), lineHeight = app.harbor.android.ui.tv.s(11.5f), maxLines = 6, overflow = TextOverflow.Ellipsis)
+            if (!playable) Text(
+                if (stream.infoHash != null) "Torrent: add a debrid account in Settings to play it" else "Not playable in Harbor yet",
+                color = Color(0xFFE57373), fontSize = app.harbor.android.ui.tv.s(8.5f),
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(8f))) {
+            if (last) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).border(1.dp, HarborColors.Ink.copy(alpha = 0.18f), RoundedCornerShape(50))
+                        .padding(horizontal = app.harbor.android.ui.tv.u(7f), vertical = app.harbor.android.ui.tv.u(3f)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f)),
+                ) {
+                    Icon(Icons.Rounded.History, null, tint = HarborColors.InkMuted, modifier = Modifier.size(app.harbor.android.ui.tv.u(9f)))
+                    Text("Played last", color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(7.5f), fontWeight = FontWeight.SemiBold)
+                }
+            }
+            val availability = values[Facet.Availability]
+            if (availability == "Cached" && debrid != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f))) {
+                    Icon(Icons.Rounded.Check, null, tint = Color(0xFF4ADE80), modifier = Modifier.size(app.harbor.android.ui.tv.u(10f)))
+                    Text("Cached on ${debrid.service.label}", color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8f), fontWeight = FontWeight.Bold)
+                }
+            }
+            Box(
+                Modifier.size(app.harbor.android.ui.tv.u(26f)).clip(CircleShape).background(if (focused) HarborColors.Ink else HarborColors.Elevated),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.PlayArrow, "Play", tint = if (focused) HarborColors.Canvas else HarborColors.Ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(14f))) }
+        }
+    }
+}
+
+/** The focused card's ring: a 2 dp gap in the void and a 2 dp light ring, no lift (a wide card would cover its neighbours). */
+private fun Modifier.tvRing(focused: Boolean, radius: androidx.compose.ui.unit.Dp): Modifier = drawBehind {
+    if (!focused) return@drawBehind
+    val gap = 2.dp.toPx()
+    val r = radius.toPx()
+    drawRoundRect(app.harbor.android.ui.tv.FocusStroke, androidx.compose.ui.geometry.Offset(-2 * gap, -2 * gap), androidx.compose.ui.geometry.Size(size.width + 4 * gap, size.height + 4 * gap), androidx.compose.ui.geometry.CornerRadius(r + 2 * gap))
+    drawRoundRect(app.harbor.android.ui.tv.Void, androidx.compose.ui.geometry.Offset(-gap, -gap), androidx.compose.ui.geometry.Size(size.width + 2 * gap, size.height + 2 * gap), androidx.compose.ui.geometry.CornerRadius(r + gap))
+}
+
+/**
+ * Big Picture's Connecting screen (player/bp-connecting.tsx): the title's backdrop, blurred and
+ * dark, its logo, the source's quality and size, a running bar, CONNECTING and Cancel.
+ */
+@Composable
+internal fun TvConnecting(meta: Meta?, stream: Stream?, status: String?, onCancel: () -> Unit, extra: String? = null) {
+    val cancel = remember { androidx.compose.ui.focus.FocusRequester() }
+    Box(Modifier.fillMaxSize().background(app.harbor.android.ui.tv.Void).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}) {
+        (meta?.background ?: meta?.poster)?.let { art ->
+            AsyncImage(
+                art, null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().then(if (android.os.Build.VERSION.SDK_INT >= 31) Modifier.blur(24.dp) else Modifier).alpha(0.35f),
+            )
+        }
+        Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Brush.verticalGradient(0.3f to Color.Transparent, 1f to app.harbor.android.ui.tv.Void)))
+        Column(
+            Modifier.align(Alignment.BottomStart).padding(start = app.harbor.android.ui.tv.TvInsets.Gutter, bottom = app.harbor.android.ui.tv.u(30f)).widthIn(max = app.harbor.android.ui.tv.u(520f)),
+            verticalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(8f)),
+        ) {
+            var badLogo by remember(meta?.id) { mutableStateOf(false) }
+            val logo = meta?.logoUrl
+            if (logo != null && !badLogo) AsyncImage(logo, meta.name, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, onError = { badLogo = true }, modifier = Modifier.heightIn(max = app.harbor.android.ui.tv.u(78f)).widthIn(max = app.harbor.android.ui.tv.u(330f)))
+            else meta?.name?.let { Text(it, color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(26f), fontWeight = FontWeight.SemiBold, maxLines = 2) }
+            val facts = listOfNotNull(stream?.let { facetValues(it)[Facet.Resolution] }, stream?.let { streamSize(it) }).ifEmpty { listOfNotNull(extra) }
+            if (facts.isNotEmpty()) Text(facts.joinToString("  ·  ").uppercase(), color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            // A bar that runs while the link is fetched: there is no real percentage to show.
+            val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "connecting")
+            val x by transition.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "bar")
+            BoxWithConstraints(Modifier.padding(top = app.harbor.android.ui.tv.u(6f)).fillMaxWidth().height(app.harbor.android.ui.tv.u(2.5f)).clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.12f))) {
+                Box(Modifier.offset(x = (maxWidth * 0.8f) * x).fillMaxWidth(0.2f).fillMaxHeight().clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.85f)))
+            }
+            Text((status?.takeIf { it.isNotBlank() } ?: "Connecting").let { if (it.startsWith("Getting the link")) "Connecting" else it.removeSuffix("…") }.uppercase(), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            val focused by source.collectIsFocusedAsState()
+            Row(
+                Modifier.padding(top = app.harbor.android.ui.tv.u(10f)).height(app.harbor.android.ui.tv.u(29f)).focusRequester(cancel)
+                    .clip(RoundedCornerShape(app.harbor.android.ui.tv.u(6f))).background(if (focused) HarborColors.Ink else HarborColors.Ink.copy(alpha = 0.85f))
+                    .clickable(interactionSource = source, indication = null, onClick = onCancel).padding(horizontal = app.harbor.android.ui.tv.u(15f)),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(6f)),
+            ) {
+                Icon(Icons.Rounded.Close, null, tint = HarborColors.Canvas, modifier = Modifier.size(app.harbor.android.ui.tv.u(10f)))
+                Text("Cancel", color = HarborColors.Canvas, fontSize = app.harbor.android.ui.tv.s(10f), fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { cancel.requestFocus() } }
+    androidx.activity.compose.BackHandler(onBack = onCancel)
 }

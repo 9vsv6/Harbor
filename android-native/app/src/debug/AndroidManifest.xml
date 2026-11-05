@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the player can be started from adb, for testing it on emulators. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <activity android:name=".player.PlayerActivity" android:exported="true" tools:replace="android:exported" />
+    </application>
+</manifest>

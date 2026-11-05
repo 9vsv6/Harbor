@@ -310,9 +310,12 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
             }
         } else {
             AnimatedVisibility(state.controlsVisible && state.endScreen == null, enter = fadeIn(), exit = fadeOut()) {
-                HarborControls(state, prefs, actions, castButton) { touchedAt = System.currentTimeMillis() }
+                if (state.tv) TvPlayerControls(state, actions) { touchedAt = System.currentTimeMillis() }
+                else HarborControls(state, prefs, actions, castButton) { touchedAt = System.currentTimeMillis() }
             }
         }
+        // TV: Big Picture's Connecting screen until the video has started.
+        if (state.tv && state.durationMs == 0L && state.error == null && !state.ended) TvPlayerConnecting(state, actions)
 
         Hint(state)
         ContentAdvisoryLayer(state, actions)

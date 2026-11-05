@@ -231,7 +231,16 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             kotlinx.coroutines.delay(1_500)
             TvReturnFocus.clearIf(pending)
         }
-        CompositionLocalProvider(LocalHomeFocusRestore provides Perf.isTv) {
+        // TV: Harbor PC's Big Picture home (ui/tv/TvBigPicture.kt), from the same rows.
+        val tvRows = if (Perf.isTv && current != null && (current.isNotEmpty() || cw.isNotEmpty())) {
+            val openPage = LocalOpenPage.current
+            remember(view, current, cw, allCw, trackerRows, newEpisodes, tmdbKey, display.streaming, display.region) {
+                bigPictureRows(view, current, cw, allCw, trackerRows, newEpisodes, tmdbKey != null, display, nav, openPage)
+            }
+        } else null
+        if (tvRows != null) CompositionLocalProvider(LocalHomeFocusRestore provides true) {
+            app.harbor.android.ui.tv.TvBigPictureHome(tvRows, tmdbKey, { repository.metaAddons() }, browse::openMeta, nav::resume)
+        } else CompositionLocalProvider(LocalHomeFocusRestore provides Perf.isTv) {
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(
@@ -373,6 +382,72 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             }
         }
     }
+}
+
+/**
+ * Big Picture's rows, in bp-home's order: Jump back in, your streaming services, then the
+ * catalogs (Top 10 first where the phone leads with it, your trackers after the first three).
+ */
+private fun bigPictureRows(
+    view: BrowseView,
+    current: List<CatalogRow>,
+    cw: List<CwItem>,
+    allCw: List<CwItem>,
+    trackerRows: List<CatalogRow>,
+    newEpisodes: List<app.harbor.android.data.CalendarItem>,
+    hasTmdb: Boolean,
+    display: app.harbor.android.data.AppSettings,
+    nav: BrowseNav,
+    openPage: (String) -> Unit,
+): List<app.harbor.android.ui.tv.TvRow> {
+    val out = ArrayList<app.harbor.android.ui.tv.TvRow>()
+    val resume = when (view) {
+        BrowseView.Home, BrowseView.Anime -> cw
+        BrowseView.Shows -> allCw.filter { it.meta.type == "series" && !app.harbor.android.data.AnimeDetect.isAnime(it.meta) }
+        else -> emptyList()
+    }
+    if (resume.isNotEmpty()) out += app.harbor.android.ui.tv.TvRow(
+        "cw", if (view == BrowseView.Shows) "Pick up where you left off" else "Jump back in",
+        cw = resume, action = "Your library", onAction = { openPage("mystuff") },
+    )
+    if (view == BrowseView.Home && hasTmdb) {
+        val region = display.region.ifEmpty { java.util.Locale.getDefault().country.ifEmpty { "US" } }
+        val services = app.harbor.android.data.StreamingServices.enabled(display).map { service ->
+            app.harbor.android.ui.tv.TvService(
+                service.key, service.name, service.logo,
+                app.harbor.android.ui.tv.TvServiceTints[service.key] ?: HarborColors.Accent,
+            ) {
+                val params = mapOf(
+                    "with_watch_providers" to service.providerIds.joinToString("|"),
+                    "watch_region" to region,
+                    "sort_by" to "popularity.desc",
+                    "vote_count.gte" to "50",
+                )
+                val spec = Tmdb.RowSpec("On ${service.name}", "/discover/movie", params, "movie")
+                nav.openCatalog(CatalogRow("service:${service.key}", spec.title, emptyList(), "movie", tmdb = spec))
+            }
+        }
+        if (services.isNotEmpty()) out += app.harbor.android.ui.tv.TvRow("services", "Your streaming", services = services)
+    }
+    if (view == BrowseView.Home && newEpisodes.isNotEmpty()) out += app.harbor.android.ui.tv.TvRow("new-episodes", "New Episodes", metas = newEpisodes.map { it.meta })
+    fun catalog(row: CatalogRow, title: String = row.title) = app.harbor.android.ui.tv.TvRow(
+        row.key, title, metas = row.metas.distinctBy { it.id }.take(24), action = "See all", onAction = { nav.openCatalog(row) },
+    )
+    val rankFirst = display.showTop10 || ((view == BrowseView.Shows || view == BrowseView.Movies) && (current.firstOrNull()?.metas?.size ?: 0) >= 10)
+    current.firstOrNull()?.takeIf { rankFirst }?.let { first ->
+        out += catalog(first, when (view) {
+            BrowseView.Home -> "Top 10 Today"
+            BrowseView.Shows -> "Top 10 Series Today"
+            BrowseView.Movies -> "Top 10 Movies Today"
+            else -> "Top 10 ${view.label} Today"
+        }).let { app.harbor.android.ui.tv.TvRow("top10", it.title, metas = first.metas.distinctBy { m -> m.id }.take(10)) }
+    }
+    val rest = if (rankFirst) current.drop(1) else current
+    val lead = if (view == BrowseView.Anime) rest.takeWhile { it.key.startsWith("lead:") } else rest.take(3)
+    lead.forEach { out += catalog(it) }
+    trackerRows.forEach { out += catalog(it) }
+    rest.drop(lead.size).forEach { out += catalog(it) }
+    return out.distinctBy { it.key }
 }
 
 private fun typeLabel(type: String, view: BrowseView): String = when {

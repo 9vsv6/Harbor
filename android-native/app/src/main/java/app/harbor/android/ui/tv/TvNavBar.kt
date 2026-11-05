@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -76,13 +77,13 @@ import kotlinx.coroutines.delay
 
 /** Big Picture's ten-foot sizes on a 960x540 dp TV (bp-spec.md sections 1-2). */
 object TvInsets {
-    /** 5% title-safe area of a 960x540 dp screen. */
-    val SafeX = 48.dp
-    val SafeY = 27.dp
+    /** The title-safe area of a 960x540 dp screen, from Settings → Picture → Edge margin (5 % by default). */
+    val SafeX get() = (HarborDisplay.settings.tvOverscan.coerceIn(0f, 0.05f) * 960).dp
+    val SafeY get() = (HarborDisplay.settings.tvOverscan.coerceIn(0f, 0.05f) * 540).dp
     /** Content gutter: max(design gutter 56, SafeX + 8). */
-    val Gutter = 56.dp
+    val Gutter get() = maxOf(56.dp, SafeX + 8.dp)
     /** The nav bar's 64 dp row under the top safe inset. Home's hero copy starts below this. */
-    val BarHeight = 64.dp + SafeY
+    val BarHeight get() = 64.dp + SafeY
 }
 
 private val TabSize = 40.dp
@@ -168,6 +169,11 @@ internal fun TvNavBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Icon(painterResource(R.drawable.harbor_mark), "Harbor", tint = HarborColors.Ink, modifier = Modifier.size(26.dp))
+        // Big Picture's wordmark beside the mark, in the display face.
+        Text(
+            "Harbor", color = HarborColors.Ink, fontSize = 21.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.4).sp, maxLines = 1,
+            fontFamily = app.harbor.android.ui.HarborFonts.display(HarborDisplay.settings.fontPair),
+        )
         Spacer(Modifier.width(8.dp))
         // The single focus row: entering it from content always lands on the active item; Down leaves for content.
         Row(
@@ -214,14 +220,19 @@ private fun TvTab(item: NavItem, rowFocused: Boolean, requester: FocusRequester)
         else -> HarborColors.Ink.copy(alpha = 0.46f)
     }
     Box {
-        Box(
-            Modifier.size(TabSize).focusRequester(requester).clip(TabShape).background(fill)
-                .clickable(interactionSource = source, indication = HarborIndication, onClick = item.onClick),
-            contentAlignment = Alignment.Center,
+        // The active tab carries its name inside the pill, as Big Picture's bar does at full width.
+        Row(
+            Modifier.height(TabSize).then(if (item.on) Modifier.widthIn(min = TabSize) else Modifier.width(TabSize))
+                .focusRequester(requester).clip(TabShape).background(fill)
+                .clickable(interactionSource = source, indication = HarborIndication, onClick = item.onClick)
+                .padding(horizontal = if (item.on) 10.dp else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
         ) {
             Icon(painterResource(item.glyph), item.label, tint = tint, modifier = Modifier.size(24.dp))
+            if (item.on) Text(item.label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
-        if (focused) FocusHint(item.label, Modifier.align(Alignment.BottomCenter))
+        if (focused && !item.on) FocusHint(item.label, Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -278,7 +289,7 @@ private fun Clock() {
 }
 
 private fun time(context: Context): String =
-    java.text.SimpleDateFormat(if (DateFormat.is24HourFormat(context)) "H:mm" else "h:mm", java.util.Locale.getDefault()).format(java.util.Date())
+    java.text.SimpleDateFormat(if (DateFormat.is24HourFormat(context)) "H:mm" else "h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
 
 @Composable
 private fun NetworkGlyph() {

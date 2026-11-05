@@ -612,6 +612,17 @@ class Repository(private val context: Context) {
         refresh()
     }
 
+    /** A Stremio session made elsewhere (the phone during TV setup): checked with Stremio, then kept. */
+    suspend fun signInWithKey(authKey: String, email: String?) {
+        StremioApi.userId(authKey) ?: throw StremioException("Stremio didn't accept that session")
+        context.store.edit {
+            it[KEY_AUTH] = authKey
+            it[KEY_EMAIL] = email.orEmpty()
+        }
+        _account.value = Account(authKey, email.orEmpty())
+        refresh()
+    }
+
     suspend fun signOut() {
         _account.value?.let { StremioApi.logout(it.authKey) }
         context.store.edit {

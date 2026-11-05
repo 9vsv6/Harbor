@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -249,6 +254,119 @@ private fun AddToListDialog(repository: Repository, meta: Meta, onClose: () -> U
                     name = ""
                 }) { Text("Create and add") }
             }
+        }
+    }
+}
+
+// ---- Big Picture's action row (bp-detail-actions.tsx), for the TV title page ----
+
+/** --bp-on: the ink at 22 % over the void, the resting fill of a solid or switched-on action. */
+private val BpOn = Color(0xFF414244)
+
+/**
+ * Big Picture's actions: a solid Play, then square icon buttons with a thin edge. The focused one
+ * turns white and comes forward; its name shows under the row (BP_ACTION_HINT).
+ */
+@Composable
+fun TvHeroActions(
+    repository: Repository,
+    meta: Meta,
+    details: TmdbDetails?,
+    isSeries: Boolean,
+    playLabel: String,
+    progress: Float,
+    play: () -> Unit,
+    trailer: (() -> Unit)?,
+    download: () -> Unit,
+    playFocus: androidx.compose.ui.focus.FocusRequester? = null,
+) {
+    val myList by repository.myList.collectAsState()
+    val shelves by repository.shelves.collectAsState()
+    val queue by app.harbor.android.data.PlayQueue.items.collectAsState()
+    val listed = myList.any { it.id == meta.id }
+    val favourite = shelves.favorites.any { it.id == meta.id }
+    val watched = meta.id in shelves.watched
+    val rating = shelves.ratings[meta.id]
+    var rateOpen by remember { mutableStateOf(false) }
+    var listOpen by remember { mutableStateOf(false) }
+    var hint by remember { mutableStateOf("") }
+    val poster = meta.poster ?: details?.posters?.firstOrNull()
+    val h = app.harbor.android.ui.tv.u(33f)
+    Column {
+        Row(horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f)), verticalAlignment = Alignment.CenterVertically) {
+            BpAction(h, playLabel = playLabel, progress = progress, requester = playFocus, onFocus = { hint = "" }, onClick = play)
+            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In Watchlist" else "Add to Watchlist", active = listed, onFocus = { hint = it }) { repository.toggleMyList(meta) }
+            BpAction(h, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), label = if (favourite) "Remove from favorites" else "Add to favorites", active = favourite, onFocus = { hint = it }) { repository.toggleFavorite(meta) }
+            BpAction(h, icon = painterResource(R.drawable.ui_rate), badge = rating?.toString(), label = if (rating != null) "Your rating: $rating" else "Rate this", active = rating != null, onFocus = { hint = it }) { rateOpen = true }
+            BpAction(h, icon = painterResource(R.drawable.ui_list), label = "Add to list", onFocus = { hint = it }) { listOpen = true }
+            if (!isSeries) BpAction(h, icon = painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched), label = if (watched) "Marked watched" else "Mark watched", active = watched, onFocus = { hint = it }) { repository.toggleWatched(meta) }
+            val queued = queue.any { it.meta.id == meta.id && it.season == null }
+            BpAction(h, icon = rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), label = if (queued) "In your queue" else "Add to queue", active = queued, onFocus = { hint = it }) {
+                app.harbor.android.data.PlayQueue.toggle(meta)
+            }
+            trailer?.let { BpAction(h, icon = painterResource(R.drawable.ui_trailer), label = "Watch trailer", onFocus = { l -> hint = l }, onClick = it) }
+            if (!isSeries) BpAction(h, icon = rememberVectorPainter(Icons.Rounded.Download), label = "Download", onFocus = { hint = it }, onClick = download)
+        }
+        Text(
+            hint, color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(9f), fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp,
+            maxLines = 1, modifier = Modifier.padding(top = app.harbor.android.ui.tv.u(5f)).height(app.harbor.android.ui.tv.u(12f)),
+        )
+    }
+    if (rateOpen) RatingDialog(meta.name, poster, rating, onClose = { rateOpen = false }) { value ->
+        repository.rate(meta, value)
+        rateOpen = false
+    }
+    if (listOpen) AddToListDialog(repository, meta) { listOpen = false }
+}
+
+@Composable
+private fun BpAction(
+    height: androidx.compose.ui.unit.Dp,
+    icon: Painter? = null,
+    label: String = "",
+    playLabel: String? = null,
+    badge: String? = null,
+    active: Boolean = false,
+    progress: Float = 0f,
+    requester: androidx.compose.ui.focus.FocusRequester? = null,
+    onFocus: (String) -> Unit,
+    onClick: () -> Unit,
+) {
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val scale by androidx.compose.animation.core.animateFloatAsState(if (focused) 1.03f else 1f, androidx.compose.animation.core.tween(160), label = "bpAction")
+    val shape = RoundedCornerShape(app.harbor.android.ui.tv.u(4f))
+    val solid = playLabel != null
+    val fill = when {
+        focused -> HarborColors.Ink
+        solid || active -> BpOn
+        else -> Color.Transparent
+    }
+    val ink = if (focused) HarborColors.Canvas else HarborColors.Ink
+    Box(
+        Modifier.height(height).then(if (solid) Modifier.widthIn(min = height) else Modifier.width(height))
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+            .onFocusChanged { if (it.isFocused) onFocus(label) }
+            .clip(shape).background(fill)
+            .then(if (!solid && !active && !focused) Modifier.border(1.dp, HarborColors.Ink.copy(alpha = 0.18f), shape) else Modifier)
+            .clickable(interactionSource = source, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (solid) {
+            Row(Modifier.padding(horizontal = app.harbor.android.ui.tv.u(11f)), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f))) {
+                Icon(painterResource(R.drawable.ui_play_filled), null, tint = ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(9f)))
+                Text(playLabel!!, color = ink, fontSize = app.harbor.android.ui.tv.s(10.5f), fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+            if (progress > 0.01f && progress < 0.97f) {
+                Box(Modifier.align(Alignment.BottomStart).padding(horizontal = app.harbor.android.ui.tv.u(9f), vertical = app.harbor.android.ui.tv.u(3.5f)).fillMaxWidth().height(1.5.dp).background(Color(0x730E0F11))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(HarborColors.Accent))
+                }
+            }
+        } else if (badge != null) {
+            Text(badge, color = ink, fontSize = app.harbor.android.ui.tv.s(9.5f), fontWeight = FontWeight.Bold)
+        } else if (icon != null) {
+            Icon(icon, label, tint = ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(13f)))
         }
     }
 }

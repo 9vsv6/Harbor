@@ -111,8 +111,8 @@ android {
         applicationId = "app.harbor.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.0.11"
+        versionCode = 22
+        versionName = "1.0.12"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
@@ -176,6 +176,8 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     // Installs the baseline profile (baselineprofile/) so the first launch is already compiled.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // QR codes for setting up a TV from a phone (Big Picture's phone setup).
+    implementation("com.google.zxing:core:3.5.3")
     baselineProfile(project(":baselineprofile"))
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
