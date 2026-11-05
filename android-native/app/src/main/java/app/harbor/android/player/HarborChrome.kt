@@ -265,7 +265,8 @@ private fun PositionLabel(state: PlayerState) {
     Text(clock(seconds * 1_000L), color = Color(0xE6FFFFFF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
 }
 
-private fun toggle(state: PlayerState, panel: Panel) {    state.panel = if (state.panel == panel) null else panel
+private fun toggle(state: PlayerState, panel: Panel) {
+    state.panel = if (state.panel == panel) null else panel
 }
 
 @Composable
