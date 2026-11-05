@@ -1122,6 +1122,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             if (offset != 0L || state.subTimeScale != 1.0) Box(Modifier.size(6.dp).clip(CircleShape).background(HarborColors.Accent))
         }
         androidx.compose.material3.DropdownMenu(open, onDismissRequest = { open = false }, containerColor = PopRaised, modifier = Modifier.width(240.dp)) {
+            SyncItem("Auto sync", "Audio") { open = false; actions.startAutoSync() }
             SyncItem("Live sync", "Guided") { open = false; actions.startLiveSync() }
             SyncItem("Manual offset", if (offset != 0L) "%+.1f".format(Locale.US, offset / 1000f) else null) {
                 open = false
@@ -1133,7 +1134,6 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             listOf(1.0 to "As made", 25.0 / 23.976 to "23.976 → 25", 23.976 / 25.0 to "25 → 23.976", 25.0 / 24.0 to "24 → 25", 24.0 / 25.0 to "25 → 24").forEach { (scale, label) ->
                 SyncItem(label, if (kotlin.math.abs(state.subTimeScale - scale) < 0.0001) "✓" else null) { open = false; actions.setSubTimeScale(scale) }
             }
-            Text("Auto sync by audio runs on the desktop.", color = Subtle, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
         }
     }
 }
@@ -1142,7 +1142,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
 private fun SyncItem(label: String, trailing: String?, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Color.White, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
-        trailing?.let { Text(it, color = if (it == "Guided") Subtle else HarborColors.Accent, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace) }
+        trailing?.let { Text(it, color = if (it == "Guided" || it == "Audio") Subtle else HarborColors.Accent, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace) }
     }
 }
 
@@ -1172,6 +1172,23 @@ internal fun SubSyncBar(state: PlayerState, actions: PlayerActions) {
             listOf(100L to "+0.1", 1000L to "+1s").forEach { (ms, label) -> SyncChip(label) { nudge(ms) } }
             if (offset != 0L) SyncChip("Reset") { touched = System.currentTimeMillis(); actions.setSubDelay(0) }
             SyncChip("Done") { state.syncBarOpen = false }
+        }
+    }
+}
+
+/** Auto sync by audio while it listens, with a way to stop it. */
+@Composable
+internal fun AutoSyncPill(state: PlayerState, actions: PlayerActions) {
+    val text = state.autoSync ?: return
+    Box(Modifier.fillMaxWidth().padding(top = 18.dp), contentAlignment = Alignment.TopCenter) {
+        Row(
+            Modifier.clip(RoundedCornerShape(14.dp)).background(Pop).border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp)).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp), color = HarborColors.Accent, strokeWidth = 2.dp)
+            Text(text, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            SyncChip("Cancel") { actions.cancelAutoSync() }
         }
     }
 }

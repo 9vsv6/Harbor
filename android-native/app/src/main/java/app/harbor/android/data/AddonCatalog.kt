@@ -78,7 +78,7 @@ object AddonCatalog {
     private fun parse(body: JsonObject): List<CatalogAddon> = (body["addons"] as? JsonArray).orEmpty().mapNotNull { element ->
         runCatching {
             val obj = element.jsonObject
-            val manifestJson = obj["manifest"]?.jsonObject ?: return@runCatching null
+            val manifestJson = obj["manifest"].objectOrNull ?: return@runCatching null
             val manifest = Net.json.decodeFromJsonElement(Manifest.serializer(), manifestJson)
             val hints = (manifestJson["behaviorHints"] as? JsonObject)?.mapValues { (_, v) -> v.jsonPrimitive.contentOrNull == "true" }.orEmpty()
             // The rising list ignores nsfw=exclude: drop adult addons here too.

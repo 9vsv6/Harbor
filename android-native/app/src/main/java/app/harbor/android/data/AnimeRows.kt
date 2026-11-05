@@ -33,7 +33,7 @@ object AnimeRows {
         }.toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder().url(API).post(body).header("Accept", "application/json")
             .apply { token?.let { header("Authorization", "Bearer $it") } }.build()
-        Net.json.parseToJsonElement(Net.call(request)).jsonObject["data"]?.jsonObject
+        Net.json.parseToJsonElement(Net.call(request)).jsonObject["data"].objectOrNull
     }.getOrNull()
 
     /** AniList media as titles the Kitsu anime addon opens. */
@@ -41,12 +41,12 @@ object AnimeRows {
         val kitsu = Jikan.kitsuIds(media.mapNotNull { it["idMal"]?.jsonPrimitive?.intOrNull })
         return media.mapNotNull { m ->
             val id = kitsu[m["idMal"]?.jsonPrimitive?.intOrNull] ?: return@mapNotNull null
-            val title = m["title"]?.jsonObject
+            val title = m["title"].objectOrNull
             Meta(
                 id = "kitsu:$id",
                 type = if (m.string("format") == "MOVIE") "movie" else "series",
                 name = title?.string("english") ?: title?.string("romaji") ?: return@mapNotNull null,
-                poster = m["coverImage"]?.jsonObject?.let { it.string("extraLarge") ?: it.string("large") },
+                poster = m["coverImage"].objectOrNull?.let { it.string("extraLarge") ?: it.string("large") },
                 background = m.string("bannerImage"),
                 description = m.string("description")?.replace(Regex("<[^>]+>"), "")?.trim(),
                 releaseInfo = m["seasonYear"]?.jsonPrimitive?.intOrNull?.toString(),
@@ -61,7 +61,7 @@ object AnimeRows {
             "query (\$sort: [MediaSort]) { Page(perPage: 40) { media(type: ANIME, sort: \$sort, isAdult: false) { $MEDIA } } }",
             buildJsonObject { put("sort", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(sort)))) },
         )
-        toMetas((data?.get("Page")?.jsonObject?.get("media") as? JsonArray).orEmpty().map { it.jsonObject })
+        toMetas((data?.get("Page").objectOrNull?.get("media") as? JsonArray).orEmpty().map { it.jsonObject })
     }.also { if (it.isNotEmpty()) cache[sort] = it }
 
     /** anilist-top-row.tsx: Trending on AniList, and its hero. */
@@ -76,15 +76,15 @@ object AnimeRows {
      */
     suspend fun yourLists(auth: TrackerAuth): List<Pair<String, List<Meta>>> {
         val token = auth.accessToken ?: return emptyList()
-        val viewer = query("query { Viewer { id } }", token = token)?.get("Viewer")?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
+        val viewer = query("query { Viewer { id } }", token = token)?.get("Viewer").objectOrNull?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
         // Custom lists only come with the whole collection; a status filter would drop them.
         val data = query(
             "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME) { lists { status name isCustomList entries { media { $MEDIA } } } } }",
             buildJsonObject { put("user", viewer) },
             token,
         )
-        val lists = (data?.get("MediaListCollection")?.jsonObject?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
-        fun media(groups: List<JsonObject>) = groups.flatMap { (it["entries"] as? JsonArray).orEmpty() }.mapNotNull { it.jsonObject["media"]?.jsonObject }
+        val lists = (data?.get("MediaListCollection").objectOrNull?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
+        fun media(groups: List<JsonObject>) = groups.flatMap { (it["entries"] as? JsonArray).orEmpty() }.mapNotNull { it.jsonObject["media"].objectOrNull }
         val (custom, byStatus) = lists.partition { it["isCustomList"]?.jsonPrimitive?.content == "true" }
         val status = listOf(listOf("CURRENT", "REPEATING") to "Your AniList: Watching", listOf("PLANNING") to "Your AniList: Plan to Watch").map { (statuses, title) ->
             title to media(byStatus.filter { it.string("status") in statuses })
@@ -104,7 +104,7 @@ object AnimeRows {
                     "query (\$id: Int) { Media(id: \$id) { recommendations(sort: RATING_DESC, perPage: 10) { nodes { mediaRecommendation { $MEDIA } } } } }",
                     buildJsonObject { put("id", id) },
                 )
-                (data?.get("Media")?.jsonObject?.get("recommendations")?.jsonObject?.get("nodes") as? JsonArray).orEmpty()
+                (data?.get("Media").objectOrNull?.get("recommendations").objectOrNull?.get("nodes") as? JsonArray).orEmpty()
                     .mapNotNull { it.jsonObject["mediaRecommendation"] as? JsonObject }
             }
         }.awaitAll()
@@ -136,7 +136,7 @@ object AnimeRows {
         files.flatMap { file ->
             runCatching {
                 val json = Net.json.parseToJsonElement(context.assets.open("anime-awards/$file").bufferedReader().readText()).jsonObject
-                json["categories"]?.jsonObject?.values.orEmpty().flatMap { c ->
+                json["categories"].objectOrNull?.values.orEmpty().flatMap { c ->
                     (c.jsonObject["winners"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("title") }
                 }
             }.getOrDefault(emptyList())
@@ -176,20 +176,20 @@ object AniListLibrary {
 
     private suspend fun query(token: String, query: String, variables: JsonObject): JsonObject? = runCatching {
         val body = buildJsonObject { put("query", query); put("variables", variables) }.toString().toRequestBody("application/json".toMediaType())
-        Net.json.parseToJsonElement(Net.call(Request.Builder().url(API).post(body).header("Authorization", "Bearer $token").header("Accept", "application/json").build())).jsonObject["data"]?.jsonObject
+        Net.json.parseToJsonElement(Net.call(Request.Builder().url(API).post(body).header("Authorization", "Bearer $token").header("Accept", "application/json").build())).jsonObject["data"].objectOrNull
     }.getOrNull()
 
     suspend fun entries(auth: TrackerAuth): List<ListEntry> {
         val token = auth.accessToken ?: return emptyList()
-        val viewer = query(token, "query { Viewer { id } }", JsonObject(emptyMap()))?.get("Viewer")?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
+        val viewer = query(token, "query { Viewer { id } }", JsonObject(emptyMap()))?.get("Viewer").objectOrNull?.get("id")?.jsonPrimitive?.intOrNull ?: return emptyList()
         val data = query(
             token,
             "query (\$user: Int) { MediaListCollection(userId: \$user, type: ANIME) { lists { name isCustomList entries { status progress private media { id idMal episodes format title { english romaji } coverImage { extraLarge large } seasonYear } } } } }",
             buildJsonObject { put("user", viewer) },
         )
-        val lists = (data?.get("MediaListCollection")?.jsonObject?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
+        val lists = (data?.get("MediaListCollection").objectOrNull?.get("lists") as? JsonArray).orEmpty().map { it.jsonObject }
         fun entriesOf(list: JsonObject) = (list["entries"] as? JsonArray).orEmpty().map { it.jsonObject }
-        fun mediaId(e: JsonObject) = e["media"]?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull
+        fun mediaId(e: JsonObject) = e["media"].objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
         // A title in a custom list also sits in its status list: one entry, carrying its list names.
         val (custom, byStatus) = lists.partition { it["isCustomList"]?.jsonPrimitive?.content == "true" }
         val listsOf = mutableMapOf<Int, MutableList<String>>()
@@ -198,10 +198,10 @@ object AniListLibrary {
             entriesOf(list).forEach { e -> mediaId(e)?.let { listsOf.getOrPut(it) { mutableListOf() } += name } }
         }
         val raw = (byStatus + custom).flatMap { entriesOf(it) }.distinctBy { mediaId(it) }
-        val kitsu = Jikan.kitsuIds(raw.mapNotNull { it["media"]?.jsonObject?.get("idMal")?.jsonPrimitive?.intOrNull })
+        val kitsu = Jikan.kitsuIds(raw.mapNotNull { it["media"].objectOrNull?.get("idMal")?.jsonPrimitive?.intOrNull })
         return raw.mapNotNull { e ->
-            val m = e["media"]?.jsonObject ?: return@mapNotNull null
-            val title = m["title"]?.jsonObject
+            val m = e["media"].objectOrNull ?: return@mapNotNull null
+            val title = m["title"].objectOrNull
             val id = m["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
             val k = kitsu[m["idMal"]?.jsonPrimitive?.intOrNull]
             ListEntry(
@@ -209,7 +209,7 @@ object AniListLibrary {
                     id = k?.let { "kitsu:$it" } ?: "anilist:$id",
                     type = if (m.string("format") == "MOVIE") "movie" else "series",
                     name = title?.string("english") ?: title?.string("romaji").orEmpty(),
-                    poster = m["coverImage"]?.jsonObject?.let { it.string("extraLarge") ?: it.string("large") },
+                    poster = m["coverImage"].objectOrNull?.let { it.string("extraLarge") ?: it.string("large") },
                     releaseInfo = m["seasonYear"]?.jsonPrimitive?.intOrNull?.toString(),
                 ),
                 id, e.string("status") ?: "CURRENT", e["progress"]?.jsonPrimitive?.intOrNull ?: 0, m["episodes"]?.jsonPrimitive?.intOrNull,

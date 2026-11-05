@@ -640,7 +640,17 @@ private fun Eyebrow(text: String) {
 private fun Synopsis(text: String, tagline: String?, side: Dp) {
     var expanded by remember { mutableStateOf(HarborDisplay.settings.fullDescriptions) }
     Column(Modifier.padding(horizontal = side).widthIn(max = 820.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        tagline?.let { Text(it, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair)) }
+        // Arabic or Hebrew text runs right to left and keeps to the body font: the display fonts have
+        // no letters for it, which measured the tagline wrong.
+        val byContent = androidx.compose.ui.text.TextStyle(textDirection = androidx.compose.ui.text.style.TextDirection.Content)
+        tagline?.let {
+            val rtl = it.any { c -> Character.getDirectionality(c).let { d -> d == Character.DIRECTIONALITY_RIGHT_TO_LEFT || d == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC } }
+            Text(
+                it, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, style = byContent,
+                fontFamily = if (rtl) null else HarborFonts.display(HarborDisplay.settings.fontPair),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         Text(
             text,
             color = HarborColors.InkMuted,
@@ -648,6 +658,8 @@ private fun Synopsis(text: String, tagline: String?, side: Dp) {
             lineHeight = 25.sp,
             maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis,
+            style = byContent,
+            modifier = Modifier.fillMaxWidth(),
         )
         if (text.length > 240) {
             Text(if (expanded) "Less" else "More", color = HarborColors.Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable { expanded = !expanded })

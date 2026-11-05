@@ -237,7 +237,18 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         engine.load(url, headers, resume)
         engine.setAudioDelay(state.audioDelayMs)
         describe()
-        loadAddonSubtitles(videoId)
+        // Debug builds only: a subtitle URL from the launch, for testing subtitles without an addon.
+        val testSub = intent.getStringExtra("subtitle")?.takeIf { applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 }
+        if (testSub != null) {
+            val sub = app.harbor.android.data.Subtitle("test-subtitle", testSub, "eng")
+            state.addonSubs = listOf(sub)
+            if (intent.getBooleanExtra("autosync", false)) lifecycleScope.launch {
+                kotlinx.coroutines.delay(5_000)
+                selectSubtitle(SubChoice.Addon(sub))
+                while (subtitleFile == null) kotlinx.coroutines.delay(500)
+                startAutoSync()
+            }
+        } else loadAddonSubtitles(videoId)
         applyAnime4K()
     }
 
@@ -491,18 +502,21 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.panel = null
     }
 
-    override fun selectSubtitle(choice: SubChoice) {
+    override fun selectSubtitle(choice: SubChoice) = applySubtitle(choice, remember = true)
+
+    /** `remember`: you chose it, so this title keeps it (Harbor PC's per-show subtitle); Harbor's own picks don't. */
+    private fun applySubtitle(choice: SubChoice, remember: Boolean) {
         when (choice) {
             SubChoice.Off -> {
                 engine.selectText(null)
                 clearAddonSubtitle()
-                repository.updatePlayerPrefs { it.copy(subLanguage = "") }
+                if (remember) app.harbor.android.data.TitleSubs.setOff(metaId)
             }
             is SubChoice.Embedded -> {
                 clearAddonSubtitle()
                 engine.selectText(choice.key)
                 engine.textTracks().firstOrNull { it.key == choice.key }?.language
-                    ?.let { lang -> repository.updatePlayerPrefs { it.copy(subLanguage = lang) } }
+                    ?.let { lang -> if (remember) app.harbor.android.data.TitleSubs.setLang(metaId, lang) }
             }
             is SubChoice.Addon -> {
                 state.subLoading = true
@@ -530,7 +544,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                         if (state.subChoice == choice) subtitleFile = file?.takeUnless { it.isEmpty }
                     }
                 }
-                repository.updatePlayerPrefs { it.copy(subLanguage = choice.subtitle.lang) }
+                if (remember) app.harbor.android.data.TitleSubs.setLang(metaId, choice.subtitle.lang)
             }
         }
         state.subChoice = choice
@@ -574,7 +588,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val native = withTimeoutOrNull(25_000) { nativeSubtitles(videoId) }.orEmpty()
             if (state.videoId != videoId || native.isEmpty()) return@launch
             state.addonSubs = (state.addonSubs.orEmpty() + native).distinctBy { it.url }
-            if (state.settings.upgradeSubtitles && state.subChoice is SubChoice.Off) autoSubDone = false
+            // What's on (nothing, or only the video's default track) isn't in your languages: these may have one.
+            if (!showingWantedLanguage()) autoSubDone = false
             maybeAutoSelectAddon(engine.textTracks())
         }
     }
@@ -607,52 +622,70 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private fun maybeAutoSelectAddon(text: List<EngineTrack>) {
         if (autoSubDone) return
         val settings = state.settings
-        if (settings.subtitlesOffByDefault) {
+        val titlePick = app.harbor.android.data.TitleSubs.get(metaId)
+        // Off by default, or turned off for this title (Harbor PC's per-show subsOff).
+        if (settings.subtitlesOffByDefault || titlePick?.off == true) {
             autoSubDone = true
             return
         }
-        val wanted = (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct()
+        // This title's own choice first, then your subtitle languages in their order.
+        val wanted = (listOfNotNull(titlePick?.lang) + prefs.subLanguage + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
         if (wanted.isEmpty()) return
-        val embedded = text.filter { !it.external && !(settings.hideSdh && isSdh(it.label, it.detail)) && !skipped(it.label, it.detail) }
+        // Forced tracks only carry signs and foreign lines: never the subtitle you read (PC track-selection.ts).
+        val embedded = text.filter {
+            !it.external && !isForcedTrack(it) && !(settings.hideSdh && isSdh(it.label, it.detail)) && !skipped(it.label, it.detail)
+        }
         // Harbor's "Forced subs with native audio": the audio is already in the subtitle
         // language, so only a forced track (signs, foreign lines) turns on, else none.
-        if (settings.forcedSubsNativeAudio) {
+        // A language you chose for this title wins over it.
+        if (settings.forcedSubsNativeAudio && titlePick?.lang == null) {
             val audioLang = engine.audioTracks().firstOrNull { it.selected }?.language
             if (audioLang != null && sameLanguage(audioLang, wanted.first())) {
                 autoSubDone = true
-                embedded.firstOrNull { sameLanguage(it.language, wanted.first()) && "${it.label} ${it.detail}".contains("forced", true) }
-                    ?.let { selectSubtitle(SubChoice.Embedded(it.key)) } ?: selectSubtitle(SubChoice.Off)
+                text.firstOrNull { !it.external && sameLanguage(it.language, wanted.first()) && isForcedTrack(it) }
+                    ?.let { applySubtitle(SubChoice.Embedded(it.key), remember = false) } ?: applySubtitle(SubChoice.Off, remember = false)
                 return
             }
         }
-        val selected = text.firstOrNull { it.selected }
-        // An engine's own pick in a wanted language stands; addons can still beat it when preferred.
-        if (selected != null && (settings.preferEmbeddedSubs || !settings.subtitleAddons)) {
-            autoSubDone = true
-            return
-        }
-        if (settings.preferEmbeddedSubs) {
-            for (lang in wanted) {
-                embedded.firstOrNull { sameLanguage(it.language, lang) }?.let {
-                    autoSubDone = true
-                    selectSubtitle(SubChoice.Embedded(it.key))
-                    return
-                }
-            }
-        }
-        val addon = state.addonSubs ?: return
-        autoSubDone = true
+        // Harbor PC's pickDesiredSubtitleTrack: language first, in your order; within a language,
+        // "Prefer embedded" puts the video's own track before an addon's. The video's own pick
+        // (often its default English track) never stands in for a language you asked for.
         for (lang in wanted) {
-            addon.firstOrNull { sameLanguage(it.lang, lang) && !(settings.hideSdh && isSdh(it.id, null)) }?.let {
-                selectSubtitle(SubChoice.Addon(it))
+            val inVideo = embedded.firstOrNull { sameLanguage(it.language, lang) }
+            if (settings.preferEmbeddedSubs && inVideo != null) {
+                autoSubDone = true
+                if (!inVideo.selected) applySubtitle(SubChoice.Embedded(inVideo.key), remember = false)
                 return
             }
-            if (!settings.preferEmbeddedSubs) embedded.firstOrNull { sameLanguage(it.language, lang) }?.let {
-                selectSubtitle(SubChoice.Embedded(it.key))
+            // The addons haven't answered yet: wait for them before settling on anything.
+            val addon = state.addonSubs ?: return
+            addon.firstOrNull { sameLanguage(it.lang, lang) && !(settings.hideSdh && isSdh(it.id, null)) }?.let {
+                autoSubDone = true
+                applySubtitle(SubChoice.Addon(it), remember = false)
+                return
+            }
+            if (inVideo != null) {
+                autoSubDone = true
+                if (!inVideo.selected) applySubtitle(SubChoice.Embedded(inVideo.key), remember = false)
                 return
             }
         }
+        // Nothing in any of your languages (yet): Harbor's own sources may still arrive (see loadAddonSubtitles).
+        if (state.addonSubs != null) autoSubDone = true
     }
+
+    /** Whether the subtitle on now is in this title's choice or one of your subtitle languages. */
+    private fun showingWantedLanguage(): Boolean {
+        val lang = when (val c = state.subChoice) {
+            is SubChoice.Addon -> c.subtitle.lang
+            is SubChoice.Embedded -> engine.textTracks().firstOrNull { it.key == c.key }?.language
+            SubChoice.Off -> null
+        } ?: return false
+        val wanted = listOfNotNull(app.harbor.android.data.TitleSubs.get(metaId)?.lang) + prefs.subLanguage + state.settings.subtitleFallbacks
+        return wanted.any { it.isNotEmpty() && sameLanguage(lang, it) }
+    }
+
+    private fun isForcedTrack(track: EngineTrack) = Regex("""\bforced\b""", RegexOption.IGNORE_CASE).containsMatchIn("${track.label} ${track.detail}")
 
     /** The second subtitle (mpv), once per video, in its own language. */
     private fun pickSecondary(text: List<EngineTrack>) {
@@ -884,6 +917,52 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             }
         }
         state.liveSync = session
+    }
+
+    // ---- Auto sync by audio (Harbor PC's subsync): the film's speech against the subtitle's lines ----
+
+    private var autoSyncJob: kotlinx.coroutines.Job? = null
+
+    override fun startAutoSync() {
+        state.panel = null
+        if (autoSyncJob?.isActive == true) return
+        val choice = state.subChoice
+        val file = subtitleFile
+        val hint = { text: String -> state.hint = text; state.hintIcon = 0 }
+        when {
+            choice == SubChoice.Off -> return hint("Turn on subtitles first")
+            choice !is SubChoice.Addon -> return hint("Auto sync works on subtitles from your addons. Try live sync for this one")
+            file == null -> return hint(if (subtitleJob?.isActive == true) "Loading subtitle…" else "Couldn't read this subtitle. Try live sync")
+            state.castingTo != null -> return hint("Auto sync isn't available while casting")
+        }
+        val url = state.currentUrl
+        val audioTrack = engine.audioTracks().firstOrNull { it.selected }?.key?.substringAfter(':')
+            ?.takeIf { engine.drawsSubtitles }
+        state.autoSync = "Listening to the audio…"
+        autoSyncJob = lifecycleScope.launch {
+            val outcome = runCatching {
+                AudioSync.run(url, headers, audioTrack, state.durationMs, file!!.lines, cacheDir) { done, of ->
+                    state.autoSync = if (done < of) "Listening to the audio… ${done + 1} of $of" else "Matching the lines…"
+                }
+            }
+            state.autoSync = null
+            if (state.subChoice != choice) return@launch
+            outcome.onSuccess { r ->
+                if (kotlin.math.abs(r.timeScale - state.subTimeScale) > 1e-6) setSubTimeScale(r.timeScale)
+                val delay = applySubDelay(r.offsetMs)
+                val drift = if (kotlin.math.abs(r.timeScale - 1.0) > 1e-4) " · frame rate fixed" else ""
+                hint("Synced by audio  |  " + (if (delay > 0) "+" else "") + "%.1fs".format(Locale.US, delay / 1000f) + drift)
+            }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) return@onFailure
+                hint(e.message ?: "Auto sync didn't work")
+            }
+        }
+    }
+
+    override fun cancelAutoSync() {
+        AudioSync.cancel()
+        autoSyncJob?.cancel()
+        state.autoSync = null
     }
 
     /** Lines from the video grow as the engine reads (Media3) or shows (mpv) them. */
@@ -1395,6 +1474,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun onDestroy() {
+        if (autoSyncJob?.isActive == true) AudioSync.cancel()
         castContext?.sessionManager?.removeSessionManagerListener(castListener, CastSession::class.java)
         ticker.removeCallbacks(tick)
         stopScrobble()

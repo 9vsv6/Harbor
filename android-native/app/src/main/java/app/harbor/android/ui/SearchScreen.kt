@@ -113,6 +113,8 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
                 // Interleave the addons' results so one addon's long list doesn't bury the others.
                 .let { lists -> (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } } }
                 .distinctBy { it.id }
+                // Titles that have what you typed come first; the rest keep their order after them.
+                .sortedBy { searchRank(it.name, q) }
         }
         // Your title and poster languages, as Home's rows have them (TMDB key needed). Shown together
         // with the results rather than swapped in after, and never holding them up for long.
@@ -210,5 +212,18 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
                 items(current, key = { it.type + it.id }) { meta -> PosterTile(meta) { SearchBridge.remember(searchContext, query); onOpen(meta) } }
             }
         }
+    }
+}
+
+/** 0: the title starts with the search, 1: has it as a word or part, 2: anything else (an alias or a description match). */
+private fun searchRank(name: String, query: String): Int {
+    fun norm(s: String) = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replace(Regex("""\p{M}+"""), "").lowercase().replace(Regex("""[^\p{L}\p{N}]+"""), " ").trim()
+    val n = norm(name)
+    val q = norm(query)
+    return when {
+        q.isEmpty() -> 0
+        n.startsWith(q) -> 0
+        n.contains(q) -> 1
+        else -> 2
     }
 }

@@ -151,4 +151,6 @@ class PlayerState {
     /** Short-lived feedback from gestures: "+10s", "Volume 60%". */
     var hint by mutableStateOf<String?>(null)
     var hintIcon by mutableIntStateOf(0)
+    /** Auto sync by audio while it runs: what it's doing ("Listening… 2 of 3"). */
+    var autoSync by mutableStateOf<String?>(null)
 }

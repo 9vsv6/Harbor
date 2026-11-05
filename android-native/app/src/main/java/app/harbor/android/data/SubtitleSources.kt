@@ -123,7 +123,7 @@ object SubtitleSources {
 
     // ---- Helpers ----
 
-    private fun episodeTag(q: Query) = "S%02dE%02d".format(q.season ?: 1, q.episode ?: 1)
+    private fun episodeTag(q: Query) = "S%02dE%02d".format(java.util.Locale.US, q.season ?: 1, q.episode ?: 1)
 
     /** A language name or code ("english", "EN", "eng") as its two-letter code. */
     private fun code(raw: String?): String? {

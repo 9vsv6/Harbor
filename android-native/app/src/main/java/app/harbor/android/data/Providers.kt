@@ -62,7 +62,7 @@ object Tvdb {
                 Net.call(Request.Builder().url("$BASE/login").post(body.toRequestBody("application/json".toMediaType())).build()),
             ).jsonObject
         }.getOrNull() ?: return null
-        val value = json["data"]?.jsonObject?.string("token") ?: return null
+        val value = json["data"].objectOrNull?.string("token") ?: return null
         token = value to System.currentTimeMillis()
         tokenKey = key
         return value
@@ -82,14 +82,14 @@ object Tvdb {
     suspend fun seriesId(key: String, imdbId: String): Int? {
         if (imdbId in seriesByImdb) return seriesByImdb[imdbId]
         val hits = (get(key, "/search/remoteid/$imdbId")?.get("data") as? JsonArray).orEmpty().map { it.jsonObject }
-        val id = hits.firstNotNullOfOrNull { it["series"]?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull }
+        val id = hits.firstNotNullOfOrNull { it["series"].objectOrNull?.get("id")?.jsonPrimitive?.intOrNull }
         seriesByImdb[imdbId] = id
         return id
     }
 
     /** The network that airs it ("AMC"), as Harbor's Information block. */
     suspend fun network(key: String, seriesId: Int): String? {
-        val data = get(key, "/series/$seriesId/extended?short=true")?.get("data")?.jsonObject ?: return null
+        val data = get(key, "/series/$seriesId/extended?short=true")?.get("data").objectOrNull ?: return null
         return data["latestNetwork"]?.let { (it as? JsonObject)?.string("name") }
             ?: data["originalNetwork"]?.let { (it as? JsonObject)?.string("name") }
     }
@@ -99,7 +99,7 @@ object Tvdb {
         val lang = language?.let { "/$it" }.orEmpty()
         val out = mutableListOf<Episode>()
         for (page in 0..9) {
-            val data = get(key, "/series/$seriesId/episodes/default$lang?page=$page")?.get("data")?.jsonObject ?: break
+            val data = get(key, "/series/$seriesId/episodes/default$lang?page=$page")?.get("data").objectOrNull ?: break
             val list = (data["episodes"] as? JsonArray).orEmpty().map { it.jsonObject }
             list.forEach { e ->
                 val season = e["seasonNumber"]?.jsonPrimitive?.intOrNull ?: return@forEach

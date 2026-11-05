@@ -7,6 +7,7 @@
 //! `{ primary, order: [{ i, score, tier, reasons }], rejected: [{ i, reason }] }`.
 
 mod anime;
+mod subsync;
 
 use harbor_core::{parser, scoring, trust, Rejection, ScoreOptions, Stream, TrustOptions};
 use jni::objects::{JClass, JString};

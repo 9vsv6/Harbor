@@ -136,7 +136,7 @@ object Mal {
         val json = Net.json.parseToJsonElement(
             Net.call(request(auth, "/users/@me/animelist?status=$status&sort=list_updated_at&fields=list_status,num_episodes,mean,start_season&limit=60&nsfw=true").build()),
         ).jsonObject
-        val nodes = (json["data"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject["node"]?.jsonObject }
+        val nodes = (json["data"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject["node"].objectOrNull }
         // The Kitsu anime addon opens titles by Kitsu id; MAL ids are mapped in one go.
         val kitsuByMal = Jikan.kitsuIds(nodes.mapNotNull { it["id"]?.jsonPrimitive?.intOrNull })
         return nodes.mapNotNull { n ->
@@ -145,7 +145,7 @@ object Mal {
                 id = "kitsu:$kitsu",
                 type = "series",
                 name = n.string("title").orEmpty(),
-                poster = n["main_picture"]?.jsonObject?.let { it.string("large") ?: it.string("medium") },
+                poster = n["main_picture"].objectOrNull?.let { it.string("large") ?: it.string("medium") },
                 imdbRating = n["mean"]?.jsonPrimitive?.doubleOrNull?.let { "%.1f".format(java.util.Locale.US, it) },
             )
         }
@@ -166,20 +166,20 @@ object MalLibrary {
         while (next != null && guard++ < 6) {
             val json = Net.json.parseToJsonElement(Net.call(okhttp3.Request.Builder().url(next).header("Authorization", "Bearer ${auth.accessToken}").build())).jsonObject
             (json["data"] as? kotlinx.serialization.json.JsonArray)?.forEach { out += it.jsonObject }
-            next = json["paging"]?.jsonObject?.string("next")
+            next = json["paging"].objectOrNull?.string("next")
         }
-        val kitsu = Jikan.kitsuIds(out.mapNotNull { it["node"]?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull })
+        val kitsu = Jikan.kitsuIds(out.mapNotNull { it["node"].objectOrNull?.get("id")?.jsonPrimitive?.intOrNull })
         return out.mapNotNull { e ->
-            val n = e["node"]?.jsonObject ?: return@mapNotNull null
+            val n = e["node"].objectOrNull ?: return@mapNotNull null
             val id = n["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-            val s = e["list_status"]?.jsonObject
+            val s = e["list_status"].objectOrNull
             ListEntry(
                 Meta(
                     id = kitsu[id]?.let { "kitsu:$it" } ?: "mal:$id",
                     type = if (n.string("media_type") == "movie") "movie" else "series",
                     name = n.string("title").orEmpty(),
-                    poster = n["main_picture"]?.jsonObject?.let { it.string("large") ?: it.string("medium") },
-                    releaseInfo = n["start_season"]?.jsonObject?.get("year")?.jsonPrimitive?.intOrNull?.toString(),
+                    poster = n["main_picture"].objectOrNull?.let { it.string("large") ?: it.string("medium") },
+                    releaseInfo = n["start_season"].objectOrNull?.get("year")?.jsonPrimitive?.intOrNull?.toString(),
                 ),
                 id, s?.string("status") ?: "watching", s?.get("num_episodes_watched")?.jsonPrimitive?.intOrNull ?: 0,
                 n["num_episodes"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 },

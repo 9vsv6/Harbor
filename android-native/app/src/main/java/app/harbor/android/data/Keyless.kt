@@ -81,10 +81,10 @@ object Keyless {
         val show = runCatching {
             Net.json.parseToJsonElement(Net.get("https://api.tvmaze.com/shows/$id?embed[]=cast&embed[]=seasons&embed[]=episodes")).jsonObject
         }.getOrNull() ?: lookup
-        val embedded = show["_embedded"]?.jsonObject
+        val embedded = show["_embedded"].objectOrNull
         val cast = (embedded?.get("cast") as? JsonArray).orEmpty().map { it.jsonObject }.map { c ->
-            val person = c["person"]?.jsonObject
-            val character = c["character"]?.jsonObject
+            val person = c["person"].objectOrNull
+            val character = c["character"].objectOrNull
             CastMember(
                 person?.string("name").orEmpty(),
                 character?.string("name"),
@@ -94,7 +94,7 @@ object Keyless {
         val network = (show["network"] as? JsonObject)?.string("name") ?: (show["webChannel"] as? JsonObject)?.string("name")
         val episodes = (embedded?.get("episodes") as? JsonArray).orEmpty().map { it.jsonObject }
         val seasons = episodes.mapNotNull { it["season"]?.jsonPrimitive?.intOrNull }.filter { it > 0 }.distinct().size
-        val schedule = show["schedule"]?.jsonObject
+        val schedule = show["schedule"].objectOrNull
         val days = (schedule?.get("days") as? JsonArray).orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
         return base(meta).copy(
             overview = show.string("summary")?.replace(Regex("<[^>]+>"), "")?.trim()?.takeIf { it.isNotEmpty() }?.takeIf { meta.description.isNullOrBlank() },
@@ -125,15 +125,15 @@ object Keyless {
         val cast = (credits?.get("credits") as? JsonArray).orEmpty().map { it.jsonObject }
             .filter { it.string("category") == "actor" || it.string("category") == "actress" }
             .mapNotNull { c ->
-                val name = c["name"]?.jsonObject ?: return@mapNotNull null
+                val name = c["name"].objectOrNull ?: return@mapNotNull null
                 CastMember(
                     name.string("displayName").orEmpty(),
                     (c["characters"] as? JsonArray)?.firstOrNull()?.jsonPrimitive?.contentOrNull,
-                    name["primaryImage"]?.jsonObject?.string("url"),
+                    name["primaryImage"].objectOrNull?.string("url"),
                 )
             }
         val title = runCatching { Net.json.parseToJsonElement(Net.get("https://api.imdbapi.dev/titles/$imdb")).jsonObject }.getOrNull()
-        val rating = title?.get("rating")?.jsonObject
+        val rating = title?.get("rating").objectOrNull
         return base.copy(
             cast = cast.ifEmpty { base.cast },
             castCount = cast.size,

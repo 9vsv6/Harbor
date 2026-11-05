@@ -136,11 +136,11 @@ object Jikan {
                 Net.call(Request.Builder().url("https://graphql.anilist.co").post(body.toRequestBody("application/json".toMediaType())).build())
             }.getOrNull() ?: continue
             val media = runCatching {
-                Net.json.parseToJsonElement(response).jsonObject["data"]?.jsonObject?.get("Page")?.jsonObject?.get("media") as? JsonArray
+                Net.json.parseToJsonElement(response).jsonObject["data"].objectOrNull?.get("Page").objectOrNull?.get("media") as? JsonArray
             }.getOrNull().orEmpty()
             for (m in media.map { it.jsonObject }) {
                 val mal = m["idMal"]?.jsonPrimitive?.intOrNull ?: continue
-                val cover = m["coverImage"]?.jsonObject?.let { it.string("extraLarge") ?: it.string("large") } ?: continue
+                val cover = m["coverImage"].objectOrNull?.let { it.string("extraLarge") ?: it.string("large") } ?: continue
                 coverByMal.putIfAbsent(mal, cover)
             }
         }
@@ -172,7 +172,7 @@ object Jikan {
     private fun title(a: JsonObject): String = a.string("title_english") ?: a.string("title") ?: a.string("title_japanese") ?: "Unknown"
 
     private fun year(a: JsonObject): Int? =
-        a["year"]?.jsonPrimitive?.intOrNull ?: a["aired"]?.jsonObject?.string("from")?.take(4)?.toIntOrNull()
+        a["year"]?.jsonPrimitive?.intOrNull ?: a["aired"].objectOrNull?.string("from")?.take(4)?.toIntOrNull()
 
     private fun adult(a: JsonObject): Boolean =
         a.string("rating")?.startsWith("Rx") == true ||

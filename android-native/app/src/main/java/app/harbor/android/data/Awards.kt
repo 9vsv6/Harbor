@@ -136,10 +136,10 @@ object Awards {
     }.getOrNull()
 
     private fun parse(body: JsonObject?, won: Boolean): List<AwardEntry> {
-        val rows = (body?.get("results")?.jsonObject?.get("bindings") as? JsonArray).orEmpty().map { it.jsonObject }
+        val rows = (body?.get("results").objectOrNull?.get("bindings") as? JsonArray).orEmpty().map { it.jsonObject }
         val grouped = linkedMapOf<String, Pair<AwardEntry, MutableSet<String>>>()
         for (row in rows) {
-            fun v(name: String) = row[name]?.jsonObject?.get("value")?.jsonPrimitive?.contentOrNull
+            fun v(name: String) = row[name].objectOrNull?.get("value")?.jsonPrimitive?.contentOrNull
             val awardName = v("awardLabel")?.takeIf { !it.startsWith("Q") || it.contains(' ') } ?: continue
             val category = v("categoryLabel") ?: prefixes.firstOrNull { awardName.startsWith(it) }?.let { awardName.removePrefix(it).trim().ifEmpty { null } } ?: awardName
             val year = v("date")?.take(4)?.toIntOrNull()

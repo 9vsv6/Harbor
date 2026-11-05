@@ -110,8 +110,8 @@ object SkipSegments {
         val kitsuId = parts[1]
         val episode = parts.last()
         val malId = kitsuToMal.getOrPut(kitsuId) {
-            getJson("https://kitsu.io/api/edge/anime/$kitsuId/mappings")?.get("data")?.jsonArray
-                ?.map { it.jsonObject["attributes"]?.jsonObject }
+            getJson("https://kitsu.io/api/edge/anime/$kitsuId/mappings")?.get("data").arrayOrNull
+                ?.map { it.jsonObject["attributes"].objectOrNull }
                 ?.firstOrNull { it?.string("externalSite") == "myanimelist/anime" }
                 ?.string("externalId")?.toLongOrNull()
         } ?: return emptyList()
@@ -120,7 +120,7 @@ object SkipSegments {
             ?: return emptyList()
         return (json["results"] as? JsonArray).orEmpty().mapNotNull { result ->
             val obj = result.jsonObject
-            val interval = obj["interval"]?.jsonObject ?: return@mapNotNull null
+            val interval = obj["interval"].objectOrNull ?: return@mapNotNull null
             val start = interval["startTime"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
             val end = interval["endTime"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
             val kind = when (obj["skipType"]?.jsonPrimitive?.contentOrNull) {

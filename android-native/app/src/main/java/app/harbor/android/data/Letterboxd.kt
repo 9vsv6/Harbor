@@ -115,7 +115,7 @@ object Letterboxd {
             put("password", password)
             totp?.takeIf { it.isNotBlank() }?.let { put("totp", it) }
         })
-        val user = json["user"]?.jsonObject ?: error("Unexpected response from Stremboxd.")
+        val user = json["user"].objectOrNull ?: error("Unexpected response from Stremboxd.")
         LoginResult.Success(
             LetterboxdSession(
                 userToken = json.string("userToken") ?: error("Unexpected response from Stremboxd."),

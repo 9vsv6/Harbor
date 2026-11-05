@@ -25,6 +25,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a crash anywhere after this is kept for the next launch to report.
+        app.harbor.android.data.CrashReport.install(this)
         repository = Repository(this)
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
@@ -32,6 +34,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         app.harbor.android.data.Curated.init(this)
         app.harbor.android.data.PlayQueue.init(this)
         app.harbor.android.data.StremioSync.init(this)
+        app.harbor.android.data.TitleSubs.init(this)
         // The curated lists and last launch's Home rows are parsed now, off the main thread,
         // so the first Home frame doesn't wait on them.
         Thread({
@@ -54,7 +57,12 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         }
         main.launch { repository.rpdbKey.collect { HarborDisplay.rpdbKey = it } }
         // The play queue follows the active profile.
-        main.launch { repository.activeProfile.collect { app.harbor.android.data.PlayQueue.useProfile(it?.id) } }
+        main.launch {
+            repository.activeProfile.collect {
+                app.harbor.android.data.PlayQueue.useProfile(it?.id)
+                app.harbor.android.data.TitleSubs.useProfile(it?.id)
+            }
+        }
         main.launch {
             // In Nuvio mode My List is the Nuvio profile's library.
             kotlinx.coroutines.flow.combine(repository.myList, repository.accounts.nuvioLibrary, repository.accounts.nuvio, repository.accounts.shared) { list, nuvio, _, _ ->

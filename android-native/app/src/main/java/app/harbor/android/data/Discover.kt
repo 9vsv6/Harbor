@@ -271,7 +271,7 @@ object Discover {
     }
 
     private fun episodeLabel(season: Int, episode: Int, title: String?) =
-        "S%02dE%02d".format(season, episode) + (title?.takeIf { it.isNotBlank() && !it.startsWith("Episode") }?.let { ": $it" } ?: "")
+        "S%02dE%02d".format(java.util.Locale.US, season, episode) + (title?.takeIf { it.isNotBlank() && !it.startsWith("Episode") }?.let { ": $it" } ?: "")
 
     /**
      * My library: this month's episodes of the shows in your library and list, and the saved
@@ -414,7 +414,7 @@ object Discover {
                 ).jsonObject["data"]!!.jsonObject["Page"]!!.jsonObject
             }.getOrNull() ?: break
             (pageObj["airingSchedules"] as? JsonArray)?.forEach { (it as? JsonObject)?.let(rows::add) }
-            if (pageObj["pageInfo"]?.jsonObject?.get("hasNextPage")?.jsonPrimitive?.content != "true") break
+            if (pageObj["pageInfo"].objectOrNull?.get("hasNextPage")?.jsonPrimitive?.content != "true") break
         }
         // The better-known shows only, so a day isn't a wall of shorts.
         val media = rows.mapNotNull { r ->

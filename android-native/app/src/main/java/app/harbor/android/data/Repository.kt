@@ -192,6 +192,7 @@ class Repository(private val context: Context) {
         _autoPlay.value = prefs[keyAutoPlay] ?: true // Harbor plays the best source straight away (instantPlay).
         _playerPrefs.value = prefs[keyPlayer]
             ?.let { runCatching { Net.json.decodeFromString(PlayerPrefs.serializer(), it) }.getOrNull() }
+            ?.let { it.copy(subLanguage = LanguageCodes.code(it.subLanguage)) }
             ?: PlayerPrefs()
         _resume.value = prefs[keyResume]?.let { runCatching { Net.json.decodeFromString(resumeSerializer, it) }.getOrNull() } ?: emptyMap()
         _myList.value = prefs[keyMyList]?.let { runCatching { Net.json.decodeFromString(metaListSerializer, it) }.getOrNull() } ?: emptyList()
@@ -199,7 +200,10 @@ class Repository(private val context: Context) {
         _dismissed.value = prefs[keyDismissed]?.let { runCatching { Net.json.decodeFromString(stringSet, it) }.getOrNull() } ?: emptySet()
         _trackers.value = prefs[keyTrackers]?.let { runCatching { Net.json.decodeFromString(TrackerSettings.serializer(), it) }.getOrNull() } ?: TrackerSettings()
         _traktCw.value = emptyList()
-        _settings.value = prefs[keySettings]?.let { runCatching { Net.json.decodeFromString(AppSettings.serializer(), it) }.getOrNull() } ?: AppSettings()
+        _settings.value = prefs[keySettings]?.let { runCatching { Net.json.decodeFromString(AppSettings.serializer(), it) }.getOrNull() }
+            // Backups restored before names were turned into codes still hold "arabic" and the like.
+            ?.let { it.copy(subtitleFallbacks = LanguageCodes.codes(it.subtitleFallbacks), audioLanguages = LanguageCodes.codes(it.audioLanguages), secondarySubLanguage = LanguageCodes.code(it.secondarySubLanguage)) }
+            ?: AppSettings()
         _lastStreams.value = prefs[keyLastStreams]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
         scope.launch { refreshTrackers() }
         accounts.load(prefs)

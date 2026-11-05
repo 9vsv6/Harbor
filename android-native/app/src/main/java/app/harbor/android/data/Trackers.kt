@@ -109,7 +109,7 @@ object Trakt {
     )
 
     private suspend fun username(auth: TrackerAuth): String? =
-        Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings").build())).jsonObject["user"]?.jsonObject?.string("username")
+        Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings").build())).jsonObject["user"].objectOrNull?.string("username")
 
     /** Refreshes the token when it is within a day of expiring. */
     suspend fun fresh(auth: TrackerAuth): TrackerAuth {
@@ -151,14 +151,14 @@ object Trakt {
             val paused = item.string("paused_at")?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0
             when (item.string("type")) {
                 "movie" -> {
-                    val movie = item["movie"]?.jsonObject ?: return@mapNotNull null
-                    val imdb = movie["ids"]?.jsonObject?.string("imdb") ?: return@mapNotNull null
+                    val movie = item["movie"].objectOrNull ?: return@mapNotNull null
+                    val imdb = movie["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
                     CwItem(metahubMeta(imdb, "movie", movie.string("title").orEmpty()), imdb, 0, 0, null, null, paused, progress.toFloat(), "Trakt")
                 }
                 "episode" -> {
-                    val show = item["show"]?.jsonObject ?: return@mapNotNull null
-                    val episode = item["episode"]?.jsonObject ?: return@mapNotNull null
-                    val imdb = show["ids"]?.jsonObject?.string("imdb") ?: return@mapNotNull null
+                    val show = item["show"].objectOrNull ?: return@mapNotNull null
+                    val episode = item["episode"].objectOrNull ?: return@mapNotNull null
+                    val imdb = show["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
                     val season = episode["season"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                     val number = episode["number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                     CwItem(metahubMeta(imdb, "series", show.string("title").orEmpty()), "$imdb:$season:$number", 0, 0, season, number, paused, progress.toFloat(), "Trakt")
@@ -170,8 +170,8 @@ object Trakt {
 
     /** The profile picture on Trakt, for "Use my Trakt avatar". */
     suspend fun avatar(auth: TrackerAuth): String? = runCatching {
-        Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings?extended=full").build())).jsonObject["user"]?.jsonObject
-            ?.get("images")?.jsonObject?.get("avatar")?.jsonObject?.string("full")
+        Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings?extended=full").build())).jsonObject["user"].objectOrNull
+            ?.get("images").objectOrNull?.get("avatar").objectOrNull?.string("full")
     }.getOrNull()
 
     /** The Trakt watchlist, as titles (watchlist-sync.tsx's import). */
@@ -180,8 +180,8 @@ object Trakt {
         return list.mapNotNull { element ->
             val item = element.jsonObject
             val (key, type) = when (item.string("type")) { "movie" -> "movie" to "movie"; "show" -> "show" to "series"; else -> return@mapNotNull null }
-            val entry = item[key]?.jsonObject ?: return@mapNotNull null
-            val imdb = entry["ids"]?.jsonObject?.string("imdb") ?: return@mapNotNull null
+            val entry = item[key].objectOrNull ?: return@mapNotNull null
+            val imdb = entry["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
             metahubMeta(imdb, type, entry.string("title").orEmpty())
         }
     }
@@ -194,7 +194,7 @@ object Trakt {
             put("movies", JsonArray(withImdb.filter { it.type == "movie" }.map { buildJsonObject { putJsonObject("ids") { put("imdb", it.id) } } }))
             put("shows", JsonArray(withImdb.filter { it.type != "movie" }.map { buildJsonObject { putJsonObject("ids") { put("imdb", it.id) } } }))
         }.toString().toRequestBody(jsonType)
-        val added = Net.json.parseToJsonElement(Net.call(request(auth, "/sync/watchlist").post(body).build())).jsonObject["added"]?.jsonObject
+        val added = Net.json.parseToJsonElement(Net.call(request(auth, "/sync/watchlist").post(body).build())).jsonObject["added"].objectOrNull
         return (added?.get("movies")?.jsonPrimitive?.intOrNull ?: 0) + (added?.get("shows")?.jsonPrimitive?.intOrNull ?: 0)
     }
 
@@ -245,19 +245,19 @@ object Simkl {
 
     private suspend fun user(auth: TrackerAuth): String? =
         Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings").post("{}".toRequestBody(jsonType)).build()))
-            .jsonObject["user"]?.jsonObject?.string("name")
+            .jsonObject["user"].objectOrNull?.string("name")
 
     /** Harbor's own Simkl app, for reads that need no sign-in (community scores, trending). */
     const val PUBLIC_CLIENT = "9609ef0a6051b6fdcf3290fd962fd65e0f8e969c942555410cffd37afca91997"
 
     suspend fun avatar(auth: TrackerAuth): String? = runCatching {
         Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings").post("{}".toRequestBody(jsonType)).build()))
-            .jsonObject["user"]?.jsonObject?.string("avatar")
+            .jsonObject["user"].objectOrNull?.string("avatar")
     }.getOrNull()
 
     /** A Simkl title as one the app can open: by IMDb id, else the Kitsu id anime addons use. */
     private fun toMeta(entry: JsonObject, type: String): Meta? {
-        val ids = entry["ids"]?.jsonObject
+        val ids = entry["ids"].objectOrNull
         val imdb = ids?.string("imdb")?.takeIf { it.startsWith("tt") }
         val kitsu = ids?.string("kitsu")
         val id = imdb ?: kitsu?.let { "kitsu:$it" } ?: return null
@@ -270,7 +270,7 @@ object Simkl {
     suspend fun list(auth: TrackerAuth, kind: String, status: String): List<Meta> {
         val json = Net.json.parseToJsonElement(Net.call(request(auth, "/sync/all-items/$kind/$status?extended=full").build())) as? JsonObject ?: return emptyList()
         val (key, inner, type) = when (kind) { "movies" -> Triple("movies", "movie", "movie"); "anime" -> Triple("anime", "show", "series"); else -> Triple("shows", "show", "series") }
-        return (json[key] as? JsonArray).orEmpty().mapNotNull { e -> e.jsonObject[inner]?.jsonObject?.let { toMeta(it, type) } }
+        return (json[key] as? JsonArray).orEmpty().mapNotNull { e -> e.jsonObject[inner].objectOrNull?.let { toMeta(it, type) } }
     }
 
     /** Simkl's Trending Today (home-rails/cdn.ts), shows, movies and anime taken in turn. */
@@ -278,7 +278,7 @@ object Simkl {
         val json = Net.json.parseToJsonElement(Net.get("https://data.simkl.in/discover/trending/today_100.json?client_id=$PUBLIC_CLIENT&app-name=harbor&app-version=1")).jsonObject
         fun of(key: String, type: String) = (json[key] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
-            val imdb = o["ids"]?.jsonObject?.string("imdb")?.takeIf { it.startsWith("tt") } ?: return@mapNotNull null
+            val imdb = o["ids"].objectOrNull?.string("imdb")?.takeIf { it.startsWith("tt") } ?: return@mapNotNull null
             Meta(id = imdb, type = type, name = o.string("title").orEmpty(), poster = "https://images.metahub.space/poster/medium/$imdb/img")
         }
         val lists = listOf(of("tv", "series"), of("movies", "movie"), of("anime", "series"))
@@ -288,7 +288,7 @@ object Simkl {
     /** Simkl's community score for an IMDb title (the details-page badge). */
     suspend fun communityRating(imdb: String): Pair<Double, Int>? = runCatching {
         val json = Net.json.parseToJsonElement(Net.get("$API/ratings?imdb=$imdb&fields=simkl&client_id=$PUBLIC_CLIENT")).jsonObject
-        val simkl = json["simkl"]?.jsonObject ?: return@runCatching null
+        val simkl = json["simkl"].objectOrNull ?: return@runCatching null
         val rating = simkl["rating"]?.jsonPrimitive?.doubleOrNull ?: return@runCatching null
         rating to (simkl["votes"]?.jsonPrimitive?.intOrNull ?: 0)
     }.getOrNull()
@@ -321,7 +321,7 @@ object AniList {
 
     /** The profile picture on AniList, for "Use my AniList avatar". */
     suspend fun avatar(auth: TrackerAuth): String? = runCatching {
-        query(auth, "query { Viewer { avatar { large } } }")["Viewer"]?.jsonObject?.get("avatar")?.jsonObject?.string("large")
+        query(auth, "query { Viewer { avatar { large } } }")["Viewer"].objectOrNull?.get("avatar").objectOrNull?.string("large")
     }.getOrNull()
 
     /** A forum thread about an anime (anilist/threads.ts), for the detail page's AniList comments. */
@@ -333,13 +333,13 @@ object AniList {
             "query (\$mediaId: Int) { Page(page: 1, perPage: 20) { threads(mediaCategoryId: \$mediaId, sort: [ID_DESC]) { title body(asHtml: false) replyCount createdAt siteUrl user { name avatar { medium } } } } }",
             buildJsonObject { put("mediaId", mediaId) },
         )
-        return (data["Page"]?.jsonObject?.get("threads") as? JsonArray).orEmpty().mapNotNull { e ->
+        return (data["Page"].objectOrNull?.get("threads") as? JsonArray).orEmpty().mapNotNull { e ->
             val t = e.jsonObject
             Thread(
                 title = t.string("title") ?: return@mapNotNull null,
                 body = t.string("body").orEmpty().replace(Regex("~!|!~|__|\\*\\*|<[^>]+>|img\\d*\\([^)]*\\)|webm\\([^)]*\\)|youtube\\([^)]*\\)"), "").trim(),
-                user = t["user"]?.jsonObject?.string("name").orEmpty(),
-                avatar = t["user"]?.jsonObject?.get("avatar")?.jsonObject?.string("medium"),
+                user = t["user"].objectOrNull?.string("name").orEmpty(),
+                avatar = t["user"].objectOrNull?.get("avatar").objectOrNull?.string("medium"),
                 replies = t["replyCount"]?.jsonPrimitive?.intOrNull ?: 0,
                 url = t.string("siteUrl").orEmpty(),
                 createdAt = (t["createdAt"]?.jsonPrimitive?.longOrNull ?: 0) * 1000,
@@ -357,13 +357,13 @@ object AniList {
             .header("Accept", "application/json")
             .build()
         val json = Net.json.parseToJsonElement(Net.call(request)).jsonObject
-        (json["errors"] as? JsonArray)?.firstOrNull()?.jsonObject?.string("message")?.let { error(it) }
-        return json["data"]?.jsonObject ?: error("AniList returned nothing")
+        (json["errors"] as? JsonArray)?.firstOrNull().objectOrNull?.string("message")?.let { error(it) }
+        return json["data"].objectOrNull ?: error("AniList returned nothing")
     }
 
     suspend fun signIn(clientId: String, token: String): TrackerAuth {
         val auth = TrackerAuth(clientId, accessToken = token.trim(), expiresAt = System.currentTimeMillis() + 365L * 86_400_000)
-        val name = query(auth, "query { Viewer { name } }")["Viewer"]?.jsonObject?.string("name")
+        val name = query(auth, "query { Viewer { name } }")["Viewer"].objectOrNull?.string("name")
         return auth.copy(user = name)
     }
 
@@ -374,7 +374,7 @@ object AniList {
         runCatching {
             Net.json.parseToJsonElement(Net.get("https://kitsu.io/api/edge/anime/$kitsuId/mappings")).jsonObject["data"]
                 .let { it as? JsonArray }.orEmpty()
-                .map { it.jsonObject["attributes"]?.jsonObject }
+                .map { it.jsonObject["attributes"].objectOrNull }
                 .firstOrNull { it?.string("externalSite") == "anilist/anime" }
                 ?.string("externalId")?.toIntOrNull()
         }.getOrNull()
@@ -390,7 +390,7 @@ object AniList {
         val mediaId = anilistId(kitsuId) ?: return null
         val key = "kitsu:$kitsuId"
         val vars = buildJsonObject { put("id", mediaId) }
-        val media = query(auth, "query(\$id: Int) { Media(id: \$id) { episodes mediaListEntry { progress status repeat } } }", vars)["Media"]?.jsonObject
+        val media = query(auth, "query(\$id: Int) { Media(id: \$id) { episodes mediaListEntry { progress status repeat } } }", vars)["Media"].objectOrNull
         val entry = media?.get("mediaListEntry") as? JsonObject
         val entryStatus = entry?.string("status")
         val current = entry?.get("progress")?.jsonPrimitive?.intOrNull ?: 0
@@ -408,7 +408,7 @@ object AniList {
                     repeat?.let { put("repeat", it) }
                 },
             )
-            return saved["SaveMediaListEntry"]?.jsonObject?.get("progress")?.jsonPrimitive?.intOrNull == progress
+            return saved["SaveMediaListEntry"].objectOrNull?.get("progress")?.jsonPrimitive?.intOrNull == progress
         }
 
         if (entryStatus == "COMPLETED" || entryStatus == "REPEATING") {
@@ -504,8 +504,8 @@ suspend fun Trakt.watched(auth: TrackerAuth): List<Meta> = listOf("movies" to "m
     runCatching {
         (Net.json.parseToJsonElement(Net.call(traktRequest(auth, "/sync/watched/$kind").build())) as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
-            val entry = o[key]?.jsonObject ?: return@mapNotNull null
-            val imdb = entry["ids"]?.jsonObject?.string("imdb") ?: return@mapNotNull null
+            val entry = o[key].objectOrNull ?: return@mapNotNull null
+            val imdb = entry["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
             (o.string("last_watched_at") ?: "") to metahubMeta(imdb, if (kind == "movies") "movie" else "series", entry.string("title").orEmpty()).copy(releaseInfo = entry["year"]?.jsonPrimitive?.intOrNull?.toString())
         }
     }.getOrDefault(emptyList())

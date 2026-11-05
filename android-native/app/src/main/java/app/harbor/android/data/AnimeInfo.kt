@@ -127,7 +127,7 @@ object AnimeInfo {
                     Request.Builder().url(ENDPOINT).header("Accept", "application/json")
                         .post(body.toRequestBody("application/json".toMediaType())).build(),
                 ),
-            ).jsonObject["data"]?.jsonObject?.get("Media") as? JsonObject
+            ).jsonObject["data"].objectOrNull?.get("Media") as? JsonObject
         }.getOrNull()
         val result = media?.let(::shape)
         extraCache[anilistId] = result
@@ -137,7 +137,7 @@ object AnimeInfo {
     private fun shape(m: JsonObject): AnimeExtra {
         val title = m["title"] as? JsonObject
         val airing = m["nextAiringEpisode"] as? JsonObject
-        val studios = (m["studios"]?.jsonObject?.get("nodes") as? JsonArray).list()
+        val studios = (m["studios"].objectOrNull?.get("nodes") as? JsonArray).list()
             .sortedByDescending { it["isAnimationStudio"]?.jsonPrimitive?.contentOrNull == "true" }
             .mapNotNull { it.string("name") }.distinct()
         val stats = ((m["stats"] as? JsonObject)?.get("statusDistribution") as? JsonArray).list()
@@ -238,11 +238,11 @@ object AnimeStreamers {
     suspend fun forKitsu(kitsuId: String): List<WatchProvider> = cache[kitsuId] ?: runCatching {
         val json = Net.json.parseToJsonElement(Net.get("https://kitsu.io/api/edge/anime/$kitsuId/streaming-links?include=streamer")).jsonObject
         val names = (json["included"] as? kotlinx.serialization.json.JsonArray).orEmpty()
-            .associate { it.jsonObject.string("id") to it.jsonObject["attributes"]?.jsonObject?.string("siteName") }
+            .associate { it.jsonObject.string("id") to it.jsonObject["attributes"].objectOrNull?.string("siteName") }
         (json["data"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
-            val url = o["attributes"]?.jsonObject?.string("url")?.let { if (it.startsWith("http")) it else "https://$it" }
-            val streamer = o["relationships"]?.jsonObject?.get("streamer")?.jsonObject?.get("data")?.jsonObject?.string("id")
+            val url = o["attributes"].objectOrNull?.string("url")?.let { if (it.startsWith("http")) it else "https://$it" }
+            val streamer = o["relationships"].objectOrNull?.get("streamer").objectOrNull?.get("data").objectOrNull?.string("id")
             names[streamer]?.let { WatchProvider(it, null, url) }
         }.distinctBy { it.name }
     }.getOrDefault(emptyList()).also { cache[kitsuId] = it }

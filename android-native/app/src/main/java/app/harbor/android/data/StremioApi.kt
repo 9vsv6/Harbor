@@ -39,7 +39,7 @@ object StremioApi {
             },
         ).jsonObject
         val authKey = result.string("authKey") ?: throw StremioException("No session returned")
-        val user = result["user"]?.jsonObject
+        val user = result["user"].objectOrNull
         return Login(authKey, user?.string("email") ?: email)
     }
 

@@ -61,7 +61,7 @@ object AddonClient {
 
     suspend fun catalog(addon: Addon, catalog: CatalogDef, extra: Map<String, String> = emptyMap()): List<Meta> {
         val body = fetch(path(addon, "catalog", catalog.type, catalog.id, extra))
-        return body["metas"]?.jsonArray?.mapNotNull {
+        return body["metas"].arrayOrNull?.mapNotNull {
             runCatching { Net.json.decodeFromJsonElement(Meta.serializer(), it) }.getOrNull()
         } ?: emptyList()
     }
@@ -100,7 +100,7 @@ object AddonClient {
                         coroutineScope {
                             ids.map { (type, id) ->
                                 async {
-                                    fetch(path(addon, "stream", type, id))["streams"]?.jsonArray?.mapNotNull {
+                                    fetch(path(addon, "stream", type, id))["streams"].arrayOrNull?.mapNotNull {
                                         runCatching { Net.json.decodeFromJsonElement(Stream.serializer(), it) }.getOrNull()
                                     } ?: emptyList()
                                 }
@@ -127,7 +127,7 @@ object AddonClient {
             async {
                 withTimeoutOrNull(15_000) {
                     runCatching {
-                        fetch(path(addon, "subtitles", type, id))["subtitles"]?.jsonArray?.mapNotNull {
+                        fetch(path(addon, "subtitles", type, id))["subtitles"].arrayOrNull?.mapNotNull {
                             runCatching { Net.json.decodeFromJsonElement(Subtitle.serializer(), it) }.getOrNull()
                         } ?: emptyList()
                     }.getOrNull()

@@ -98,6 +98,8 @@ class MainActivity : ComponentActivity() {
                 if (chosen) HarborRoot(repository) else WhosWatching(repository)
                 // A newer Harbor on GitHub, offered once per launch.
                 app.harbor.android.ui.UpdatePrompt()
+                // The last crash's report, to copy or share.
+                app.harbor.android.ui.CrashPrompt()
             }
         }
         handleLink(intent)

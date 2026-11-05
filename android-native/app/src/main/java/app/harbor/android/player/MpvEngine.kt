@@ -474,6 +474,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         val list = mpv.getPropertyString("track-list")
             ?.let { runCatching { Net.json.parseToJsonElement(it) as? JsonArray }.getOrNull() }
             ?: return emptyList()
+        // mpv marks the second ("dual") subtitle selected too; that one isn't the subtitle that's on.
+        val secondSub = if (kind == "sub") mpv.getPropertyString("current-tracks/sub2/id") else null
         val out = ArrayList<EngineTrack>()
         for (element in list) {
             val track = element as? JsonObject ?: continue
@@ -500,7 +502,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 key = "$kind:$id",
                 label = trackName(lang, title, out.size + 1),
                 detail = detail,
-                selected = b("selected"),
+                selected = b("selected") && (secondSub == null || secondSub != id),
                 language = lang,
                 commentary = title?.contains("commentary", ignoreCase = true) == true,
                 external = b("external"),
@@ -537,7 +539,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             dropExternalSubtitles()
             rtlFont(isArabicLanguage(language))
             runCatching { mpv.command(arrayOf("sub-add", url, "select", title, language)) }
-            done(tracks("sub").any { it.external && it.selected })
+            // Added is loaded: mpv switches to it a moment later, so "selected" isn't set yet here.
+            done(tracks("sub").any { it.external })
         }
         return true
     }
@@ -551,7 +554,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     /** Harbor's subtitle style on mpv's text subtitles; styled (ASS) ones keep their look, scaled. */
     override fun applySubtitleStyle(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean) {
         // mpv takes #AARRGGBB.
-        fun argb(c: Long, alpha: Float = 1f) = "#%02X%06X".format((alpha * 255).toInt().coerceIn(0, 255), c and 0xFFFFFF)
+        fun argb(c: Long, alpha: Float = 1f) = "#%02X%06X".format(java.util.Locale.ROOT, (alpha * 255).toInt().coerceIn(0, 255), c and 0xFFFFFF)
         val color = argb(prefs.subColor, style.subOpacity.coerceIn(0.2f, 1f))
         styleScale = prefs.subScale.toDouble()
         mpv.setPropertyDouble("sub-scale", subScale())

@@ -118,6 +118,8 @@ interface PlayerActions {
     fun setSubDelay(delayMs: Long)
     /** Live sync: Harbor's panel of every subtitle line; align the one you hear to now. */
     fun startLiveSync()
+    fun startAutoSync()
+    fun cancelAutoSync()
     fun liveSyncAlign(line: SubtitleFile.Cue)
     fun liveSyncReset()
     fun liveSyncPlayFrom(line: SubtitleFile.Cue)
@@ -177,8 +179,10 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         }
     }
     LaunchedEffect(state.hint) {
-        if (state.hint != null) {
-            delay(900)
+        val hint = state.hint
+        if (hint != null) {
+            // A sentence needs longer to read than "+10s".
+            delay(if (hint.length > 28) 3_500 else 900)
             state.hint = null
         }
     }
@@ -319,6 +323,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         HarborPopovers(state, prefs, actions)
         if (state.panel == Panel.SubStyle) SubStyleBar(state, prefs, actions)
         SubSyncBar(state, actions)
+        AutoSyncPill(state, actions)
         LiveSyncPanel(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)

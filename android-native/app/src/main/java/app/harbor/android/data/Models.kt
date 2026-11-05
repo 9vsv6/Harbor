@@ -42,8 +42,8 @@ data class Manifest(
                 (id == null || idPrefixes == null || idPrefixes.any { id.startsWith(it) })
             is JsonObject -> {
                 val name = entry["name"]?.jsonPrimitive?.contentOrNull
-                val entryTypes = entry["types"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: types
-                val prefixes = entry["idPrefixes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: idPrefixes
+                val entryTypes = entry["types"].arrayOrNull?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: types
+                val prefixes = entry["idPrefixes"].arrayOrNull?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: idPrefixes
                 name == resource && type in entryTypes &&
                     (id == null || prefixes == null || prefixes.any { id.startsWith(it) })
             }

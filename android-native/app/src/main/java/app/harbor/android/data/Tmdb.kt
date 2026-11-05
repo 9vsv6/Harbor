@@ -289,8 +289,8 @@ object Tmdb {
     suspend fun trailerKey(key: String, meta: Meta): String? {
         val path = tmdbPath(meta) ?: meta.id.takeIf { it.startsWith("tt") }?.let { imdb ->
             val found = get(key, "/find/$imdb", mapOf("external_source" to "imdb_id"))
-            val movie = (found["movie_results"] as? JsonArray)?.firstOrNull()?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull
-            val tv = (found["tv_results"] as? JsonArray)?.firstOrNull()?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull
+            val movie = (found["movie_results"] as? JsonArray)?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
+            val tv = (found["tv_results"] as? JsonArray)?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
             movie?.let { "/movie/$it" } ?: tv?.let { "/tv/$it" }
         } ?: return null
         val videos = (get(key, "$path/videos", mapOf("include_video_language" to "en,null"))["results"] as? JsonArray).orEmpty().map { it.jsonObject }
@@ -372,7 +372,7 @@ object Tmdb {
         } else {
             "tv" to (found["tv_results"] as? JsonArray)?.firstOrNull()
         }
-        val id = result?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return null
+        val id = result.objectOrNull?.get("id")?.jsonPrimitive?.intOrNull ?: return null
         val lang = posterBase
         val d = get(
             key,
@@ -383,30 +383,30 @@ object Tmdb {
                 "include_image_language" to imageLanguages(lang),
             ),
         )
-        val images = d["images"]?.jsonObject
+        val images = d["images"].objectOrNull
         fun pictures(name: String, size: String) =
             (images?.get(name) as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("file_path") }.distinct().take(30).map { "$IMAGES/$size$it" }
         val logos = (images?.get("logos") as? JsonArray).orEmpty().map { it.jsonObject }
         val logo = (logos.firstOrNull { it.string("iso_639_1") == lang } ?: logos.firstOrNull { it.string("iso_639_1") == "en" } ?: logos.firstOrNull())
             ?.string("file_path")?.let { "$IMAGES/w500$it" }
         // Series use the whole run's cast and crew (aggregate_credits), as Harbor does.
-        val credits = d["credits"]?.jsonObject
-        val aggregate = d["aggregate_credits"]?.jsonObject?.takeIf { kind == "tv" }
+        val credits = d["credits"].objectOrNull
+        val aggregate = d["aggregate_credits"].objectOrNull?.takeIf { kind == "tv" }
         val castJson = ((aggregate ?: credits)?.get("cast") as? JsonArray).orEmpty().map { it.jsonObject }
         val cast = castJson.take(60).map {
-            val role = it.string("character") ?: (it["roles"] as? JsonArray)?.firstOrNull()?.jsonObject?.string("character")
+            val role = it.string("character") ?: (it["roles"] as? JsonArray)?.firstOrNull().objectOrNull?.string("character")
             CastMember(it.string("name").orEmpty(), role?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w342$p" })
         }
         val crew = ((credits?.get("crew") as? JsonArray).orEmpty() + (aggregate?.get("crew") as? JsonArray).orEmpty()).map { it.jsonObject }
         fun jobsOf(person: JsonObject): List<String> = listOfNotNull(person.string("job")) +
             (person["jobs"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("job") }
         fun job(vararg jobs: String) = crew.filter { p -> jobsOf(p).any { it in jobs } }.mapNotNull { it.string("name") }.distinct()
-        val trailer = (d["videos"]?.jsonObject?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }
+        val trailer = (d["videos"].objectOrNull?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }
             .firstOrNull { it.string("site") == "YouTube" && it.string("type") == "Trailer" }?.string("key")
         val creators = (d["created_by"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("name") }
         // The region chosen in Settings → Languages (else the device's), as Harbor's tmdb-watch.ts.
         val country = regionCode() ?: "US"
-        val providers = d["watch/providers"]?.jsonObject?.get("results")?.jsonObject?.let { it[country] ?: it["US"] }?.jsonObject
+        val providers = d["watch/providers"].objectOrNull?.get("results").objectOrNull?.let { it[country] ?: it["US"] }.objectOrNull
         val watchLink = providers?.string("link")
         val watchOn = listOf("flatrate", "free", "ads").flatMap { (providers?.get(it) as? JsonArray).orEmpty() }.map { it.jsonObject }
             .distinctBy { it.string("provider_name") }
@@ -421,12 +421,12 @@ object Tmdb {
                 }
             }.awaitAll().toMap()
         }
-        fun railIn(lang: String?, name: String): Map<Int?, JsonObject> = lang?.let { railPages[base(it)] }?.get(name)?.jsonObject?.get("results")
+        fun railIn(lang: String?, name: String): Map<Int?, JsonObject> = lang?.let { railPages[base(it)] }?.get(name).objectOrNull?.get("results")
             .let { it as? JsonArray }.orEmpty().map { it.jsonObject }.associateBy { it["id"]?.jsonPrimitive?.intOrNull }
         fun rail(name: String): List<Meta> {
             val titles = railIn(titleLang, name)
             val art = railIn(posterLang, name)
-            return (d[name]?.jsonObject?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { item ->
+            return (d[name].objectOrNull?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { item ->
                 val itemId = item["id"]?.jsonPrimitive?.intOrNull
                 toMeta(item, forced, titleFrom = titles[itemId], artFrom = art[itemId])
             }
@@ -454,7 +454,7 @@ object Tmdb {
             revenue = d["revenue"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.takeIf { it > 0 },
             trailerYouTube = trailer,
             tmdbId = id,
-            tvdbId = d["external_ids"]?.jsonObject?.get("tvdb_id")?.jsonPrimitive?.intOrNull,
+            tvdbId = d["external_ids"].objectOrNull?.get("tvdb_id")?.jsonPrimitive?.intOrNull,
             countries = (d["production_countries"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("name") },
             originalLanguage = originalLanguage,
             voteAverage = d["vote_average"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull(),
@@ -473,7 +473,7 @@ object Tmdb {
             posters = pictures("posters", "w342"),
             logos = pictures("logos", "w300"),
             movieReleases = if (kind == "movie") MovieReleases.pick(
-                (d["release_dates"]?.jsonObject?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { group ->
+                (d["release_dates"].objectOrNull?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }.mapNotNull { group ->
                     val country = group.string("iso_3166_1") ?: return@mapNotNull null
                     country to (group["release_dates"] as? JsonArray).orEmpty().mapNotNull { r ->
                         val o = r.jsonObject
@@ -505,7 +505,7 @@ object Tmdb {
         val body = runCatching { get(key, "/tv/$tvId/season/$season/translations") }.getOrNull() ?: return null
         return (body["translations"] as? JsonArray).orEmpty().mapNotNull { t ->
             val o = t.jsonObject
-            val overview = o["data"]?.jsonObject?.string("overview")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val overview = o["data"].objectOrNull?.string("overview")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             Triple(o.string("iso_639_1") ?: return@mapNotNull null, o.string("iso_3166_1"), overview)
         }
     }
@@ -524,10 +524,10 @@ object Tmdb {
         val main = d.string(field)?.takeIf { it.isNotBlank() }
         if (base(descLang) == base(language)) return main
         val country = descLang.substringAfter('-', "").uppercase()
-        val translations = (d["translations"]?.jsonObject?.get("translations") as? JsonArray).orEmpty().map { it.jsonObject }
+        val translations = (d["translations"].objectOrNull?.get("translations") as? JsonArray).orEmpty().map { it.jsonObject }
             .filter { it.string("iso_639_1") == base(descLang) }
         val pick = translations.firstOrNull { country.isNotEmpty() && it.string("iso_3166_1") == country } ?: translations.firstOrNull()
-        return pick?.get("data")?.jsonObject?.string(field)?.takeIf { it.isNotBlank() } ?: main
+        return pick?.get("data").objectOrNull?.string(field)?.takeIf { it.isNotBlank() } ?: main
     }
 
     /** The title in the title language, from TMDB's translations; the release title for "Original". */
@@ -537,10 +537,10 @@ object Tmdb {
         val lang = titleLang ?: return original ?: main
         if (base(lang) == base(language)) return main ?: original
         val country = lang.substringAfter('-', "").uppercase()
-        val translations = (d["translations"]?.jsonObject?.get("translations") as? JsonArray).orEmpty().map { it.jsonObject }
+        val translations = (d["translations"].objectOrNull?.get("translations") as? JsonArray).orEmpty().map { it.jsonObject }
             .filter { it.string("iso_639_1") == base(lang) }
         val pick = translations.firstOrNull { country.isNotEmpty() && it.string("iso_3166_1") == country } ?: translations.firstOrNull()
-        val translated = pick?.get("data")?.jsonObject?.let { it.string("title") ?: it.string("name") }?.takeIf { it.isNotBlank() }
+        val translated = pick?.get("data").objectOrNull?.let { it.string("title") ?: it.string("name") }?.takeIf { it.isNotBlank() }
         // TMDB leaves a translation's title empty when it's the same as the original.
         return translated ?: if (base(lang) == d.string("original_language")) original else main ?: original
     }
@@ -573,17 +573,17 @@ object Tmdb {
         } else {
             "tv" to (found["tv_results"] as? JsonArray)?.firstOrNull()
         }
-        val id = result?.jsonObject?.get("id")?.jsonPrimitive?.intOrNull ?: return null
+        val id = result.objectOrNull?.get("id")?.jsonPrimitive?.intOrNull ?: return null
         val lang = posterBase
         val details = get(
             key,
             "/$kind/$id",
             mapOf("append_to_response" to "credits,images", "include_image_language" to imageLanguages(lang)),
         )
-        val logos = (details["images"]?.jsonObject?.get("logos") as? JsonArray).orEmpty().map { it.jsonObject }
+        val logos = (details["images"].objectOrNull?.get("logos") as? JsonArray).orEmpty().map { it.jsonObject }
         val logo = (logos.firstOrNull { it.string("iso_639_1") == lang } ?: logos.firstOrNull { it.string("iso_639_1") == "en" } ?: logos.firstOrNull())
             ?.string("file_path")?.let { "$IMAGES/w500$it" }
-        val cast = (details["credits"]?.jsonObject?.get("cast") as? JsonArray).orEmpty().take(20).map { it.jsonObject }.map {
+        val cast = (details["credits"].objectOrNull?.get("cast") as? JsonArray).orEmpty().take(20).map { it.jsonObject }.map {
             CastMember(it.string("name").orEmpty(), it.string("character")?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w185$p" })
         }
         return TmdbExtras(

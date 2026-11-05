@@ -58,6 +58,8 @@ val buildHarborCore by tasks.registering {
                 commandLine(cargo, "build", "--release", "--target", triple)
                 environment("CARGO_TARGET_${triple.uppercase().replace('-', '_')}_LINKER", linker.path)
                 environment("PATH", cargoHome.path + File.pathSeparator + System.getenv("PATH"))
+                // 16 KB pages (Android 15+ devices): the library must be aligned for them to load.
+                environment("RUSTFLAGS", "-C link-arg=-Wl,-z,max-page-size=16384")
             }.result.get()
             val so = coreJniDir.resolve("target/$triple/release/libharbor_core_jni.so")
             so.copyTo(coreLibsDir.get().asFile.resolve("$abi/libharbor_core_jni.so"), overwrite = true)
@@ -109,8 +111,8 @@ android {
         applicationId = "app.harbor.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.0.10"
+        versionCode = 21
+        versionName = "1.0.11"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }

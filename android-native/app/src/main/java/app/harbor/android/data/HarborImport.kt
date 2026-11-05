@@ -100,7 +100,7 @@ class HarborImport(private val repository: Repository, private val context: Cont
                 if (service !in repository.debridKeys.value) runCatching { repository.setDebrid(DebridAccount(service, k)) }.onSuccess { count("debrid account") }
             }
 
-        val subLangs = s.strList("preferredSubLangs")
+        val subLangs = s.strList("preferredSubLangs")?.let(LanguageCodes::codes)
         repository.updatePlayerPrefs { p ->
             p.copy(
                 subLanguage = subLangs?.firstOrNull() ?: p.subLanguage,
@@ -114,9 +114,9 @@ class HarborImport(private val repository: Repository, private val context: Cont
         }
         repository.updateSettings { a ->
             a.copy(
-                audioLanguages = s.strList("preferredAudioLangs") ?: a.audioLanguages,
+                audioLanguages = s.strList("preferredAudioLangs")?.let(LanguageCodes::codes) ?: a.audioLanguages,
                 subtitleFallbacks = subLangs?.drop(1) ?: a.subtitleFallbacks,
-                secondarySubLanguage = s.str("secondarySubLang") ?: a.secondarySubLanguage,
+                secondarySubLanguage = s.str("secondarySubLang")?.let(LanguageCodes::code) ?: a.secondarySubLanguage,
                 secondSubScale = s.num("subSecondaryScale")?.toFloat() ?: a.secondSubScale,
                 subtitlesOffByDefault = s.bool("subtitlesOffByDefault") ?: a.subtitlesOffByDefault,
                 preferEmbeddedSubs = s.bool("preferEmbeddedSubs") ?: a.preferEmbeddedSubs,

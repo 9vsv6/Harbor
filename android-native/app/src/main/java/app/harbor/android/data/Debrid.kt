@@ -44,12 +44,12 @@ object Debrid {
             user.string("username") ?: user.string("email") ?: "Signed in"
         }
         DebridService.TorBox -> {
-            val data = tbGet(account, "/user/me")["data"]?.jsonObject
+            val data = tbGet(account, "/user/me")["data"].objectOrNull
             data?.string("email") ?: "Signed in"
         }
         DebridService.AllDebrid -> {
             val data = adGet(account, "/v4/user")
-            data["user"]?.jsonObject?.string("username") ?: "Signed in"
+            data["user"].objectOrNull?.string("username") ?: "Signed in"
         }
         DebridService.Premiumize -> {
             val info = pmCall(Request.Builder().url("$PM/account/info?apikey=${Uri.encode(account.apiKey)}").build())
@@ -118,7 +118,7 @@ object Debrid {
                 delay(1_000)
                 info = rdGet(account, "/torrents/info/$id")
             }
-            val files = info["files"]?.jsonArray.orEmpty().map { it.jsonObject }.map {
+            val files = info["files"].arrayOrNull.orEmpty().map { it.jsonObject }.map {
                 TorrentFile(
                     id = it["id"]?.jsonPrimitive?.intOrNull ?: 0,
                     path = it.string("path").orEmpty(),
@@ -138,10 +138,10 @@ object Debrid {
                 delay(1_000)
             }
             if (info.string("status") != "downloaded") throw NotCached(DebridService.RealDebrid)
-            val links = info["links"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+            val links = info["links"].arrayOrNull.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
             val link = links.singleOrNull() ?: run {
                 // Several files selected earlier: links follow the selected files in order.
-                val selected = info["files"]?.jsonArray.orEmpty().map { it.jsonObject }
+                val selected = info["files"].arrayOrNull.orEmpty().map { it.jsonObject }
                     .filter { it["selected"]?.jsonPrimitive?.intOrNull == 1 }
                 val position = selected.indexOfFirst { it["id"]?.jsonPrimitive?.intOrNull == file.id }
                 links.getOrNull(position) ?: links.firstOrNull()
@@ -171,7 +171,7 @@ object Debrid {
         val form = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("magnet", magnet(hash, stream)).build()
         val created = Net.json.parseToJsonElement(Net.call(tbRequest(account, "/torrents/createtorrent").post(form).build()))
             .jsonObject
-        val torrentId = created["data"]?.jsonObject?.get("torrent_id")?.jsonPrimitive?.contentOrNull
+        val torrentId = created["data"].objectOrNull?.get("torrent_id")?.jsonPrimitive?.contentOrNull
             ?: error(created.string("detail") ?: "TorBox didn't accept the torrent")
 
         var torrent: JsonObject? = null
@@ -183,7 +183,7 @@ object Debrid {
             if (finished) break
             delay(1_000)
         }
-        val files = torrent?.get("files")?.jsonArray.orEmpty().map { it.jsonObject }.map {
+        val files = torrent?.get("files").arrayOrNull.orEmpty().map { it.jsonObject }.map {
             TorrentFile(
                 id = it["id"]?.jsonPrimitive?.intOrNull ?: 0,
                 path = it.string("name") ?: it.string("short_name").orEmpty(),
@@ -212,26 +212,26 @@ object Debrid {
     /** AllDebrid answers {status, data} or {status: "error", error: {message}}. */
     private suspend fun adGet(account: DebridAccount, pathAndQuery: String): JsonObject {
         val body = Net.json.parseToJsonElement(Net.call(adRequest(account, pathAndQuery).build())).jsonObject
-        if (body.string("status") != "success") error(body["error"]?.jsonObject?.string("message") ?: "AllDebrid refused the request")
-        return body["data"]?.jsonObject ?: JsonObject(emptyMap())
+        if (body.string("status") != "success") error(body["error"].objectOrNull?.string("message") ?: "AllDebrid refused the request")
+        return body["data"].objectOrNull ?: JsonObject(emptyMap())
     }
 
     private suspend fun allDebrid(account: DebridAccount, hash: String, stream: Stream): String {
         val upload = adGet(account, "/v4/magnet/upload?magnets[]=${Uri.encode(magnet(hash, stream))}")
-        val magnetId = upload["magnets"]?.jsonArray?.firstOrNull()?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+        val magnetId = upload["magnets"].arrayOrNull?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.contentOrNull
             ?: error("AllDebrid didn't accept the torrent")
         try {
-            var ready = upload["magnets"]?.jsonArray?.firstOrNull()?.jsonObject?.get("ready")?.jsonPrimitive?.booleanOrNull == true
+            var ready = upload["magnets"].arrayOrNull?.firstOrNull().objectOrNull?.get("ready")?.jsonPrimitive?.booleanOrNull == true
             for (attempt in 0 until 6) {
                 if (ready) break
                 delay(1_000)
                 val status = adGet(account, "/v4.1/magnet/status?id=$magnetId")["magnets"]
-                val one = (status as? JsonObject) ?: (status as? JsonArray)?.firstOrNull()?.jsonObject
+                val one = (status as? JsonObject) ?: (status as? JsonArray)?.firstOrNull().objectOrNull
                 ready = one?.get("statusCode")?.jsonPrimitive?.intOrNull == 4
             }
             if (!ready) throw NotCached(DebridService.AllDebrid)
             // The files come as a tree: {n: name, s: size, l: link} or {n, e: [children]}.
-            val tree = adGet(account, "/v4/magnet/files?id[]=$magnetId")["magnets"]?.jsonArray?.firstOrNull()?.jsonObject?.get("files")
+            val tree = adGet(account, "/v4/magnet/files?id[]=$magnetId")["magnets"].arrayOrNull?.firstOrNull().objectOrNull?.get("files")
             val flat = mutableListOf<Pair<TorrentFile, String>>()
             fun walk(node: kotlinx.serialization.json.JsonElement?, path: String) {
                 (node as? JsonArray)?.forEach { child ->
@@ -267,7 +267,7 @@ object Debrid {
     private suspend fun premiumize(account: DebridAccount, hash: String, stream: Stream): String {
         val form = FormBody.Builder().add("apikey", account.apiKey).add("src", magnet(hash, stream)).build()
         val content = runCatching { pmCall(Request.Builder().url("$PM/transfer/directdl").post(form).build()) }
-            .getOrElse { throw NotCached(DebridService.Premiumize) }["content"]?.jsonArray.orEmpty().map { it.jsonObject }
+            .getOrElse { throw NotCached(DebridService.Premiumize) }["content"].arrayOrNull.orEmpty().map { it.jsonObject }
         if (content.isEmpty()) throw NotCached(DebridService.Premiumize)
         val files = content.mapIndexed { i, o -> TorrentFile(i, o.string("path").orEmpty(), o["size"]?.jsonPrimitive?.longOrNull ?: 0) }
         val file = pickFile(files, stream) { idx -> files.getOrNull(idx) } ?: error("Premiumize found no files in this torrent")
@@ -285,14 +285,14 @@ object Debrid {
     private suspend fun dlCall(request: Request): JsonObject {
         val body = Net.json.parseToJsonElement(Net.call(request)).jsonObject
         if (body["success"]?.jsonPrimitive?.booleanOrNull != true) error(body.string("error") ?: "Debrid-Link refused the request")
-        return body["value"]?.jsonObject ?: JsonObject(emptyMap())
+        return body["value"].objectOrNull ?: JsonObject(emptyMap())
     }
 
     private suspend fun debridLink(account: DebridAccount, hash: String, stream: Stream): String {
         val form = FormBody.Builder().add("url", magnet(hash, stream)).add("async", "true").build()
         val added = dlCall(dlRequest(account, "/seedbox/add").post(form).build())
         val id = added.string("id") ?: error("Debrid-Link didn't accept the torrent")
-        val raw = added["files"]?.jsonArray.orEmpty().map { it.jsonObject }
+        val raw = added["files"].arrayOrNull.orEmpty().map { it.jsonObject }
         // Cached torrents arrive complete; anything still downloading is removed again.
         if (raw.isEmpty() || raw.any { (it["downloadPercent"]?.jsonPrimitive?.intOrNull ?: 0) < 100 }) {
             runCatching { Net.call(dlRequest(account, "/seedbox/$id/remove").delete().build()) }
