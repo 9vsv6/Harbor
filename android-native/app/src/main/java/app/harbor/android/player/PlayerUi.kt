@@ -74,6 +74,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -477,18 +478,30 @@ private fun BottomPills(state: PlayerState, prefs: PlayerPrefs, actions: PlayerA
             app.harbor.android.data.SkipSegment.Kind.Ad -> s.autoSkipAd
         }
         // Harbor's auto-hide: gone after a while, back whenever the controls show.
-        val timedOut = skip != null && s.skipButtonHideSec > 0 && !state.controlsVisible && state.positionMs - skip.startMs > s.skipButtonHideSec * 1_000L
+        // The position moves 4x/second; deriving these two decisions means a tick only costs a
+        // recomposition when the answer actually changes, not on every tick.
+        val timedOut by remember(skip, s) {
+            derivedStateOf {
+                skip != null && s.skipButtonHideSec > 0 && !state.controlsVisible &&
+                    state.positionMs - skip.startMs > s.skipButtonHideSec * 1_000L
+            }
+        }
         if (skip != null && s.showSkipButton && !autoSkips && !timedOut) {
             Pill(skip.kind.label, primary = false) { actions.skipSegment() }
         }
         val next = state.next
-        val remaining = state.durationMs - state.positionMs
-        val leadMs = when {
-            s.nextEpisodeLeadSec > 0 -> s.nextEpisodeLeadSec * 1_000L
-            state.creditsAtMs > 0 -> state.durationMs - state.creditsAtMs
-            else -> 45_000L
+        val upNext by remember(next, skip, s, state.ended, state.creditsAtMs, state.liveSync) {
+            derivedStateOf {
+                val remaining = state.durationMs - state.positionMs
+                val leadMs = when {
+                    s.nextEpisodeLeadSec > 0 -> s.nextEpisodeLeadSec * 1_000L
+                    state.creditsAtMs > 0 -> state.durationMs - state.creditsAtMs
+                    else -> 45_000L
+                }
+                next != null && state.durationMs > 0 && (remaining <= leadMs || state.ended) &&
+                    (skip == null || !s.showSkipButton) && state.liveSync == null
+            }
         }
-        val upNext = next != null && state.durationMs > 0 && (remaining <= leadMs || state.ended) && (skip == null || !s.showSkipButton) && state.liveSync == null
         if (upNext) UpNext(next!!, state, actions)
         // Harbor's ad report button: on torrent sources of new releases (or always, if asked), when nothing else sits here.
         val reportable = s.adSkipEnabled && state.adSource != null && (s.adReportAlwaysShow || state.recentRelease)

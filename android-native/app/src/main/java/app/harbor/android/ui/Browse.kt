@@ -68,7 +68,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harbor.android.data.CwItem
 import app.harbor.android.data.Meta
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import app.harbor.android.perf.Perf
+import app.harbor.android.ui.tv.LocalHomeFocusRestore
+import app.harbor.android.ui.tv.TvReturnFocus
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.size.Precision
 import kotlinx.coroutines.delay
 
 /** The browse views Harbor's phone app switches between from the top-right pill. */
@@ -147,33 +155,34 @@ fun HeroCarousel(
     var pausedUntil by remember { mutableLongStateOf(0L) }
     var listVersion by remember { mutableIntStateOf(0) }
     var trailerOn by remember { mutableStateOf(false) }
-    val rotate = HarborDisplay.settings.heroAutoRotate
+    // A focused hero control holds the slide still, like a playing trailer: rotating would dispose
+    // the focused button and send the next D-pad press to the top-left.
+    var focused by remember { mutableStateOf(false) }
+    val rotate = HarborDisplay.settings.heroAutoRotate && Perf.heroAutoAdvance
     LaunchedEffect(slides, rotate) {
         while (rotate && slides.size > 1) {
             delay(8_000)
-            if (System.currentTimeMillis() >= pausedUntil && !trailerOn) index = (index + 1) % slides.size
+            if (System.currentTimeMillis() >= pausedUntil && !trailerOn && !focused) index = (index + 1) % slides.size
         }
     }
     // Phones get Harbor's mobile card (16:13); tablets a wide desktop-style hero.
     val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.onFocusChanged { focused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(
             Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
-                .clip(RoundedCornerShape(24.dp)).background(HarborColors.Surface)
-                .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(24.dp)),
+                .clip(HeroShape).background(HarborColors.Surface)
+                .border(1.dp, HarborColors.EdgeSoft, HeroShape),
         ) {
-            // Two full-size slides are drawn while they fade; a short fade keeps that cheap on TV boxes.
-            Crossfade(targetState = index, animationSpec = tween(450), label = "hero") { i ->
+            // Two full-size slides are drawn while they fade; without motion the slide switches at once.
+            val slide: @Composable (Int) -> Unit = { i ->
                 val meta = slides[i.coerceIn(0, slides.lastIndex)]
                 Box(Modifier.fillMaxSize().clickable { onOpen(meta) }) {
-                    AsyncImage(meta.background ?: meta.poster, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    val art = meta.background ?: meta.poster
+                    AsyncImage(remember(art) { heroRequest(context, art) }, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     // Harbor's hero trailer: the slide holds still while it plays.
                     HeroTrailer(meta, HarborDisplay.settings.heroTrailers, startDelayMs = 1_500, loop = false) { on -> trailerOn = on }
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            Brush.verticalGradient(0f to Color(0x0D000000), 0.5f to Color(0x73000000), 1f to Color(0xF2000000)),
-                        ),
-                    )
+                    Box(Modifier.fillMaxSize().let { if (Perf.gradientScrims) it.background(HeroScrim) else it.background(HeroScrimFlat) })
                     Column(
                         Modifier.align(Alignment.BottomStart).padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -208,6 +217,11 @@ fun HeroCarousel(
                     }
                 }
             }
+            if (Perf.motion && Perf.heroFadeMs > 0) {
+                Crossfade(targetState = index, animationSpec = tween(Perf.heroFadeMs), label = "hero") { i -> slide(i) }
+            } else {
+                slide(index)
+            }
         }
         if (slides.size > 1) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -227,6 +241,23 @@ fun HeroCarousel(
         }
     }
 }
+
+// Shapes, brushes and painters shared by every hero/tile instead of allocated per item per composition.
+private val HeroShape = RoundedCornerShape(24.dp)
+private val HeroScrim = Brush.verticalGradient(0f to Color(0x0D000000), 0.5f to Color(0x73000000), 1f to Color(0xF2000000))
+private val HeroScrimFlat = Color(0x8C000000)
+private val PillShape = RoundedCornerShape(50)
+private val TagShape = RoundedCornerShape(3.dp)
+private val CwShape = RoundedCornerShape(16.dp)
+private val CwScrim = Brush.verticalGradient(0f to Color(0x26000000), 0.5f to Color(0x0D000000), 1f to Color(0xBF000000))
+private val TilePlaceholder = androidx.compose.ui.graphics.painter.ColorPainter(HarborColors.Elevated)
+private val AnimeIdPrefixes = setOf("kitsu", "mal", "anilist")
+private val posterShapes = java.util.concurrent.ConcurrentHashMap<Int, RoundedCornerShape>()
+private fun posterShape(radius: Int) = posterShapes.getOrPut(radius) { RoundedCornerShape(radius.dp) }
+
+/** Backdrops sit under heavy scrims, so ~960x540 is enough; full-size decodes cost memory on TV boxes. */
+private fun heroRequest(context: android.content.Context, url: String?): ImageRequest? =
+    url?.let { ImageRequest.Builder(context).data(it).size(960, 540).precision(Precision.INEXACT).build() }
 
 @Composable
 private fun GlassCircle(icon: ImageVector, description: String, tint: Color, onClick: () -> Unit) {
@@ -307,12 +338,22 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
     // Only the tiles whose answer changes redraw when My List or Watched changes, not every poster on screen.
     val inMyList by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.myListIds } }
     val watched by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.watchedIds } }
-    Column(modifier.clickable(onClick = onClick)) {
-        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(display.posterRadius.dp)).background(HarborColors.Elevated)) {
+    // TV: back on Home from Detail, the tile that was opened takes focus again.
+    val restore = LocalHomeFocusRestore.current
+    val focus = if (restore) remember { FocusRequester() } else null
+    if (focus != null) {
+        LaunchedEffect(meta.id) { if (TvReturnFocus.consume(meta.id)) runCatching { focus.requestFocus() } }
+    }
+    Column((if (focus != null) modifier.focusRequester(focus) else modifier).clickable(onClick = onClick)) {
+        val shape = posterShape(display.posterRadius)
+        // The Elevated fill is the image's placeholder, so a loaded poster draws no hidden layer under it.
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(shape).let { if (poster == null) it.background(HarborColors.Elevated) else it }) {
             if (poster != null) {
                 AsyncImage(
                     poster,
                     meta.name,
+                    placeholder = TilePlaceholder,
+                    error = if (poster == meta.poster) TilePlaceholder else null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                     onError = { if (poster != meta.poster) rpdbFailed = true },
@@ -323,12 +364,12 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
             // Harbor's IMDb tag at the bottom right (RPDB posters carry their own scores).
             meta.imdbRating?.takeIf { it.isNotBlank() && display.showRatingBadge && poster == meta.poster }?.let { rating ->
                 Row(
-                    Modifier.align(Alignment.BottomEnd).padding(7.dp).background(Color(0xD9000000), RoundedCornerShape(50))
+                    Modifier.align(Alignment.BottomEnd).padding(7.dp).background(Color(0xD9000000), PillShape)
                         .padding(start = 4.dp, end = 7.dp, top = 3.dp, bottom = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Box(Modifier.background(Color(0xFFF5C518), RoundedCornerShape(3.dp)).padding(horizontal = 3.dp)) {
+                    Box(Modifier.background(Color(0xFFF5C518), TagShape).padding(horizontal = 3.dp)) {
                         Text("IMDb", color = Color.Black, fontSize = 7.5.sp, fontWeight = FontWeight.Black)
                     }
                     Text(rating, color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
@@ -429,11 +470,14 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
     }
     Column(Modifier.width(260.dp)) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(16.dp)).background(HarborColors.Surface)
-                .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(16.dp)).clickable(onClick = onOpen),
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(CwShape).background(HarborColors.Surface)
+                .border(1.dp, HarborColors.EdgeSoft, CwShape).clickable(onClick = onOpen),
         ) {
-            AsyncImage(item.meta.background ?: item.meta.poster, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color(0x26000000), 0.5f to Color(0x0D000000), 1f to Color(0xBF000000))))
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val art = item.meta.background ?: item.meta.poster
+            AsyncImage(remember(art) { heroRequest(context, art) }, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            // Low tier: the pill and logo carry their own contrast, so the full-card gradient is skipped.
+            if (Perf.gradientScrims) Box(Modifier.fillMaxSize().background(CwScrim))
             item.meta.logoUrl?.let { logo ->
                 var failed by remember(logo) { mutableStateOf(false) }
                 if (!failed) {
@@ -447,7 +491,7 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
                 }
             }
             Row(
-                Modifier.align(Alignment.BottomStart).padding(10.dp).background(Color(0x8C000000), RoundedCornerShape(50))
+                Modifier.align(Alignment.BottomStart).padding(10.dp).background(Color(0x8C000000), PillShape)
                     .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -510,15 +554,19 @@ private fun CardBadges(meta: Meta, modifier: Modifier) {
         LaunchedEffect(imdb) { award = runCatching { app.harbor.android.data.Awards.cardLabel(imdb) }.getOrNull() }
     }
     var dub by remember(meta.id) { mutableStateOf(false) }
-    if (display.showDubBadge && meta.id.substringBefore(':') in setOf("kitsu", "mal", "anilist")) {
+    if (display.showDubBadge && meta.id.substringBefore(':') in AnimeIdPrefixes) {
         LaunchedEffect(meta.id) { dub = runCatching { app.harbor.android.data.AnimeInfo.hasDub(meta.id, lookup = false) }.getOrDefault(false) }
     }
-    val rerun = meta.releaseDate?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() }
-        ?.let { java.time.temporal.ChronoUnit.DAYS.between(it, java.time.LocalDate.now()) > 274 } ?: false
+    // Parsed once per title, not on every recomposition of every tile.
+    val rerun = remember(meta.releaseDate) {
+        meta.releaseDate?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() }
+            ?.let { java.time.temporal.ChronoUnit.DAYS.between(it, java.time.LocalDate.now()) > 274 } ?: false
+    }
+    val thisYear = remember { java.time.Year.now().value.toString() }
     val label = when {
         !display.showCardBadges -> null
         meta.type == "movie" && meta.inTheaters && !rerun -> "In cinema"
-        meta.year == java.time.Year.now().value.toString() -> "New"
+        meta.year == thisYear -> "New"
         else -> null
     }
     Column(modifier.padding(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -531,7 +579,7 @@ private fun CardBadges(meta: Meta, modifier: Modifier) {
 @Composable
 private fun BadgePill(text: String, glyph: String?) {
     Row(
-        Modifier.background(Color(0xD9000000), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 3.dp),
+        Modifier.background(Color(0xD9000000), PillShape).padding(horizontal = 7.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {

@@ -1,9 +1,12 @@
 package app.harbor.android.data
 
 import android.net.Uri
+import app.harbor.android.perf.DeviceTier
+import app.harbor.android.perf.Perf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -83,6 +86,8 @@ data class TmdbSeason(val number: Int, val name: String?, val overview: String?,
 object Tmdb {
     private const val API = "https://api.themoviedb.org/3"
     private const val IMAGES = "https://image.tmdb.org/t/p"
+    /** Row titles' backdrops (the hero, continue watching): w780 on TVs and low-end devices, which can't use more. */
+    private val rowBackdropSize: String get() = if (Perf.isTv || Perf.tier == DeviceTier.LOW) "w780" else "w1280"
 
     /** Settings → Languages → Details language; empty follows the device. */
     @Volatile var languageOverride: String = ""
@@ -125,7 +130,7 @@ object Tmdb {
             if (!bearer) append("&api_key=").append(Uri.encode(key))
         }
         val request = Request.Builder().url("$API$path?$query").apply { if (bearer) header("Authorization", "Bearer $key") }.build()
-        return Net.json.parseToJsonElement(Net.call(request)).jsonObject
+        return Net.parseObject(Net.call(request))
     }
 
     suspend fun verify(key: String) {
@@ -219,15 +224,17 @@ object Tmdb {
                 }
             }.awaitAll().toMap()
         }
-        return items.mapNotNull { item ->
-            val id = item["id"]?.jsonPrimitive?.intOrNull
-            toMeta(
-                item,
-                spec.type,
-                titleFrom = titleLang?.let { pages[base(it)]?.get(id) },
-                artFrom = pages[base(posterLang)]?.get(id),
-                storyFrom = pages[base(descLang)]?.get(id),
-            )
+        return withContext(Net.parseDispatcher) {
+            items.mapNotNull { item ->
+                val id = item["id"]?.jsonPrimitive?.intOrNull
+                toMeta(
+                    item,
+                    spec.type,
+                    titleFrom = titleLang?.let { pages[base(it)]?.get(id) },
+                    artFrom = pages[base(posterLang)]?.get(id),
+                    storyFrom = pages[base(descLang)]?.get(id),
+                )
+            }
         }
     }
 
@@ -254,7 +261,7 @@ object Tmdb {
             type = type,
             name = name,
             poster = (art.string("poster_path") ?: item.string("poster_path"))?.let { "$IMAGES/w342$it" },
-            background = (art.string("backdrop_path") ?: item.string("backdrop_path"))?.let { "$IMAGES/w1280$it" },
+            background = (art.string("backdrop_path") ?: item.string("backdrop_path"))?.let { "$IMAGES/$rowBackdropSize$it" },
             description = storyFrom?.string("overview")?.takeIf { it.isNotBlank() } ?: item.string("overview"),
             releaseInfo = date?.take(4),
             releaseDate = date,
@@ -362,7 +369,9 @@ object Tmdb {
     suspend fun details(key: String, imdbId: String, type: String): TmdbDetails? {
         cachedDetails(imdbId, type)?.let { return it }
         val cacheKey = detailsKey(imdbId, type)
-        return fetchDetails(key, imdbId, type)?.also { synchronized(detailsCache) { detailsCache[cacheKey] = it } }
+        // The whole build runs on the parse threads: its requests suspend without holding one.
+        return withContext(Net.parseDispatcher) { fetchDetails(key, imdbId, type) }
+            ?.also { synchronized(detailsCache) { detailsCache[cacheKey] = it } }
     }
 
     private suspend fun fetchDetails(key: String, imdbId: String, type: String): TmdbDetails? {

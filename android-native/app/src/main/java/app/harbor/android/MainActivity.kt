@@ -1,6 +1,11 @@
 package app.harbor.android
 
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.verticalScroll
 import app.harbor.android.ui.BrowseView
 import androidx.compose.runtime.setValue
@@ -119,7 +124,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** Harbor's phone tabs, in its order. Profile opens Settings, as in the Tauri phone app. */
-private enum class Tab(val route: String, val label: String, val icon: ImageVector, val glyph: Int) {
+internal enum class Tab(val route: String, val label: String, val icon: ImageVector, val glyph: Int) {
     Search("search", "Search", Icons.Rounded.Search, R.drawable.nav_search),
     Home("home", "Home", Icons.Rounded.Home, R.drawable.nav_home),
     MyStuff("mystuff", "My Stuff", Icons.Rounded.Bookmark, R.drawable.nav_library),
@@ -137,6 +142,8 @@ private fun HarborRoot(repository: Repository) {
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Fixed for the process (Perf.init in HarborApp): TV gets Big Picture's top bar instead of the tab bar and rail.
+    val tv = androidx.compose.runtime.remember { app.harbor.android.perf.Perf.isTv }
 
     /** TMDB titles open under their IMDb id, which Cinemeta and stream addons use. */
     fun resolve(meta: Meta, then: (Meta) -> Unit) {
@@ -198,7 +205,9 @@ private fun HarborRoot(repository: Repository) {
         if (play && meta.type == "movie") resolve(meta) { nav.openStreams(it.type, it.id, it.id, it.name) } else open(meta)
     }
 
-    val browse = object : BrowseNav {
+    // Remembered so every recomposition hands HomeScreen the same instance. Everything it captures
+    // (nav, scope, context, repository) is stable for this composition.
+    val browse = androidx.compose.runtime.remember { object : BrowseNav {
         override fun openMeta(meta: Meta) = open(meta)
 
         override fun playMeta(meta: Meta) {
@@ -221,25 +230,43 @@ private fun HarborRoot(repository: Repository) {
                 else -> nav.navigate("rowgrid/${enc(app.harbor.android.ui.RowGrid.put(row))}")
             }
         }
-    }
+    } }
 
     // Tablets get Harbor's desktop layout: a rail down the left instead of the floating tab bar.
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
-    val wide = maxWidth >= 720.dp
+    // No background here: the window background (themes.xml) is already the Canvas colour.
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+    val wide = tv || maxWidth >= 720.dp
     Row(Modifier.fillMaxSize()) {
     // Settings has its own sidebar (with Back), as Harbor's, so the app rail steps aside there.
-    if (wide && route != Tab.Profile.route) SideRail(route, browseView, onSelect = { nav.selectTab(it) }, onView = { v ->
+    if (!tv && wide && route != Tab.Profile.route) SideRail(route, browseView, onSelect = { nav.selectTab(it) }, onView = { v ->
         browseView = v
         if (route != Tab.Home.route) nav.selectTab(Tab.Home)
     }, onPage = { nav.navigate(it) { popUpTo(Tab.Home.route); launchSingleTop = true } })
     Scaffold(
         modifier = Modifier.weight(1f),
-        containerColor = HarborColors.Canvas,
+        containerColor = Color.Transparent,
         bottomBar = { if (showBar && !wide) TabBar(route) { nav.selectTab(it) } },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
             androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.LocalOpenList provides { id: String -> nav.navigate("list/${enc(id)}") }, app.harbor.android.ui.LocalOpenPage provides { route: String -> nav.navigate(route) { launchSingleTop = true } }) {
-            NavHost(nav, startDestination = Tab.Home.route) {
+            TvChrome(
+                tv, route, browseView,
+                onSelect = { nav.selectTab(it) },
+                onView = { v ->
+                    browseView = v
+                    if (route != Tab.Home.route) nav.selectTab(Tab.Home)
+                },
+                onPage = { nav.navigate(it) { popUpTo(Tab.Home.route); launchSingleTop = true } },
+                onProfile = { if (repository.profiles.value.size > 1) repository.showProfilePicker() else nav.selectTab(Tab.Profile) },
+            ) {
+            NavHost(
+                nav, startDestination = Tab.Home.route,
+                // TV: page changes are instant; a crossfade of two full pages costs frames on a TV box.
+                enterTransition = if (tv) ({ EnterTransition.None }) else ({ fadeIn(animationSpec = tween(700)) }),
+                exitTransition = if (tv) ({ ExitTransition.None }) else ({ fadeOut(animationSpec = tween(700)) }),
+                popEnterTransition = if (tv) ({ EnterTransition.None }) else ({ fadeIn(animationSpec = tween(700)) }),
+                popExitTransition = if (tv) ({ ExitTransition.None }) else ({ fadeOut(animationSpec = tween(700)) }),
+            ) {
                 composable("discover") {
                     app.harbor.android.ui.DiscoverScreen(
                         repository,
@@ -377,16 +404,20 @@ private fun HarborRoot(repository: Repository) {
                 }
             }
             }
+            }
             // Tablets: Harbor's search bar at the top of every page, opening its search panel.
-            // Not over the "See all" grids, whose titles sit where the bar would.
+            // Not over the "See all" grids, whose titles sit where the bar would. TV has Search in its top bar.
             val gridPage = listOf("catalog/", "tmdbrow", "rowgrid/").any { route?.startsWith(it) == true }
-            if (wide && route != Tab.Profile.route && route != Tab.Search.route && route?.startsWith("streams") != true && !gridPage) {
+            if (!tv && wide && route != Tab.Profile.route && route != Tab.Search.route && route?.startsWith("streams") != true && !gridPage) {
                 app.harbor.android.ui.TopSearchBar(Modifier.align(Alignment.TopCenter)) { searchOpen = true }
             }
             // Harbor's queue button (PC queue-basket): on Home, title pages and My Stuff while something is queued.
             val queuePage = route == Tab.Home.route || route == Tab.MyStuff.route || route?.startsWith("detail") == true
             if (queuePage) app.harbor.android.ui.QueueButton(
-                Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = if (showBar && !wide) 92.dp else 22.dp),
+                Modifier.align(Alignment.BottomEnd).padding(
+                    end = if (tv) app.harbor.android.ui.tv.TvInsets.Gutter else 18.dp,
+                    bottom = if (tv) app.harbor.android.ui.tv.TvInsets.SafeY else if (showBar && !wide) 92.dp else 22.dp,
+                ),
                 onPlay = { resume -> app.harbor.android.data.PlayQueue.startItem(resume)?.let(::startQueueItem) },
                 onPlayItem = ::startQueueItem,
                 onOpen = { open(it) },
@@ -462,6 +493,21 @@ private fun TabBar(route: String?, onSelect: (Tab) -> Unit) {
             }
         }
     }
+}
+
+/** TV: Big Picture's top bar around the pages (ui/tv/TvShell.kt). Phone and tablet: the pages as they are. */
+@Composable
+private fun TvChrome(
+    tv: Boolean,
+    route: String?,
+    view: BrowseView,
+    onSelect: (Tab) -> Unit,
+    onView: (BrowseView) -> Unit,
+    onPage: (String) -> Unit,
+    onProfile: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (tv) app.harbor.android.ui.tv.TvShell(route, view, onSelect, onView, onPage, onProfile, content) else content()
 }
 
 private fun enc(value: String): String = Uri.encode(value)

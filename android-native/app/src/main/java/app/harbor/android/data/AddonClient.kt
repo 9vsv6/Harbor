@@ -10,7 +10,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 
 /** Talks the Stremio addon protocol to any installed addon. */
 object AddonClient {
@@ -35,10 +34,11 @@ object AddonClient {
 
     /** The manifest exactly as the addon serves it, for saving into the collection. */
     suspend fun manifestJson(transportUrl: String): JsonObject =
-        Net.json.parseToJsonElement(Net.get(transportUrl.trim())).jsonObject
+        Net.parseObject(Net.get(transportUrl.trim()))
 
     suspend fun manifest(transportUrl: String): Addon {
-        val manifest = Net.json.decodeFromString(Manifest.serializer(), Net.get(transportUrl))
+        val body = Net.get(transportUrl)
+        val manifest = withContext(Net.parseDispatcher) { Net.json.decodeFromString(Manifest.serializer(), body) }
         return Addon(transportUrl, manifest)
     }
 
@@ -56,21 +56,24 @@ object AddonClient {
             kotlinx.coroutines.delay(400)
             Net.get(url)
         }
-        return Net.json.parseToJsonElement(body).jsonObject
+        return Net.parseObject(body)
     }
 
     suspend fun catalog(addon: Addon, catalog: CatalogDef, extra: Map<String, String> = emptyMap()): List<Meta> {
         val body = fetch(path(addon, "catalog", catalog.type, catalog.id, extra))
-        return body["metas"].arrayOrNull?.mapNotNull {
-            runCatching { Net.json.decodeFromJsonElement(Meta.serializer(), it) }.getOrNull()
-        } ?: emptyList()
+        return withContext(Net.parseDispatcher) {
+            body["metas"].arrayOrNull?.mapNotNull {
+                runCatching { Net.json.decodeFromJsonElement(Meta.serializer(), it) }.getOrNull()
+            } ?: emptyList()
+        }
     }
 
     /** Full metadata from the first addon that has it. */
     suspend fun meta(addons: List<Addon>, type: String, id: String): Meta? {
         for (addon in addons.filter { it.manifest.supports("meta", type, id) }) {
             val meta = runCatching {
-                fetch(path(addon, "meta", type, id))["meta"]?.let { Net.json.decodeFromJsonElement(Meta.serializer(), it) }
+                val body = fetch(path(addon, "meta", type, id))
+                withContext(Net.parseDispatcher) { body["meta"]?.let { Net.json.decodeFromJsonElement(Meta.serializer(), it) } }
             }.getOrNull()
             if (meta != null) return meta
         }
@@ -127,9 +130,12 @@ object AddonClient {
             async {
                 withTimeoutOrNull(15_000) {
                     runCatching {
-                        fetch(path(addon, "subtitles", type, id))["subtitles"].arrayOrNull?.mapNotNull {
-                            runCatching { Net.json.decodeFromJsonElement(Subtitle.serializer(), it) }.getOrNull()
-                        } ?: emptyList()
+                        val body = fetch(path(addon, "subtitles", type, id))
+                        withContext(Net.parseDispatcher) {
+                            body["subtitles"].arrayOrNull?.mapNotNull {
+                                runCatching { Net.json.decodeFromJsonElement(Subtitle.serializer(), it) }.getOrNull()
+                            } ?: emptyList()
+                        }
                     }.getOrNull()
                 } ?: emptyList()
             }

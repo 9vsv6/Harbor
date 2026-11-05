@@ -11,6 +11,7 @@ import android.view.View
 import app.harbor.android.data.AppSettings
 import app.harbor.android.data.Net
 import app.harbor.android.data.PlayerPrefs
+import app.harbor.android.perf.Perf
 import dev.jdtech.mpv.MPVLib
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -106,14 +107,32 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                     opt("deband", "yes")
                 }
             }
+            // TV boxes and low-end phones: mpv's GPU defaults (non-bilinear scalers, correct
+            // downscaling, dithering, HDR peak detection) render on the same weak GPU that draws
+            // Harbor's overlay and drop frames at 1080p. Unless you chose "quality", the cheap path.
+            val lowEnd = Perf.playerLowEnd
+            val cheapScaling = lowEnd && s.mpvQuality != "quality"
+            if (cheapScaling) {
+                opt("scale", "bilinear")
+                opt("cscale", "bilinear")
+                opt("dscale", "bilinear")
+                opt("correct-downscaling", "no")
+                opt("linear-downscaling", "no")
+                opt("sigmoid-upscaling", "no")
+                opt("dither-depth", "no")
+                opt("deband", "no")
+                opt("hdr-compute-peak", "no")
+            }
             // Harbor's Picture tab.
             if (s.picBrightness != 0) opt("brightness", "${s.picBrightness}")
             if (s.picContrast != 0) opt("contrast", "${s.picContrast}")
             if (s.picSaturation != 0) opt("saturation", "${s.picSaturation}")
             if (s.picGamma != 0) opt("gamma", "${s.picGamma}")
             if (s.toneMapping != "auto") opt("tone-mapping", s.toneMapping)
+            else if (cheapScaling) opt("tone-mapping", "mobius")
             // Harbor's Motion smoothing (motion-interp.ts): frames blended to the screen's refresh.
-            if (s.motionSmoothing) {
+            // Never on low-end: it renders at the display rate (~2.5x the GPU work at 24 fps).
+            if (s.motionSmoothing && !lowEnd) {
                 opt("video-sync", "display-resample")
                 opt("interpolation", "yes")
                 opt("tscale", "oversample")

@@ -4,6 +4,7 @@ import android.net.Uri
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -132,7 +133,7 @@ object Awards {
     private suspend fun run(query: String): JsonObject? = runCatching {
         val request = Request.Builder().url("$ENDPOINT?query=${Uri.encode(query)}&format=json")
             .header("Accept", "application/sparql-results+json").build()
-        Net.json.parseToJsonElement(Net.call(request)).jsonObject
+        Net.parseObject(Net.call(request))
     }.getOrNull()
 
     private fun parse(body: JsonObject?, won: Boolean): List<AwardEntry> {
@@ -165,8 +166,8 @@ object Awards {
 
     private suspend fun load(imdbId: String): List<AwardEntry> {
         val result = coroutineScope {
-            val wins = async { parse(run(query("P166", imdbId)), won = true) }
-            val noms = async { parse(run(query("P1411", imdbId)), won = false) }
+            val wins = async { run(query("P166", imdbId)).let { withContext(Net.parseDispatcher) { parse(it, won = true) } } }
+            val noms = async { run(query("P1411", imdbId)).let { withContext(Net.parseDispatcher) { parse(it, won = false) } } }
             val won = wins.await()
             val wonKeys = won.map { "${it.awardName}|${it.category}|${it.year}" }.toSet()
             won + noms.await().filterNot { "${it.awardName}|${it.category}|${it.year}" in wonKeys }
