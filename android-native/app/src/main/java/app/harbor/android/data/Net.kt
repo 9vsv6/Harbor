@@ -1,7 +1,12 @@
 package app.harbor.android.data
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Dispatcher
@@ -25,6 +30,17 @@ object Net {
         explicitNulls = false
         coerceInputValues = true
     }
+
+    /**
+     * Where response bodies are parsed and decoded. [call]/[get] resume on the caller's
+     * dispatcher, which is Main for a composable's LaunchedEffect; two threads at most, so a
+     * burst of catalog pages never takes every core from the UI and render threads.
+     */
+    val parseDispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(2)
+
+    /** Parses [body] into a JSON object on [parseDispatcher]. */
+    suspend fun parseObject(body: String): JsonObject =
+        withContext(parseDispatcher) { json.parseToJsonElement(body).jsonObject }
 
     val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)

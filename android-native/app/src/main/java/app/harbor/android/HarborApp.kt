@@ -16,7 +16,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         .diskCache { coil.disk.DiskCache.Builder().directory(cacheDir.resolve("image_cache")).maxSizeBytes(768L * 1024 * 1024).build() }
         .respectCacheHeaders(false)
         // TV boxes and low-memory phones: posters at half the memory, which on screen looks the same.
-        .allowRgb565(getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true)
+        .allowRgb565(app.harbor.android.perf.Perf.tier == app.harbor.android.perf.DeviceTier.LOW)
         .components { add(coil.decode.SvgDecoder.Factory()) }
         .build()
 
@@ -27,6 +27,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         super.onCreate()
         // First, so a crash anywhere after this is kept for the next launch to report.
         app.harbor.android.data.CrashReport.install(this)
+        // Before anything reads the device profile (Coil's loader is built on the first image).
+        app.harbor.android.perf.Perf.init(this)
         repository = Repository(this)
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)

@@ -111,6 +111,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val settings = repository.settings.value
         state.settings = settings
         state.tv = app.harbor.android.ui.isTv(this)
+        // MpvEngine.configure reads the device profile; idempotent if the app already set it up.
+        app.harbor.android.perf.Perf.init(this, app.harbor.android.perf.Perf.forcedTv)
         val device = Locale.getDefault().language
         val setup = EngineSetup(
             audioLanguages = settings.audioLanguages.ifEmpty { listOf(device) },
@@ -234,6 +236,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.resumedFromMs = if (startAt == null && settings.resumeNotice && resume > 30_000) resume else 0
         pendingFraction = if (startAt == null && settings.resumePlayback && resume == 0L) repository.traktFraction(videoId)?.takeIf { it in 0.02f..0.95f } else null
         state.buffering = true
+        // A seek still waiting from the last video doesn't carry over.
+        ticker.removeCallbacks(settleSeek)
+        pendingSeekMs = -1L
+        pendingSeekSentAt = 0L
         engine.load(url, headers, resume)
         engine.setAudioDelay(state.audioDelayMs)
         describe()
@@ -291,7 +297,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         override fun run() {
             val duration = engine.durationMs
             val position = engine.positionMs
-            state.positionMs = position
+            // A held seek shows where it's going, not where the engine still is.
+            state.positionMs = shownPosition(position)
             state.durationMs = duration
             state.bufferedMs = engine.bufferedMs
             endScreenTick(position, duration)
@@ -304,7 +311,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 if (duration > 0) {
                     pendingFraction = null
                     val target = (duration * fraction).toLong()
-                    engine.seekTo(target)
+                    seekNow(target)
                     state.resumedFromMs = target
                 }
             }
@@ -356,7 +363,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             if (active != null && autoSkip && active !in autoSkipped) {
                 autoSkipped += active
                 if (active.kind == SkipSegment.Kind.Outro && state.next != null && settings.autoPlayNextEpisode) playNext()
-                else engine.seekTo(active.endMs)
+                else seekNow(active.endMs)
                 state.hint = when (active.kind) {
                     SkipSegment.Kind.Outro -> "Skipped the credits"
                     SkipSegment.Kind.Ad -> "Skipped an injected ad"
@@ -719,6 +726,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private fun applyAnime4K() {
         if (!engine.supportsShaders) return
+        // Low-end boxes can't run multi-pass shader chains at 1080p: only a pick made in this player applies.
+        if (app.harbor.android.perf.Perf.playerLowEnd && !anime4kChosenHere) { anime4kJob?.cancel(); state.anime4kLoading = false; engine.setShaders(emptyList()); return }
         val mode = Anime4K.Mode.entries.firstOrNull { it.name == prefs.anime4kMode }
             ?.takeIf { anime4kChosenHere || !state.settings.anime4kAnimeOnly || isAnime() }
         anime4kJob?.cancel()
@@ -818,8 +827,63 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private fun keySeek(forward: Boolean) {
         val sec = if (forward) state.settings.seekForwardSec else state.settings.seekBackSec
-        seekBy((if (forward) sec else -sec) * 1_000L)
-        state.hint = if (forward) "+${sec}s" else "-${sec}s"
+        coalescedSeekBy((if (forward) sec else -sec) * 1_000L)
+    }
+
+    // ---- Coalesced seeks (remotes, keyboards) ----
+
+    /**
+     * Where repeated or held seek presses have got to, or -1. Each precise seek flushes the decoder
+     * and decodes forward from the previous keyframe, so on a TV box one seek per key repeat stalls
+     * the picture; presses add up here, from the last target (the engine's position lags behind a
+     * pending seek), and one seek goes out once they stop.
+     */
+    private var pendingSeekMs = -1L
+    /** Where the current burst of presses started, for the hint. */
+    private var pendingSeekFrom = 0L
+    /** The seek went out at this uptime; the target stays on screen until the engine gets there. */
+    private var pendingSeekSentAt = 0L
+    private val settleSeek = Runnable {
+        if (pendingSeekMs >= 0) {
+            engine.seekTo(pendingSeekMs)
+            pendingSeekSentAt = android.os.SystemClock.uptimeMillis()
+        }
+    }
+
+    private fun coalescedSeekBy(deltaMs: Long) {
+        val duration = engine.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+        // A new burst starts unless presses are still waiting to be sent.
+        if (pendingSeekMs < 0 || pendingSeekSentAt != 0L) pendingSeekFrom = if (pendingSeekMs >= 0) pendingSeekMs else engine.positionMs
+        val base = if (pendingSeekMs >= 0) pendingSeekMs else engine.positionMs
+        val target = (base + deltaMs).coerceIn(0, duration)
+        pendingSeekMs = target
+        pendingSeekSentAt = 0L
+        state.positionMs = target
+        ticker.removeCallbacks(settleSeek)
+        ticker.postDelayed(settleSeek, SEEK_SETTLE_MS)
+        val moved = target - pendingSeekFrom
+        val label = (if (moved >= 0) "+" else "-") + "${kotlin.math.abs(moved) / 1000}s"
+        state.hint = if (kotlin.math.abs(moved) == kotlin.math.abs(deltaMs)) label else "$label  ·  ${clock(target)}"
+    }
+
+    /** An immediate seek: drops any coalesced one still waiting. */
+    private fun seekNow(positionMs: Long) {
+        ticker.removeCallbacks(settleSeek)
+        pendingSeekMs = -1L
+        pendingSeekSentAt = 0L
+        engine.seekTo(positionMs)
+    }
+
+    private fun shownPosition(actual: Long): Long {
+        val target = pendingSeekMs
+        if (target < 0) return actual
+        val sentAt = pendingSeekSentAt
+        if (sentAt != 0L && (kotlin.math.abs(actual - target) < 1_500 || android.os.SystemClock.uptimeMillis() - sentAt > 3_000)) {
+            pendingSeekMs = -1L
+            pendingSeekSentAt = 0L
+            return actual
+        }
+        return target
     }
 
     // ---- PlayerActions ----
@@ -829,7 +893,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun togglePlay() {
         when {
             engine.ended -> {
-                engine.seekTo(0)
+                seekNow(0)
                 engine.play()
             }
             engine.isPlaying -> engine.pause()
@@ -837,11 +901,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
-    override fun seekTo(positionMs: Long) = engine.seekTo(positionMs.coerceAtLeast(0))
+    override fun seekTo(positionMs: Long) = seekNow(positionMs.coerceAtLeast(0))
 
     override fun seekBy(deltaMs: Long) {
+        // On a TV the transport buttons are pressed with the remote, often in quick runs: coalesce them too.
+        if (state.tv) return coalescedSeekBy(deltaMs)
         val duration = engine.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
-        engine.seekTo((engine.positionMs + deltaMs).coerceIn(0, duration))
+        seekNow((engine.positionMs + deltaMs).coerceIn(0, duration))
     }
 
     override fun setSpeed(speed: Float) {
@@ -987,7 +1053,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun liveSyncPlayFrom(line: SubtitleFile.Cue) {
-        engine.seekTo(((line.startMs / state.subTimeScale) + state.subDelayMs).toLong().coerceAtLeast(0))
+        seekNow(((line.startMs / state.subTimeScale) + state.subDelayMs).toLong().coerceAtLeast(0))
         if (!state.playing) engine.play()
     }
 
@@ -1046,7 +1112,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun skipSegment() {
         val segment = state.skip ?: return
-        if (segment.kind == SkipSegment.Kind.Outro && state.next != null) playNext() else engine.seekTo(segment.endMs)
+        if (segment.kind == SkipSegment.Kind.Outro && state.next != null) playNext() else seekNow(segment.endMs)
     }
 
     override fun playNext() {
@@ -1186,7 +1252,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (state.ended) playNext()
     }
 
-    override fun startOver() = engine.seekTo(0)
+    override fun startOver() = seekNow(0)
 
     override fun changeBrightness(delta: Float): Float {
         val attrs = window.attributes
@@ -1455,7 +1521,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (state.castingTo == null) return
         state.castingTo = null
         // Carry on here from where the TV got to.
-        engine.seekTo(remotePositionMs)
+        seekNow(remotePositionMs)
         engine.play()
     }
 
@@ -1477,6 +1543,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (autoSyncJob?.isActive == true) AudioSync.cancel()
         castContext?.sessionManager?.removeSessionManagerListener(castListener, CastSession::class.java)
         ticker.removeCallbacks(tick)
+        ticker.removeCallbacks(settleSeek)
         stopScrobble()
         saveResume()
         engine.listener = null
@@ -1555,6 +1622,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     companion object {
         private const val EXTRA_URL = "url"
+        /** One real seek this long after the last press of a run. */
+        private const val SEEK_SETTLE_MS = 200L
         const val EXTRA_QUEUE_ITEM = "queueItem"
         private const val EXTRA_TYPE = "type"
         private const val EXTRA_META = "meta"

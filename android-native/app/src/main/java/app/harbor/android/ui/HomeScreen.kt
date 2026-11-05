@@ -45,6 +45,12 @@ import app.harbor.android.data.CwItem
 import app.harbor.android.data.Meta
 import app.harbor.android.data.Repository
 import app.harbor.android.data.Tmdb
+import app.harbor.android.perf.Perf
+import app.harbor.android.ui.tv.LocalHomeFocusRestore
+import app.harbor.android.ui.tv.TvHero
+import app.harbor.android.ui.tv.TvInsets
+import app.harbor.android.ui.tv.TvReturnFocus
+import androidx.compose.runtime.CompositionLocalProvider
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -118,9 +124,10 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     val cacheKey = HomeCache.key(view, tmdbKey != null, homeLanguages, textLanguages)
     // Last launch's rows show at once; fresh ones replace them when they're ready.
     if (rows[view] == null) HomeCache.read(context, cacheKey)?.let { rows[view] = it }
-    val refreshed = remember(tmdbKey, homeLanguages, textLanguages) { mutableSetOf<BrowseView>() }
+    // Fresh rows are fetched at most every 15 minutes per row set, not on every return to Home.
+    val refreshKey = "$cacheKey|${addons.joinToString(",") { it.manifest.id }}"
     LaunchedEffect(view, addons, builtins, tmdbKey, homeLanguages, textLanguages) {
-        if (addons.isEmpty() || view in refreshed) return@LaunchedEffect
+        if (addons.isEmpty() || (rows[view] != null && HomeRefresh.isFresh(refreshKey))) return@LaunchedEffect
         // With cached rows on screen, the fresh set is gathered aside and swapped in whole.
         val cached = rows[view] != null
         var fresh: List<CatalogRow>? = null
@@ -164,9 +171,9 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             show(fallback)
             failed[view] = fallback.isEmpty() && !cached
         }
-        refreshed += view
         fresh?.takeIf { it.isNotEmpty() }?.let {
             rows[view] = it
+            HomeRefresh.mark(refreshKey)
             HomeCache.write(context, cacheKey, it)
         }
     }
@@ -188,133 +195,182 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     LaunchedEffect(display.hideAnime) { if (display.hideAnime && view == BrowseView.Anime) onView(BrowseView.Home) }
 
     Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
+        // TV: remember which title left Home, so Back from Detail puts focus on its tile again.
+        val browse = remember(nav) {
+            object : BrowseNav by nav {
+                override fun openMeta(meta: Meta) {
+                    TvReturnFocus.mark(meta.id)
+                    nav.openMeta(meta)
+                }
+
+                override fun playMeta(meta: Meta) {
+                    TvReturnFocus.mark(meta.id)
+                    nav.playMeta(meta)
+                }
+            }
+        }
         // Filtered once per change, not on every recomposition; stable lists let the rows skip.
         val viewRows = rows[view]
         val current = remember(viewRows, display, HarborDisplay.watchedIds) { viewRows?.let { tidyRows(it, display) } }
         val heroSlides = remember(view, current) { current?.let { heroFor(view, it) } }
         val listState = rememberLazyListState()
-        LaunchedEffect(view) { listState.scrollToItem(0) }
+        // Back to the top only when the view changes, not when Home comes back from Detail.
+        var shownView by rememberSaveable { mutableStateOf(view) }
+        LaunchedEffect(view) {
+            if (shownView != view) {
+                shownView = view
+                listState.scrollToItem(0)
+            }
+        }
         val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(top = top, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(28.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            when {
-                current == null -> item { Loading(Modifier.padding(top = 120.dp)) }
-                current.isEmpty() && ((view != BrowseView.Home && view != BrowseView.Anime) || cw.isEmpty()) -> item {
-                    EmptyState(
-                        if (failed[view] == true) "Couldn't load ${view.label.lowercase()}" else "Nothing here yet",
-                        "Harbor couldn't reach the catalog servers. Check your connection and try again.",
-                    )
-                }
-                else -> {
-                    // Harbor's Shows page opens with its time-of-day heading (shows.tsx PageMast).
-                    if (view == BrowseView.Shows) item(key = "mast") { ShowsMast() }
-                    val heroSlides = heroSlides.orEmpty()
-                    // Harbor's Spooktober invitation: in the hero's corner, or its own band below the hero.
-                    val spooktober = if (view == BrowseView.Home) SpooktoberHome.placement() else null
-                    val dismissSpooktober = { repository.updateSettings { it.copy(spooktoberDismissed = true, spooktoberBanner = "small") } }
-                    item(key = "hero", contentType = "hero") {
-                        Box {
-                            HeroCarousel(
-                                slides = heroSlides,
-                                badge = { i, meta -> if (view == BrowseView.Anime && current.any { it.key == "anilist:trending" }) "Trending on AniList" else "#${i + 1} in ${typeLabel(meta.type, view)} Today" },
-                                inMyList = { repository.inMyList(it.id) },
-                                onPlay = nav::playMeta,
-                                onToggleList = repository::toggleMyList,
-                                onOpen = nav::openMeta,
-                            )
-                            if (spooktober == "small" && heroSlides.isNotEmpty()) {
-                                val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
-                                SpooktoberEntry(
-                                    compact = true,
-                                    onDismiss = dismissSpooktober,
-                                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 30.dp).fillMaxWidth(if (wide) 0.42f else 0.62f).widthIn(max = 360.dp)
-                                        .wrapContentWidth(Alignment.End),
+        // TV: the hero's backdrop runs full-bleed under the floating header.
+        val tvHero = Perf.isTv && !heroSlides.isNullOrEmpty()
+        // A restore nobody claimed (its tile scrolled away) is dropped so it can't steal focus later.
+        LaunchedEffect(Unit) {
+            val pending = TvReturnFocus.target
+            kotlinx.coroutines.delay(1_500)
+            TvReturnFocus.clearIf(pending)
+        }
+        CompositionLocalProvider(LocalHomeFocusRestore provides Perf.isTv) {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(
+                    top = if (tvHero && view != BrowseView.Shows) 0.dp else top,
+                    // TV: keep the last row out of the 5% overscan band at the bottom edge.
+                    bottom = if (Perf.isTv) TvInsets.SafeY + 32.dp else 32.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(28.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                when {
+                    current == null -> item { Loading(Modifier.padding(top = 120.dp)) }
+                    current.isEmpty() && ((view != BrowseView.Home && view != BrowseView.Anime) || cw.isEmpty()) -> item {
+                        EmptyState(
+                            if (failed[view] == true) "Couldn't load ${view.label.lowercase()}" else "Nothing here yet",
+                            "Harbor couldn't reach the catalog servers. Check your connection and try again.",
+                        )
+                    }
+                    else -> {
+                        // Harbor's Shows page opens with its time-of-day heading (shows.tsx PageMast).
+                        if (view == BrowseView.Shows) item(key = "mast") { ShowsMast() }
+                        val heroSlides = heroSlides.orEmpty()
+                        // Harbor's Spooktober invitation: in the hero's corner, or its own band below the hero.
+                        val spooktober = if (view == BrowseView.Home) SpooktoberHome.placement() else null
+                        val dismissSpooktober = { repository.updateSettings { it.copy(spooktoberDismissed = true, spooktoberBanner = "small") } }
+                        item(key = "hero", contentType = "hero") {
+                            Box {
+                                if (Perf.isTv) {
+                                    TvHero(
+                                        slides = heroSlides,
+                                        inMyList = { repository.inMyList(it.id) },
+                                        onPlay = browse::playMeta,
+                                        onToggleList = repository::toggleMyList,
+                                        onOpen = browse::openMeta,
+                                    )
+                                } else {
+                                    HeroCarousel(
+                                        slides = heroSlides,
+                                        badge = { i, meta -> if (view == BrowseView.Anime && current.any { it.key == "anilist:trending" }) "Trending on AniList" else "#${i + 1} in ${typeLabel(meta.type, view)} Today" },
+                                        inMyList = { repository.inMyList(it.id) },
+                                        onPlay = browse::playMeta,
+                                        onToggleList = repository::toggleMyList,
+                                        onOpen = browse::openMeta,
+                                    )
+                                }
+                                if (spooktober == "small" && heroSlides.isNotEmpty()) {
+                                    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
+                                    SpooktoberEntry(
+                                        compact = true,
+                                        onDismiss = dismissSpooktober,
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (tvHero && view != BrowseView.Shows) top + 14.dp else 14.dp, end = 30.dp).fillMaxWidth(if (wide) 0.42f else 0.62f).widthIn(max = 360.dp)
+                                            .wrapContentWidth(Alignment.End),
+                                    )
+                                }
+                            }
+                        }
+                        if (spooktober == "below-hero" || (spooktober != null && heroSlides.isEmpty())) {
+                            item(key = "spooktober") { SpooktoberEntry(compact = false, onDismiss = dismissSpooktober, modifier = Modifier.padding(horizontal = 16.dp)) }
+                        }
+                        if ((view == BrowseView.Home || view == BrowseView.Anime) && cw.isNotEmpty()) {
+                            item(key = "cw") { ContinueWatchingRow(cw, nav::resume, repository::dismissContinueWatching) }
+                        }
+                        // Shows: your series in progress, as Harbor's "Pick up where you left off".
+                        val showsCw = if (view == BrowseView.Shows) allCw.filter { it.meta.type == "series" && !app.harbor.android.data.AnimeDetect.isAnime(it.meta) } else emptyList()
+                        if (showsCw.isNotEmpty()) item(key = "cw") { ContinueWatchingRow(showsCw, nav::resume, repository::dismissContinueWatching, "Pick up where you left off") }
+                        if (view == BrowseView.Home && newEpisodes.isNotEmpty()) {
+                            item(key = "new-episodes") { Rail("New Episodes", newEpisodes.map { it.meta }, browse::openMeta) }
+                        }
+                        // Harbor's My Groups row: the library groups pinned to Home.
+                        val pinnedGroups = display.libraryGroups.filter { it.pinnedToHome }
+                        if (view == BrowseView.Home && pinnedGroups.isNotEmpty()) {
+                            item(key = "library-groups") {
+                                val openPage = LocalOpenPage.current
+                                HomeGroupsRow(pinnedGroups) { group ->
+                                    app.harbor.android.data.LibraryGroups.openRequest.value = group.id
+                                    openPage("mystuff")
+                                }
+                            }
+                        }
+                        // Shows and Movies always lead with Top 10 from Trending (Harbor's rank row); Home when asked.
+                        val rankFirst = display.showTop10 || ((view == BrowseView.Shows || view == BrowseView.Movies) && (current.firstOrNull()?.metas?.size ?: 0) >= 10)
+                        current.firstOrNull()?.takeIf { rankFirst }?.let { first ->
+                            item(key = "top10") {
+                                RankRail(
+                                    when (view) {
+                                        BrowseView.Home -> "Top 10 Today"
+                                        BrowseView.Shows -> "Top 10 Series Today"
+                                        BrowseView.Movies -> "Top 10 Movies Today"
+                                        else -> "Top 10 ${view.label} Today"
+                                    },
+                                    first.metas.distinctBy { it.id },
+                                    browse::openMeta,
                                 )
                             }
                         }
-                    }
-                    if (spooktober == "below-hero" || (spooktober != null && heroSlides.isEmpty())) {
-                        item(key = "spooktober") { SpooktoberEntry(compact = false, onDismiss = dismissSpooktober, modifier = Modifier.padding(horizontal = 16.dp)) }
-                    }
-                    if ((view == BrowseView.Home || view == BrowseView.Anime) && cw.isNotEmpty()) {
-                        item(key = "cw") { ContinueWatchingRow(cw, nav::resume, repository::dismissContinueWatching) }
-                    }
-                    // Shows: your series in progress, as Harbor's "Pick up where you left off".
-                    val showsCw = if (view == BrowseView.Shows) allCw.filter { it.meta.type == "series" && !app.harbor.android.data.AnimeDetect.isAnime(it.meta) } else emptyList()
-                    if (showsCw.isNotEmpty()) item(key = "cw") { ContinueWatchingRow(showsCw, nav::resume, repository::dismissContinueWatching, "Pick up where you left off") }
-                    if (view == BrowseView.Home && newEpisodes.isNotEmpty()) {
-                        item(key = "new-episodes") { Rail("New Episodes", newEpisodes.map { it.meta }, nav::openMeta) }
-                    }
-                    // Harbor's My Groups row: the library groups pinned to Home.
-                    val pinnedGroups = display.libraryGroups.filter { it.pinnedToHome }
-                    if (view == BrowseView.Home && pinnedGroups.isNotEmpty()) {
-                        item(key = "library-groups") {
-                            val openPage = LocalOpenPage.current
-                            HomeGroupsRow(pinnedGroups) { group ->
-                                app.harbor.android.data.LibraryGroups.openRequest.value = group.id
-                                openPage("mystuff")
-                            }
+                        val rest = if (rankFirst) current.drop(1) else current
+                        // Anime: Top Picks and Recommended lead, then your lists (Harbor's order); elsewhere three rows lead.
+                        val lead = if (view == BrowseView.Anime) rest.takeWhile { it.key.startsWith("lead:") } else rest.take(3)
+                        items(lead, key = { it.key }, contentType = { "rail" }) { row ->
+                            Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, browse::openMeta) { nav.openCatalog(row) }
                         }
-                    }
-                    // Shows and Movies always lead with Top 10 from Trending (Harbor's rank row); Home when asked.
-                    val rankFirst = display.showTop10 || ((view == BrowseView.Shows || view == BrowseView.Movies) && (current.firstOrNull()?.metas?.size ?: 0) >= 10)
-                    current.firstOrNull()?.takeIf { rankFirst }?.let { first ->
-                        item(key = "top10") {
-                            RankRail(
-                                when (view) {
-                                    BrowseView.Home -> "Top 10 Today"
-                                    BrowseView.Shows -> "Top 10 Series Today"
-                                    BrowseView.Movies -> "Top 10 Movies Today"
-                                    else -> "Top 10 ${view.label} Today"
-                                },
-                                first.metas.distinctBy { it.id },
-                                nav::openMeta,
-                            )
+                        items(trackerRows, key = { it.key }, contentType = { "rail" }) { row ->
+                            Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, browse::openMeta) { nav.openCatalog(row) }
                         }
-                    }
-                    val rest = if (rankFirst) current.drop(1) else current
-                    // Anime: Top Picks and Recommended lead, then your lists (Harbor's order); elsewhere three rows lead.
-                    val lead = if (view == BrowseView.Anime) rest.takeWhile { it.key.startsWith("lead:") } else rest.take(3)
-                    items(lead, key = { it.key }, contentType = { "rail" }) { row ->
-                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
-                    }
-                    items(trackerRows, key = { it.key }, contentType = { "rail" }) { row ->
-                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
-                    }
-                    // Harbor's curated lists: the NYT's TV 100 for shows, the Registry's newest for films, and the shelf.
-                    val curated = when (view) {
-                        BrowseView.Home -> listOf("nyt-tv-100", "national-film-registry-latest")
-                        BrowseView.Shows -> listOf("nyt-tv-100")
-                        BrowseView.Movies -> listOf("national-film-registry-latest")
-                        else -> emptyList()
-                    }.mapNotNull { app.harbor.android.data.Curated.list(it) }
-                    items(curated, key = { "curated-${it.id}" }, contentType = { "curated" }) { list -> CuratedRow(list, nav::openMeta) }
-                    if (view == BrowseView.Home || view == BrowseView.Movies) {
-                        item(key = "lists") { CuratedShelf(app.harbor.android.data.Curated.shelf()) }
-                    }
-                    items(rest.drop(lead.size), key = { it.key }, contentType = { "rail" }) { row ->
-                        Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, nav::openMeta) { nav.openCatalog(row) }
+                        // Harbor's curated lists: the NYT's TV 100 for shows, the Registry's newest for films, and the shelf.
+                        val curated = when (view) {
+                            BrowseView.Home -> listOf("nyt-tv-100", "national-film-registry-latest")
+                            BrowseView.Shows -> listOf("nyt-tv-100")
+                            BrowseView.Movies -> listOf("national-film-registry-latest")
+                            else -> emptyList()
+                        }.mapNotNull { app.harbor.android.data.Curated.list(it) }
+                        items(curated, key = { "curated-${it.id}" }, contentType = { "curated" }) { list -> CuratedRow(list, browse::openMeta) }
+                        if (view == BrowseView.Home || view == BrowseView.Movies) {
+                            item(key = "lists") { CuratedShelf(app.harbor.android.data.Curated.shelf()) }
+                        }
+                        items(rest.drop(lead.size), key = { it.key }, contentType = { "rail" }) { row ->
+                            Rail(row.title, remember(row.metas) { row.metas.distinctBy { it.id }.take(18) }, browse::openMeta) { nav.openCatalog(row) }
+                        }
                     }
                 }
             }
         }
 
         // Harbor's floating header: the wordmark and the view switcher, over a fade.
-        Box(
-            Modifier.fillMaxWidth().height(top + 12.dp)
-                .background(Brush.verticalGradient(0f to HarborColors.Canvas, 0.78f to HarborColors.Canvas.copy(alpha = 0.96f), 1f to Color.Transparent)),
-        )
-        Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Harbor", color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
-            Spacer(Modifier.weight(1f))
-            if (showSwitcher) ViewSwitcher(view, onView)
+        // On TV the top nav bar owns the branding and the search entry, so drawing this too would
+        // leave a ghost "Harbor" behind the bar.
+        if (!Perf.isTv) {
+            Box(
+                Modifier.fillMaxWidth().height(top + 12.dp)
+                    .background(Brush.verticalGradient(0f to HarborColors.Canvas, 0.78f to HarborColors.Canvas.copy(alpha = 0.96f), 1f to Color.Transparent)),
+            )
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Harbor", color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.5).sp)
+                Spacer(Modifier.weight(1f))
+                if (showSwitcher) ViewSwitcher(view, onView)
+            }
         }
     }
 }
@@ -486,6 +542,21 @@ private suspend fun cinemetaRows(metaAddons: List<Addon>): List<CatalogRow> = co
         val metas = page.await().let { list -> list.subList(range.first.coerceAtMost(list.size), (range.last + 1).coerceAtMost(list.size)) }
         CatalogRow("cinemeta/$title", title, metas, type, cinemeta, source.first, source.second)
     }.filter { it.metas.isNotEmpty() }
+}
+
+/**
+ * When each row set was last fetched, for the life of the process. Home is recreated on every
+ * Back from Detail; this keeps that from refetching every row while the cached ones are recent.
+ */
+object HomeRefresh {
+    private const val TTL_MS = 15 * 60_000L
+    private val fetchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun isFresh(key: String): Boolean = fetchedAt[key]?.let { android.os.SystemClock.elapsedRealtime() - it < TTL_MS } ?: false
+
+    fun mark(key: String) {
+        fetchedAt[key] = android.os.SystemClock.elapsedRealtime()
+    }
 }
 
 /** Home rows as last loaded, kept on disk so the next launch shows them straight away. */

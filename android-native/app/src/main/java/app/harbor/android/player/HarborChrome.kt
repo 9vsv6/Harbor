@@ -78,6 +78,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -217,7 +218,7 @@ internal fun HarborControls(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text(clock(state.positionMs), color = Color(0xE6FFFFFF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                PositionLabel(state)
                 HarborSeekBar(state, actions, onTouch, Modifier.weight(1f))
                 Text(clock(state.durationMs), color = Color(0xE6FFFFFF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
@@ -251,6 +252,17 @@ internal fun HarborControls(
             }
         }
     }
+}
+
+/**
+ * The position clock. Reading the position through a derived state at whole seconds means the
+ * 250 ms playback tick invalidates this one label at most once a second, instead of recomposing
+ * the whole controls tree (title row, tool icons, gradients) on every tick.
+ */
+@Composable
+private fun PositionLabel(state: PlayerState) {
+    val seconds by remember { derivedStateOf { state.positionMs / 1000L } }
+    Text(clock(seconds * 1_000L), color = Color(0xE6FFFFFF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
 }
 
 private fun toggle(state: PlayerState, panel: Panel) {
@@ -315,8 +327,6 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
     val duration = state.durationMs.coerceAtLeast(1)
-    val value = (if (dragging) dragValue else state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
-    val buffered = (state.bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
     Box(modifier) {
         Canvas(
             Modifier.fillMaxWidth().height(34.dp)
@@ -345,6 +355,9 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                     }
                 },
         ) {
+            // Read in the draw phase: a position tick invalidates the draw only, not the composition.
+            val value = (if (dragging) dragValue else state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
+            val buffered = (state.bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
             val y = size.height / 2
             val stroke = (if (dragging) 7.dp else 4.dp).toPx()
             drawLine(Color(0x26FFFFFF), Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
