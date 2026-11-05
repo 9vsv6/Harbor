@@ -258,6 +258,8 @@ val SettingsJump = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> Unit = {}) {
     // Phones: "" is the home rail, else an open group. Tablets: the open sub-page.
     var groupName by rememberSaveable { mutableStateOf("") }
+    // Phones: the page open inside a group ("" lists the group's pages, as the tablet's sidebar does).
+    var phoneSection by rememberSaveable { mutableStateOf("") }
     var sectionName by rememberSaveable { mutableStateOf(Section.Profiles.name) }
     var query by rememberSaveable { mutableStateOf("") }
     var target by remember { mutableStateOf<Section?>(null) }
@@ -274,6 +276,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
         fun open(g: Group, s: Section? = null) {
             query = ""
             groupName = g.name
+            phoneSection = s?.name ?: g.shown.singleOrNull()?.name.orEmpty()
             openBands = openBands + g.name
             if (wide) sectionName = (s ?: g.shown.first()).name
             target = s
@@ -285,7 +288,12 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
             SettingsJump.value = null
         }
         BackHandler(enabled = query.isNotEmpty() || (!wide && group != null)) {
-            if (query.isNotEmpty()) query = "" else groupName = ""
+            when {
+                query.isNotEmpty() -> query = ""
+                // Back from a page goes to its group's list, then out to Settings.
+                phoneSection.isNotEmpty() && group != null && group.shown.size > 1 -> phoneSection = ""
+                else -> { groupName = ""; phoneSection = "" }
+            }
         }
 
         androidx.compose.runtime.CompositionLocalProvider(LocalOpenSection provides { s: Section -> open(groupOf(s), s) }) {
@@ -334,13 +342,21 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
                 }
             }
         } else {
+            val page = phoneSection.takeIf { it.isNotEmpty() }?.let { n -> Section.entries.firstOrNull { it.name == n } }?.takeIf { it in group.shown }
             Column(Modifier.fillMaxSize()) {
-                SettingsHeader(group.label, { query = ""; groupName = "" }, query) { query = it }
-                if (query.isNotBlank()) {
-                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                SettingsHeader(page?.label ?: group.label, {
+                    query = ""
+                    if (page != null && group.shown.size > 1) phoneSection = "" else { groupName = ""; phoneSection = "" }
+                }, query) { query = it }
+                when {
+                    query.isNotBlank() -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                         SearchResults(query) { open(groupOf(it), it) }
                     }
-                } else GroupContent(group, repository, onOpenAddons, target, horizontal = 16.dp) { target = null }
+                    // A group of several pages: its pages with their icons (trackers with their logos), as the tablet's sidebar.
+                    page == null && group.shown.size > 1 -> PhoneGroupList(repository, group) { phoneSection = it.name }
+                    page != null -> PhoneSectionPage(page, repository, onOpenAddons)
+                    else -> GroupContent(group, repository, onOpenAddons, target, horizontal = 16.dp) { target = null }
+                }
             }
         }
         }
@@ -398,6 +414,54 @@ private fun TabletRail(repository: Repository, current: Section, open: Set<Group
                 }
             }
         }
+    }
+}
+
+/** Phones: a group's pages, each with its icon (a tracker with its logo), its line, and a chevron. */
+@Composable
+private fun PhoneGroupList(repository: Repository, group: Group, onOpen: (Section) -> Unit) {
+    val profile by repository.activeProfile.collectAsState()
+    val harbor by repository.accounts.harbor.collectAsState()
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (group == Group.Account) Row(
+            Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            ProfileAvatar(profile, 52.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(profile?.name ?: "Me", color = HarborColors.Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (harbor != null) "Signed in to Harbor" else "Signed out of Harbor", color = HarborColors.InkMuted, fontSize = 13.5.sp, maxLines = 1)
+            }
+        }
+        group.shown.forEach { s ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onOpen(s) }.padding(horizontal = 12.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                if (s.logo) androidx.compose.foundation.Image(painterResource(s.icon), null, Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)))
+                else Icon(painterResource(s.icon), null, tint = HarborColors.InkMuted, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(s.label, color = HarborColors.Ink, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    if (s.sub.isNotBlank()) Text(s.sub, color = HarborColors.InkSubtle, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 17.sp)
+                }
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = HarborColors.InkSubtle, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+/** Phones: one page of a group on its own, as the tablet shows it beside the sidebar. */
+@Composable
+private fun PhoneSectionPage(section: Section, repository: Repository, onOpenAddons: () -> Unit) {
+    val settings by repository.settings.collectAsState()
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 48.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+    ) {
+        if (section !in SELF_TITLED && section.sub.isNotBlank()) Text(section.sub, color = HarborColors.InkMuted, fontSize = 15.5.sp, lineHeight = 22.sp)
+        SectionBody(section, repository, settings, repository::updateSettings, onOpenAddons)
     }
 }
 

@@ -132,8 +132,26 @@ object AddonClient {
                     runCatching {
                         val body = fetch(path(addon, "subtitles", type, id))
                         withContext(Net.parseDispatcher) {
-                            body["subtitles"].arrayOrNull?.mapNotNull {
-                                runCatching { Net.json.decodeFromJsonElement(Subtitle.serializer(), it) }.getOrNull()
+                            val perLanguage = HashMap<String, Int>()
+                            body["subtitles"].arrayOrNull?.mapNotNull { element ->
+                                val sub = runCatching { Net.json.decodeFromJsonElement(Subtitle.serializer(), element) }.getOrNull()
+                                    ?: return@mapNotNull null
+                                // What Harbor PC reads to name it: the addon's label, the release, the format and the site behind it.
+                                val o = element as? JsonObject
+                                fun text(key: String) = (o?.get(key) as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
+                                val n = perLanguage.merge(sub.lang.lowercase(), 1, Int::plus) ?: 1
+                                val hints = listOf(text("provider"), text("source"), text("name"), text("addon"), sub.id, sub.url)
+                                sub.copy(
+                                    label = text("label"),
+                                    release = text("m") ?: text("release"),
+                                    format = text("SubFormat") ?: text("format"),
+                                    from = addon.manifest.name,
+                                    upstream = SubtitleNames.upstream(hints),
+                                    number = n,
+                                    downloads = (o?.get("downloads") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0,
+                                    hearingImpaired = (o?.get("hearing_impaired") ?: o?.get("hearingImpaired"))?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == "true" } == true,
+                                    forced = (o?.get("forced") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
+                                )
                             } ?: emptyList()
                         }
                     }.getOrNull()

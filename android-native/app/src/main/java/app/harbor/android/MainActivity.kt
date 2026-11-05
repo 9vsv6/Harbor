@@ -294,7 +294,10 @@ private fun HarborRoot(repository: Repository) {
                         context.startActivity(PlayerActivity.intent(context, app.harbor.android.data.Ready(app.harbor.android.data.Stream(url = uri, name = "Downloaded"), uri), d.type, d.metaId, d.videoId, d.title))
                     }
                 }
-                composable("collections") { app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() }) }
+                composable("collections") {
+                    if (tv) app.harbor.android.ui.tv.TvCollections(repository)
+                    else app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() })
+                }
                 composable("rowgrid/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
                     app.harbor.android.ui.RowGridScreen(back.arguments?.getString("key").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) })
                 }
@@ -321,12 +324,14 @@ private fun HarborRoot(repository: Repository) {
                 }
                 composable(Tab.Home.route) { HomeScreen(repository, browse, browseView, { browseView = it }, showSwitcher = !wide) }
                 composable(Tab.Search.route) {
-                    SearchScreen(repository, onOpen = { open(it) }) { type, genre ->
+                    if (tv) app.harbor.android.ui.tv.TvSearch(repository) { open(it) }
+                    else SearchScreen(repository, onOpen = { open(it) }) { type, genre ->
                         nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre ${if (type == "movie") "Movies" else "Shows"}")
                     }
                 }
                 composable(Tab.MyStuff.route) {
-                    LibraryScreen(
+                    if (tv) app.harbor.android.ui.tv.TvLibrary(repository) { open(it) }
+                    else LibraryScreen(
                         repository, onOpen = { open(it) }, onResume = browse::resume,
                         onConnectTorbox = { app.harbor.android.ui.SettingsJump.value = "Services"; nav.selectTab(Tab.Profile) },
                         // TorBox cloud files play on their own, outside Stremio's library and the trackers.

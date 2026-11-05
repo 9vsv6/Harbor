@@ -216,7 +216,7 @@ fun TvPosterRow(title: String, metas: List<Meta>, onOpen: (Meta) -> Unit) {
             contentPadding = PaddingValues(horizontal = TvInsets.Gutter, vertical = u(8f)),
             horizontalArrangement = Arrangement.spacedBy(u(14f)),
         ) {
-            items(metas.distinctBy { it.id }.take(24), key = { it.id }) { meta -> PosterTile(meta, null, {}, { onOpen(meta) }) }
+            items(metas.distinctBy { it.id }.take(24), key = { it.id }) { meta -> PosterTile(meta, null, {}, onClick = { onOpen(meta) }) }
         } }
     }
 }

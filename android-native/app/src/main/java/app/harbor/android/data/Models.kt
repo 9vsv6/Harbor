@@ -169,7 +169,26 @@ data class StreamHints(
 data class ProxyHeaders(val request: Map<String, String>? = null)
 
 @Serializable
-data class Subtitle(val id: String? = null, val url: String, val lang: String = "und")
+data class Subtitle(
+    val id: String? = null,
+    val url: String,
+    val lang: String = "und",
+    /** The addon's own name for it (SubSense: "OpenSubtitles · [SRT] · The.Film.srt"). */
+    @kotlinx.serialization.Transient val label: String? = null,
+    /** The release it was made for (the addons' "m"). */
+    @kotlinx.serialization.Transient val release: String? = null,
+    /** "srt", "vtt", "ass" when the source says. */
+    @kotlinx.serialization.Transient val format: String? = null,
+    /** The addon or Harbor source it came from ("OpenSubtitles v3", "SubDL"). */
+    @kotlinx.serialization.Transient val from: String? = null,
+    /** The site behind an addon that relays others ("SubDL", "Subsource"). */
+    @kotlinx.serialization.Transient val upstream: String? = null,
+    /** Its number among its source's subtitles in its language, from 1. */
+    @kotlinx.serialization.Transient val number: Int = 0,
+    @kotlinx.serialization.Transient val downloads: Int = 0,
+    @kotlinx.serialization.Transient val hearingImpaired: Boolean = false,
+    @kotlinx.serialization.Transient val forced: Boolean = false,
+)
 
 @Serializable
 data class LibraryState(

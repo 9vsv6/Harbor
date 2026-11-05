@@ -205,7 +205,7 @@ class Repository(private val context: Context) {
             ?.let { it.copy(subtitleFallbacks = LanguageCodes.codes(it.subtitleFallbacks), audioLanguages = LanguageCodes.codes(it.audioLanguages), secondarySubLanguage = LanguageCodes.code(it.secondarySubLanguage)) }
             ?: AppSettings()
         _lastStreams.value = prefs[keyLastStreams]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
-        scope.launch { refreshTrackers() }
+        scope.launch { refreshTrackers(); runCatching { syncTrackerAvatar() } }
         accounts.load(prefs)
         profileLoaded.forEach { it(prefs) }
     }
@@ -244,6 +244,29 @@ class Repository(private val context: Context) {
         _trackers.value = next
         scope.launch { context.store.edit { it[keyTrackers] = Net.json.encodeToString(TrackerSettings.serializer(), next) } }
         if (next.trakt?.accessToken == null) _traktCw.value = emptyList()
+    }
+
+    /**
+     * "Use my … avatar as my Harbor avatar", kept true on every device: a profile restored or sent
+     * from another device carries the setting, so its tracker's picture is put back here too, and a
+     * picture whose file isn't on this device (an upload made elsewhere) falls back to it.
+     */
+    suspend fun syncTrackerAvatar() {
+        val profile = _activeProfile.value ?: return
+        val s = _settings.value
+        val t = _trackers.value
+        val picture = runCatching {
+            when {
+                s.useAnilistAvatar && t.anilist?.accessToken != null -> AniList.avatar(t.anilist)
+                s.useTraktAvatar && t.trakt?.accessToken != null -> Trakt.avatar(t.trakt)
+                s.useSimklAvatar && t.simkl?.accessToken != null -> Simkl.avatar(t.simkl)
+                s.useMalAvatar && t.mal?.accessToken != null -> Mal.avatar(t.mal)
+                else -> null
+            }
+        }.getOrNull() ?: return
+        val missingFile = profile.avatar?.startsWith("file:///data/") == true &&
+            !java.io.File(android.net.Uri.parse(profile.avatar).path.orEmpty()).exists()
+        if (profile.avatar == null || missingFile || profile.avatar != picture) saveProfile(profile.copy(avatar = picture))
     }
 
     /** Trakt's paused titles join Continue watching; its token is refreshed when due. */
@@ -811,10 +834,17 @@ class Repository(private val context: Context) {
                 }
             }
         }
+        // Uploaded profile pictures live as files, which the settings only point at: they travel too.
+        val pictures = buildJsonObject {
+            java.io.File(context.filesDir, "avatars").listFiles().orEmpty().filter { it.isFile && it.length() in 1..(4L * 1024 * 1024) }.forEach { f ->
+                put(f.name, android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP))
+            }
+        }
         return buildJsonObject {
             put("app", "harbor-android")
             put("version", 1)
             put("prefs", entries)
+            put("avatars", pictures)
         }.toString()
     }
 
@@ -843,6 +873,15 @@ class Repository(private val context: Context) {
 
     private suspend fun importNative(root: JsonObject) {
         val entries = root["prefs"] as? JsonObject ?: error("The backup is empty")
+        // Profile pictures first, so the profiles that point at them find them.
+        (root["avatars"] as? JsonObject)?.let { pictures ->
+            val dir = java.io.File(context.filesDir, "avatars").apply { mkdirs() }
+            for ((name, data) in pictures) {
+                if (!Regex("^[A-Za-z0-9._-]{1,80}$").matches(name)) continue
+                val bytes = runCatching { android.util.Base64.decode((data as kotlinx.serialization.json.JsonPrimitive).content, android.util.Base64.NO_WRAP) }.getOrNull() ?: continue
+                runCatching { java.io.File(dir, name).writeBytes(bytes) }
+            }
+        }
         context.store.edit { prefs ->
             prefs.clear()
             for ((name, element) in entries) {

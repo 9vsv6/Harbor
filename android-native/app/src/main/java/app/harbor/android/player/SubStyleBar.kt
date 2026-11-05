@@ -80,7 +80,7 @@ private val MORE_COLORS = listOf(0xFF000000, 0xFFFF3B30, 0xFFFF9500, 0xFFFFCC00,
 private val FONTS = listOf("inter" to "Inter", "system" to "System", "condensed" to "Rounded", "serif" to "Serif", "arabic" to "Arabic")
 
 /** Harbor's size is the font's px; 32 is Harbor's 100%. */
-private const val BASE_PX = 32f
+internal const val BASE_PX = 32f
 private fun px(prefs: PlayerPrefs) = (prefs.subScale * BASE_PX).roundToInt()
 
 /** The look on screen now, as a saved look holds it. */
@@ -343,7 +343,7 @@ private fun Looks(
 }
 
 /** Puts a saved look on: the parts kept per player and the rest of the subtitle settings. */
-private fun applyLook(look: SubLook, onPrefs: ((PlayerPrefs) -> PlayerPrefs) -> Unit, settings: ((AppSettings) -> AppSettings) -> Unit) {
+internal fun applyLook(look: SubLook, onPrefs: ((PlayerPrefs) -> PlayerPrefs) -> Unit, settings: ((AppSettings) -> AppSettings) -> Unit) {
     onPrefs { it.copy(subBackground = look.background, subScale = look.size / BASE_PX, subColor = look.color, subBottom = look.bottom) }
     settings {
         it.copy(

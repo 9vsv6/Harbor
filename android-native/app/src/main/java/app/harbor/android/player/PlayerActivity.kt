@@ -48,6 +48,7 @@ import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -105,6 +106,21 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Newer Android (16+) sends Back here rather than as a key: it closes a menu, then (on a TV)
+        // the controls, before it leaves, as dispatchKeyEvent does on older versions.
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                when {
+                    state.panel != null -> state.panel = null
+                    state.tv && state.controlsVisible && state.playing -> state.controlsVisible = false
+                    else -> {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                        isEnabled = true
+                    }
+                }
+            }
+        })
         hideSystemBars()
 
         // mpv is the main engine; Media3 takes over where libmpv can't start, or when chosen.
@@ -780,6 +796,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
      * up/down bring the controls); with them showing, it moves focus through them. Back closes a
      * menu, then (on a TV) the controls, before it leaves. Media keys work either way.
      */
+    private var backPressHandled = false
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
         if (state.inPip || state.castingTo != null) return super.dispatchKeyEvent(event)
@@ -795,12 +813,16 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                 // The live sync panel handles Back itself.
                 if (state.liveSync != null) return super.dispatchKeyEvent(event)
-                val handled = state.panel != null || (state.tv && state.controlsVisible && state.playing)
-                if (!handled) return super.dispatchKeyEvent(event)
+                // The release goes with its press: a press that closed something never leaves the player.
                 if (!down) {
+                    if (!backPressHandled) return super.dispatchKeyEvent(event)
+                    backPressHandled = false
                     if (state.panel != null) state.panel = null else state.controlsVisible = false
+                    return true
                 }
-                return true
+                val handled = state.panel != null || (state.tv && state.controlsVisible && state.playing)
+                if (event.repeatCount == 0) backPressHandled = handled
+                return if (handled) true else super.dispatchKeyEvent(event)
             }
         }
         val hidden = !state.controlsVisible && state.panel == null && state.endScreen == null && state.liveSync == null
@@ -924,6 +946,41 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.hintIcon = 0
         // Harbor keeps the crop mode for the next video too.
         repository.updateSettings { it.copy(defaultFit = fit.name) }
+    }
+
+    private var findJob: kotlinx.coroutines.Job? = null
+
+    override fun findSubtitles(query: String, onResults: (List<app.harbor.android.data.Subtitle>, Int) -> Unit) {
+        findJob?.cancel()
+        findJob = lifecycleScope.launch {
+            val q = query.trim()
+            val parts = state.videoId.split(':')
+            // This title, unless you typed another: then the best match in your catalogs, at this episode.
+            val (findType, findId) = if (q.isEmpty() || q.equals(state.title, true) || q.equals(state.meta?.name, true)) {
+                type to state.videoId
+            } else {
+                val hit = runCatching { app.harbor.android.ui.searchCatalogs(repository, q) }.getOrDefault(emptyList())
+                    .firstOrNull { it.id.startsWith("tt") } ?: run { onResults(emptyList(), 0); return@launch }
+                if (hit.type == "movie") "movie" to hit.id
+                else "series" to listOfNotNull(hit.id, parts.getOrNull(1) ?: "1", parts.getOrNull(2) ?: "1").joinToString(":")
+            }
+            var found = emptyList<app.harbor.android.data.Subtitle>()
+            val addons = async { withTimeoutOrNull(20_000) { AddonClient.subtitles(repository.addons.value, findType, findId) }.orEmpty() }
+            val native = async {
+                val p = findId.split(':')
+                val imdb = p.first().takeIf { it.startsWith("tt") } ?: return@async emptyList()
+                val settings = state.settings
+                val query2 = app.harbor.android.data.SubtitleSources.Query(
+                    imdb = imdb, series = findType != "movie", season = p.getOrNull(1)?.toIntOrNull(), episode = p.getOrNull(2)?.toIntOrNull(),
+                    languages = (listOf(prefs.subLanguage) + settings.subtitleFallbacks + settings.secondarySubLanguage).filter { it.isNotEmpty() },
+                )
+                withTimeoutOrNull(25_000) { app.harbor.android.data.SubtitleSources.search(cacheDir, query2, settings, repository.providerKeys.value) }.orEmpty()
+            }
+            found = (found + addons.await()).distinctBy { it.url }
+            onResults(found, 1)
+            found = (found + native.await()).distinctBy { it.url }
+            onResults(found, 0)
+        }
     }
 
     override fun setSubDelay(delayMs: Long) {

@@ -117,6 +117,12 @@ interface PlayerActions {
     fun selectAudio(key: String)
     fun selectSubtitle(choice: SubChoice)
     fun setSubDelay(delayMs: Long)
+    /**
+     * Big Picture's Find more: subtitles for a title you type (this one by default), from every
+     * subtitle addon and Harbor's own sources. `onResults` runs as each group arrives, with how many
+     * are still searching.
+     */
+    fun findSubtitles(query: String, onResults: (List<app.harbor.android.data.Subtitle>, Int) -> Unit)
     /** Live sync: Harbor's panel of every subtitle line; align the one you hear to now. */
     fun startLiveSync()
     fun startAutoSync()
@@ -309,7 +315,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             }
         } else {
-            AnimatedVisibility(state.controlsVisible && state.endScreen == null, enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !(state.tv && state.panel == Panel.Subtitles), enter = fadeIn(), exit = fadeOut()) {
                 if (state.tv) TvPlayerControls(state, actions) { touchedAt = System.currentTimeMillis() }
                 else HarborControls(state, prefs, actions, castButton) { touchedAt = System.currentTimeMillis() }
             }
@@ -325,6 +331,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         state.error?.let { ErrorCard(it, state, actions, Modifier.align(Alignment.Center)) }
 
         HarborPopovers(state, prefs, actions)
+        if (state.tv && state.panel == Panel.Subtitles) TvSubtitlePanel(state, prefs, actions)
         if (state.panel == Panel.SubStyle) SubStyleBar(state, prefs, actions)
         SubSyncBar(state, actions)
         AutoSyncPill(state, actions)

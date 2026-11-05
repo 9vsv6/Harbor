@@ -57,7 +57,7 @@ object SubtitleSources {
             rows.filter { code(it.string("language") ?: it.string("lang")) == lang }.take(PER_LANGUAGE).mapNotNull { row ->
                 val path = row.string("url") ?: return@mapNotNull null
                 val file = unzip(dir, "subdl-" + path.substringAfterLast('/').substringBefore('.'), Request.Builder().url("https://dl.subdl.com$path").build(), q) ?: return@mapNotNull null
-                Subtitle("SubDL · " + (row.string("release_name") ?: row.string("name") ?: lang), file, lang)
+                Subtitle("SubDL · " + (row.string("release_name") ?: row.string("name") ?: lang), release = row.string("release_name") ?: row.string("name"), from = "SubDL", url = file, lang = lang)
             }
         }
     }
@@ -77,7 +77,7 @@ object SubtitleSources {
                 .ifEmpty { rows }.take(PER_LANGUAGE).mapNotNull { row ->
                     val id = row["subtitleId"]?.jsonPrimitive?.content ?: return@mapNotNull null
                     val file = unzip(dir, "subsource-$id", get("$base/subtitles/$id/download"), q) ?: return@mapNotNull null
-                    Subtitle("Subsource · " + (row.string("releaseInfo")?.lines()?.firstOrNull() ?: lang), file, lang)
+                    Subtitle("Subsource · " + (row.string("releaseInfo")?.lines()?.firstOrNull() ?: lang), release = row.string("releaseInfo")?.lines()?.firstOrNull(), from = "Subsource", url = file, lang = lang)
                 }
         }
     }
@@ -94,7 +94,7 @@ object SubtitleSources {
         val rows = (Net.json.parseToJsonElement(Net.get(url)) as? JsonArray).orEmptyObjects()
         return langs.flatMap { lang ->
             rows.filter { code(it.string("language")) == lang }.take(PER_LANGUAGE).mapNotNull { row ->
-                Subtitle("Wyzie · " + (row.string("release") ?: row.string("display") ?: lang), row.string("url") ?: return@mapNotNull null, lang)
+                Subtitle("Wyzie · " + (row.string("release") ?: row.string("display") ?: lang), release = row.string("release") ?: row.string("display"), from = "Wyzie", url = row.string("url") ?: return@mapNotNull null, lang = lang)
             }
         }
     }
@@ -116,7 +116,7 @@ object SubtitleSources {
                     val link = Net.json.parseToJsonElement(Net.call(headers(Request.Builder().url("$base/download").post(body)).build())).jsonObject.string("link") ?: return@mapNotNull null
                     withContext(Dispatchers.IO) { target.writeBytes(Net.client.newCall(Request.Builder().url(link).build()).execute().use { it.body?.bytes() ?: ByteArray(0) }) }
                 }
-                Subtitle("OpenSubtitles · " + (attrs.string("release") ?: lang), target.toURI().toString(), lang)
+                Subtitle("OpenSubtitles · " + (attrs.string("release") ?: lang), release = attrs.string("release"), from = "OpenSubtitles", url = target.toURI().toString(), lang = lang)
             }
         }
     }

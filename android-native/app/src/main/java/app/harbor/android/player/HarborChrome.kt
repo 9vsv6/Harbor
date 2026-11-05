@@ -395,7 +395,8 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
  */
 @Composable
 internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
-    val panel = state.panel
+    // On a TV, Subtitles is Big Picture's own panel (TvSubtitlePanel).
+    val panel = state.panel.takeUnless { state.tv && it == Panel.Subtitles }
     // The menu the popover shows: the open one, or while it fades out, the one that was open.
     // (Falling back to Audio here flashed the Audio menu whenever a menu opened or closed.)
     var shown by remember { mutableStateOf(Panel.Audio) }
@@ -538,7 +539,7 @@ private fun TrackRow(title: String, meta: String?, language: String?, selected: 
 
 /** Harbor's flag for a language (components/flag.tsx); the two-letter code where there is none. */
 @Composable
-private fun LangTag(language: String) {
+internal fun LangTag(language: String) {
     val code = iso2(language)
     val lang = app.harbor.android.data.Languages.of(code.take(2))
     if (lang.country.length == 2 && lang.country != "un") {
@@ -834,7 +835,7 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, actions: PlayerActi
     }
 }
 
-private fun languageKey(lang: String): String = iso2(lang)
+internal fun languageKey(lang: String): String = iso2(lang)
 
 // ISO 639-2 (and the bibliographic forms addons use) to the two-letter codes.
 private val ISO3_TO_2: Map<String, String> by lazy {
@@ -847,34 +848,9 @@ private fun iso2(lang: String): String {
     return if (clean.length == 3) ISO3_TO_2[clean] ?: clean else clean
 }
 
-/**
- * A release name when the addon gives one (dots as spaces, as Harbor PC names tracks); addons that give
- * a database number or hash as the id get the language instead.
- */
-private val hashId = Regex("""^[0-9a-fA-F-]{8,}$""")
-private val numberedId = Regex("""^[a-z]+[-_:]?\d+$""", RegexOption.IGNORE_CASE)
-
-private fun subtitleTitle(sub: Subtitle): String {
-    val id = sub.id?.trim().orEmpty()
-    val named = id.length in 3..69 && id.any { it.isLetter() } && !hashId.matches(id) && !numberedId.matches(id)
-    return if (named) id.replace('.', ' ').replace('_', ' ') else languageName(sub.lang)
-}
-
-private fun subtitleSource(sub: Subtitle): String? = when {
-    sub.url.contains("opensubtitles", true) -> "OpenSubtitles"
-    sub.url.contains("subdl", true) -> "SubDL"
-    sub.url.contains("subsource", true) -> "SubSource"
-    else -> runCatching { java.net.URI(sub.url).host?.removePrefix("www.") }.getOrNull()
-}
-
-private fun subtitleFormat(sub: Subtitle): String? {
-    val path = sub.url.substringBefore('?').lowercase()
-    return when {
-        path.endsWith(".vtt") -> "WebVTT subtitle"
-        path.endsWith(".ass") || path.endsWith(".ssa") -> "ASS subtitle"
-        else -> "SubRip subtitle"
-    }
-}
+private fun subtitleTitle(sub: Subtitle): String = app.harbor.android.data.SubtitleNames.title(sub)
+private fun subtitleSource(sub: Subtitle): String? = app.harbor.android.data.SubtitleNames.provider(sub)
+private fun subtitleFormat(sub: Subtitle): String = app.harbor.android.data.SubtitleNames.format(sub).uppercase()
 
 // ---- Anime4K, speed and sleep (anime4k-menu.tsx) ----
 
@@ -1135,7 +1111,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             if (offset != 0L || state.subTimeScale != 1.0) Box(Modifier.size(6.dp).clip(CircleShape).background(HarborColors.Accent))
         }
         androidx.compose.material3.DropdownMenu(open, onDismissRequest = { open = false }, containerColor = PopRaised, modifier = Modifier.width(240.dp)) {
-            SyncItem("Auto sync", "Audio") { open = false; actions.startAutoSync() }
+            // Auto sync by audio is hidden for now (its code stays: startAutoSync).
             SyncItem("Live sync", "Guided") { open = false; actions.startLiveSync() }
             SyncItem("Manual offset", if (offset != 0L) "%+.1f".format(Locale.US, offset / 1000f) else null) {
                 open = false

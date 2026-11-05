@@ -100,30 +100,7 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
         }
         delay(350) // Wait for typing to pause.
         loading = true
-        val sources = repository.metaAddons()
-        val found = coroutineScope {
-            sources.flatMap { addon -> addon.manifest.catalogs.filter { it.supportsSearch }.map { addon to it } }
-                .map { (addon, catalog) ->
-                    async {
-                        runCatching { AddonClient.catalog(addon, catalog, mapOf("search" to q)) }
-                            .onFailure { android.util.Log.w("HarborSearch", "${addon.manifest.name}/${catalog.id} failed", it) }
-                            .getOrDefault(emptyList())
-                    }
-                }.awaitAll()
-                // Interleave the addons' results so one addon's long list doesn't bury the others.
-                .let { lists -> (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } } }
-                .distinctBy { it.id }
-                // Titles that have what you typed come first; the rest keep their order after them.
-                .sortedBy { searchRank(it.name, q) }
-        }
-        // Your title and poster languages, as Home's rows have them (TMDB key needed). Shown together
-        // with the results rather than swapped in after, and never holding them up for long.
-        val tmdb = repository.tmdbKey.value
-        results = if (tmdb != null && app.harbor.android.data.Tmdb.localizes) {
-            kotlinx.coroutines.withTimeoutOrNull(2_500) {
-                runCatching { app.harbor.android.data.Tmdb.localizeSearch(tmdb, q, found) }.getOrNull()
-            } ?: found
-        } else found
+        results = searchCatalogs(repository, q)
         loading = false
     }
 
@@ -226,4 +203,32 @@ private fun searchRank(name: String, query: String): Int {
         n.contains(q) -> 1
         else -> 2
     }
+}
+
+/**
+ * Every addon catalog that searches, asked at once: their results interleaved (one addon's long list
+ * doesn't bury the others), titles that have what you typed first, and in your title and poster
+ * languages when TMDB can say (never holding the results up for long). Phone and TV search share it.
+ */
+internal suspend fun searchCatalogs(repository: Repository, q: String): List<Meta> {
+    val sources = repository.metaAddons()
+    val found = coroutineScope {
+        sources.flatMap { addon -> addon.manifest.catalogs.filter { it.supportsSearch }.map { addon to it } }
+            .map { (addon, catalog) ->
+                async {
+                    runCatching { AddonClient.catalog(addon, catalog, mapOf("search" to q)) }
+                        .onFailure { android.util.Log.w("HarborSearch", "${addon.manifest.name}/${catalog.id} failed", it) }
+                        .getOrDefault(emptyList())
+                }
+            }.awaitAll()
+            .let { lists -> (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } } }
+            .distinctBy { it.id }
+            .sortedBy { searchRank(it.name, q) }
+    }
+    val tmdb = repository.tmdbKey.value
+    return if (tmdb != null && app.harbor.android.data.Tmdb.localizes) {
+        kotlinx.coroutines.withTimeoutOrNull(2_500) {
+            runCatching { app.harbor.android.data.Tmdb.localizeSearch(tmdb, q, found) }.getOrNull()
+        } ?: found
+    } else found
 }

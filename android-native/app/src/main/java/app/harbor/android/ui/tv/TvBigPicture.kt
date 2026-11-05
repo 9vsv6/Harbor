@@ -514,11 +514,11 @@ internal fun TvTileBox(
 }
 
 @Composable
-internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Unit, onClick: () -> Unit) {
+internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Unit, width: Dp? = null, onClick: () -> Unit) {
     val context = LocalContext.current
     val restore = LocalHomeFocusRestore.current
     val requester = focus ?: remember { FocusRequester() }
-    TvTileBox(u(121f), 2f / 3f, u(5f), requester, onFocused, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { focused ->
+    TvTileBox(width ?: u(121f), 2f / 3f, u(5f), requester, onFocused, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { focused ->
         val request = remember(meta.poster) { meta.poster?.let { ImageRequest.Builder(context).data(it).size(Perf.posterWidthPx, (Perf.posterWidthPx * 1.5f).toInt()).build() } }
         if (request != null) AsyncImage(request, meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         CardTag(meta, Modifier.align(Alignment.TopStart))
