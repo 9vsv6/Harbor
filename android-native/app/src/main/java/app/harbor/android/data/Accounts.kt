@@ -135,6 +135,8 @@ class Accounts(private val repository: Repository) {
     fun saveHarbor(session: HarborSession?) {
         _harbor.value = session
         save(keyHarbor, HarborSession.serializer(), session)
+        // The account's picture on this profile, as Harbor PC shows it.
+        session?.user?.avatar?.let { url -> scope.launch { repository.useAccountAvatar(url) } }
     }
 
     suspend fun harborSignOut() {

@@ -36,7 +36,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -161,8 +162,14 @@ private fun Scrub(state: PlayerState, actions: PlayerActions) {
     ) {
         val track = if (focused) u(4f) else u(2.5f)
         Box(Modifier.fillMaxWidth().height(track).clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.14f)))
-        val fraction by remember { derivedStateOf { if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f } }
-        Box(Modifier.fillMaxWidth(fraction).height(track).clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = if (focused) 1f else 0.7f)))
+        // The played part is drawn from the position as it ticks: no recomposition of the bar each tick.
+        val fill = HarborColors.Ink.copy(alpha = if (focused) 1f else 0.7f)
+        Box(
+            Modifier.fillMaxWidth().height(track).drawBehind {
+                val fraction = if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f
+                drawRoundRect(fill, size = size.copy(width = size.width * fraction), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
+            },
+        )
     }
 }
 

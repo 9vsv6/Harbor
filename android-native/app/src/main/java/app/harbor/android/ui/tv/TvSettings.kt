@@ -38,7 +38,7 @@ import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -143,9 +143,9 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val summary: (Cat) -> String = { c ->
             when (c) {
                 Cat.Picture -> overscanLabel(settings.tvOverscan)
-                Cat.Language -> settings.metadataLanguage.ifEmpty { "" }.let { if (it.isEmpty()) "Same as the device" else langName(it) }
+                Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
                 Cat.Subtitles -> listOfNotNull(subLangs.firstOrNull()?.let(::langName) ?: "Off", "${subPx}px").joinToString(" / ")
-                Cat.Playback -> if (settings.engine == "exo") "Media3" else "mpv"
+                Cat.Playback -> if (autoPlay) "Instant play" else "Pick a source"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
                 Cat.Services -> "${StreamingServices.enabled(settings).size} on"
                 Cat.Setup -> connected.joinToString(", ").ifEmpty { "Nothing connected" }
@@ -195,6 +195,7 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         Control.Options("overscan", "Edge margin", Overscans.minBy { kotlin.math.abs(it - s.tvOverscan) }.toString(), Overscans.map { Opt(it.toString(), overscanLabel(it)) }),
     )
     Cat.Language -> listOf(
+        Control.Options("appLanguage", "App language", s.appLanguage, app.harbor.android.i18n.UiLanguages.all.map { Opt(it.code, it.native) }),
         Control.Options("detailsLanguage", "Details language", s.metadataLanguage, listOf(Opt("", "Device")) + Languages.all.map { Opt(it.code, it.name) }),
     )
     Cat.Subtitles -> {
@@ -204,11 +205,17 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         listOf(
             Control.Multi("subLang", "Subtitle languages", all.map { code -> Triple(code, langName(code), chosen.indexOfFirst { it.equals(code, true) } + 1) }),
             Control.Options("subSize", "Size", nearest(SubSizes, p.subScale * 46f), SubSizes.map { Opt(it, "${it}px") }, letter = true),
+            Control.Options("secondSub", "Second subtitle language", s.secondarySubLanguage, listOf(Opt("", "Off")) + Languages.all.map { Opt(it.code, it.name) }),
+            Control.Options("preferEmbedded", "Prefer embedded subtitles", onOff(s.preferEmbeddedSubs), OnOff),
+            Control.Options("forcedNative", "Forced subs with native audio", onOff(s.forcedSubsNativeAudio), OnOff),
+            Control.Options("upgradeSubs", "Upgrade subtitles when better ones load", onOff(s.upgradeSubtitles), OnOff),
+            Control.Options("subsOff", "Start with subtitles off", onOff(s.subtitlesOffByDefault), OnOff),
+            Control.Options("chooseSubs", "Choose subtitles before playback", onOff(s.chooseSubsBeforePlayback), OnOff),
+            Control.Options("hideSdh", "Hide sound effects and speaker names", onOff(s.hideSdh), OnOff),
+            Control.Options("subDot", "Subtitle indicator dot", onOff(s.subIndicatorDot), OnOff),
         )
     }
     Cat.Playback -> listOf(
-        Control.Options("engine", "Player engine", s.engine, listOf(Opt("mpv", "mpv"), Opt("exo", "Media3"))),
-        Control.Options("hwdec", "Hardware acceleration", s.mpvHwdec, listOf(Opt("auto", "Auto"), Opt("on", "On"), Opt("off", "Off"))),
         Control.Options("skipIntro", "Skip intros", onOff(p.autoSkipIntro), OnOff),
         Control.Options("autoNext", "Auto-play next episode", onOff(s.autoPlayNextEpisode), OnOff),
         Control.Options("instantPlay", "Instant play", onOff(autoPlay), OnOff),
@@ -241,7 +248,15 @@ private fun commit(repository: Repository, id: String, value: String) {
             repository.updatePlayerPrefs { it.copy(subLanguage = next.firstOrNull().orEmpty()) }
             repository.updateSettings { it.copy(subtitleFallbacks = next.drop(1)) }
         }
-        "engine" -> repository.updateSettings { it.copy(engine = value) }
+        "secondSub" -> repository.updateSettings { it.copy(secondarySubLanguage = value) }
+        "preferEmbedded" -> repository.updateSettings { it.copy(preferEmbeddedSubs = value == "on") }
+        "forcedNative" -> repository.updateSettings { it.copy(forcedSubsNativeAudio = value == "on") }
+        "upgradeSubs" -> repository.updateSettings { it.copy(upgradeSubtitles = value == "on") }
+        "subsOff" -> repository.updateSettings { it.copy(subtitlesOffByDefault = value == "on") }
+        "chooseSubs" -> repository.updateSettings { it.copy(chooseSubsBeforePlayback = value == "on") }
+        "hideSdh" -> repository.updateSettings { it.copy(hideSdh = value == "on") }
+        "subDot" -> repository.updateSettings { it.copy(subIndicatorDot = value == "on") }
+        "appLanguage" -> repository.updateSettings { it.copy(appLanguage = value) }
         "hwdec" -> repository.updateSettings { it.copy(mpvHwdec = value) }
         "skipIntro" -> repository.updatePlayerPrefs { it.copy(autoSkipIntro = value == "on") }
         "autoNext" -> repository.updateSettings { it.copy(autoPlayNextEpisode = value == "on") }
@@ -451,10 +466,8 @@ private fun SettingsPane(
             }
             else -> {
                 val rows: List<Pair<String, String>> = when (cat) {
-                    Cat.Language -> listOf("Details language" to (if (s.metadataLanguage.isEmpty()) "Same as the device" else langName(s.metadataLanguage)))
+                    Cat.Language -> listOf("App language" to app.harbor.android.i18n.UiLanguages.of(s.appLanguage).native, "Details language" to (if (s.metadataLanguage.isEmpty()) "Same as the device" else langName(s.metadataLanguage)))
                     Cat.Playback -> listOf(
-                        "Player engine" to (if (s.engine == "exo") "Media3" else "mpv"),
-                        "Hardware acceleration" to s.mpvHwdec.replaceFirstChar { it.uppercase() },
                         "Skip intros" to if (p.autoSkipIntro) "On" else "Off",
                         "Auto-play next episode" to if (s.autoPlayNextEpisode) "On" else "Off",
                         "Instant play" to if (autoPlay) "On" else "Off",

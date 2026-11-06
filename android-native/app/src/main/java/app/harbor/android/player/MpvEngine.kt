@@ -143,6 +143,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             audioFilters(s).takeIf { it.isNotEmpty() }?.let { opt("af", it) }
             opt("tls-verify", "yes")
             caBundle(context)?.let { opt("tls-ca-file", it.absolutePath) }
+            // A server that stops answering fails the stream after this long instead of freezing the player.
+            opt("network-timeout", "30")
             opt("cache", "yes")
             // Harbor PC keeps playback buffers in RAM, sized to the device's memory: TV boxes with
             // 1–2 GB get the small buffer unless you chose otherwise.
@@ -202,9 +204,12 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             return dir
         }
 
-        /** mpv's TLS needs a CA file: written once from the phone's own trusted certificates. */
+        /**
+         * mpv's TLS needs a CA file: written once from the phone's own trusted certificates, plus
+         * ISRG Root X2, which Android before 14 lacks (see network_security_config.xml).
+         */
         private fun caBundle(context: Context): File? = runCatching {
-            val file = File(context.filesDir, "cacert.pem")
+            val file = File(context.filesDir, "cacert-2.pem")
             if (file.exists() && System.currentTimeMillis() - file.lastModified() < 7L * 86_400_000) return file
             val store = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
             val pem = buildString {
@@ -214,6 +219,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                     append(Base64.encodeToString(cert.encoded, Base64.DEFAULT))
                     append("-----END CERTIFICATE-----\n")
                 }
+                append(context.resources.openRawResource(app.harbor.android.R.raw.isrg_root_x2).bufferedReader().use { it.readText() })
             }
             file.writeText(pem)
             file
@@ -413,7 +419,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.setPropertyString("http-header-fields", headers.filterKeys { !it.equals("User-Agent", true) }.entries.joinToString(",") { (k, v) -> "$k: ${v.replace(",", "\\,")}" })
         mpv.setPropertyString("start", if (startMs > 0) "%.3f".format(Locale.US, startMs / 1000.0) else "none")
         val start = {
-            mpv.command(arrayOf("loadfile", url, "replace"))
+            mpv.command(arrayOf("loadfile", NetRelay.forMpv(url), "replace"))
             mpv.setPropertyBoolean("pause", false)
         }
         // Hardware decoding into a missing surface stalls mpv (and the app with it), so a video
@@ -421,37 +427,47 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         if (surfaceSeen) start() else pendingLoad = start
     }
 
-    override fun play() {
-        if (eof) seekTo(0)
-        mpv.setPropertyBoolean("pause", false)
+    /**
+     * Changes to mpv, in order, off the main thread: mpv answers a change only between its own
+     * work, so a busy mpv (a slow decoder catching up, a server that stalls) would otherwise freeze
+     * the whole app while it waits.
+     */
+    private val calls = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "harbor-mpv").apply { isDaemon = true } }
+    private fun later(change: () -> Unit) {
+        runCatching { calls.execute { runCatching(change).onFailure { Log.w(TAG, "mpv change failed", it) } } }
     }
 
-    override fun pause() = mpv.setPropertyBoolean("pause", true)
+    override fun play() {
+        if (eof) seekTo(0)
+        later { mpv.setPropertyBoolean("pause", false) }
+    }
+
+    override fun pause() = later { mpv.setPropertyBoolean("pause", true) }
     override val isPlaying get() = loaded && !paused && !pausedForCache && !eof
     override val ended get() = eof
     override val positionMs get() = (position * 1000).toLong()
     override val durationMs get() = (duration * 1000).toLong()
     override val bufferedMs get() = (cacheTime * 1000).toLong()
 
-    override fun seekTo(positionMs: Long) {
+    override fun seekTo(positionMs: Long) = later {
         mpv.command(arrayOf("seek", "%.3f".format(Locale.US, positionMs.coerceAtLeast(0) / 1000.0), "absolute"))
     }
 
-    override fun setSpeed(speed: Float) = mpv.setPropertyDouble("speed", speed.toDouble())
+    override fun setSpeed(speed: Float) = later { mpv.setPropertyDouble("speed", speed.toDouble()) }
 
-    override fun setFit(fit: Fit) {
+    override fun setFit(fit: Fit) = later {
         mpv.setPropertyString("keepaspect", if (fit == Fit.Stretch) "no" else "yes")
         mpv.setPropertyDouble("panscan", if (fit == Fit.Fill) 1.0 else 0.0)
         runCatching { mpv.setPropertyString("video-aspect-override", fit.aspect ?: "-1") }
     }
 
     // mpv: positive audio-delay plays the sound later; positive sub-delay shows subtitles later.
-    override fun setAudioDelay(delayMs: Long) = mpv.setPropertyDouble("audio-delay", delayMs / 1000.0)
-    override fun setSubDelay(delayMs: Long) = mpv.setPropertyDouble("sub-delay", delayMs / 1000.0)
+    override fun setAudioDelay(delayMs: Long) = later { mpv.setPropertyDouble("audio-delay", delayMs / 1000.0) }
+    override fun setSubDelay(delayMs: Long) = later { mpv.setPropertyDouble("sub-delay", delayMs / 1000.0) }
 
     private var subSpeed = 1.0
 
-    override fun setSubSpeed(speed: Double) { subSpeed = speed; runCatching { mpv.setPropertyDouble("sub-speed", speed) } }
+    override fun setSubSpeed(speed: Double) { subSpeed = speed; later { mpv.setPropertyDouble("sub-speed", speed) } }
 
     /**
      * The lines of the selected subtitle seen so far, by start in subtitle time. mpv can't list a
@@ -533,7 +549,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun audioTracks() = tracks("audio")
     override fun textTracks() = tracks("sub")
 
-    override fun selectAudio(key: String) = mpv.setPropertyString("aid", key.substringAfter(':'))
+    override fun selectAudio(key: String) = later { mpv.setPropertyString("aid", key.substringAfter(':')) }
 
     /**
      * Subtitle track changes, in order, off the main thread: mpv's sub-add downloads the whole file
@@ -557,7 +573,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         subtitleWork.execute {
             dropExternalSubtitles()
             rtlFont(isArabicLanguage(language))
-            runCatching { mpv.command(arrayOf("sub-add", url, "select", title, language)) }
+            runCatching { mpv.command(arrayOf("sub-add", NetRelay.forMpv(url), "select", title, language)) }
             // Added is loaded: mpv switches to it a moment later, so "selected" isn't set yet here.
             done(tracks("sub").any { it.external })
         }
@@ -571,7 +587,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     /** Harbor's subtitle style on mpv's text subtitles; styled (ASS) ones keep their look, scaled. */
-    override fun applySubtitleStyle(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean) {
+    override fun applySubtitleStyle(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean) = later { applySubtitleStyleNow(prefs, style, lifted) }
+
+    private fun applySubtitleStyleNow(prefs: PlayerPrefs, style: AppSettings, lifted: Boolean) {
         // mpv takes #AARRGGBB.
         fun argb(c: Long, alpha: Float = 1f) = "#%02X%06X".format(java.util.Locale.ROOT, (alpha * 255).toInt().coerceIn(0, 255), c and 0xFFFFFF)
         val color = argb(prefs.subColor, style.subOpacity.coerceIn(0.2f, 1f))
@@ -627,12 +645,12 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun cuesAt(positionMs: Long): List<UiCue> = emptyList()
 
-    override fun selectSecondaryText(key: String?) = mpv.setPropertyString("secondary-sid", key?.substringAfter(':') ?: "no")
+    override fun selectSecondaryText(key: String?) = later { mpv.setPropertyString("secondary-sid", key?.substringAfter(':') ?: "no") }
 
     override val maxVolume get() = settings.volumeBoostMax.coerceIn(1, 3).toFloat()
 
     /** 0..maxVolume of mpv's own volume, on top of the phone's. */
-    override fun setVolume(level: Float) = mpv.setPropertyDouble("volume", (level * 100.0).coerceIn(0.0, maxVolume * 100.0))
+    override fun setVolume(level: Float) = later { mpv.setPropertyDouble("volume", (level * 100.0).coerceIn(0.0, maxVolume * 100.0)) }
 
     override fun chapters(): List<Chapter> {
         val list = mpv.getPropertyString("chapter-list")
@@ -647,12 +665,13 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override val supportsShaders = true
 
-    override fun setShaders(paths: List<String>) {
+    override fun setShaders(paths: List<String>) = later {
         if (paths.isEmpty()) mpv.command(arrayOf("change-list", "glsl-shaders", "clr", ""))
         else mpv.command(arrayOf("change-list", "glsl-shaders", "set", paths.joinToString(":")))
     }
 
     override fun release() {
+        calls.shutdownNow()
         subtitleWork.shutdownNow()
         runCatching { subtitleWork.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
         mpv.removeObserver(this)

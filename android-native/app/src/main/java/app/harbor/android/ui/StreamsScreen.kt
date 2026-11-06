@@ -52,7 +52,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -903,10 +903,19 @@ private fun TvSourceCard(item: RankedStream, last: Boolean, debrid: app.harbor.a
                 }
             }
             val availability = values[Facet.Availability]
-            if (availability == "Cached" && debrid != null) {
+            if (availability == "Cached") {
+                // Harbor PC's bp-stream-row: "In TorBox" for your own library, "Cached on TorBox" else. The
+                // service is your debrid account's, or the one the addon names ([TB⚡], [RD+]…).
+                val text = "${stream.name.orEmpty()} ${stream.title.orEmpty()} ${stream.description.orEmpty()}"
+                val service = debrid?.service?.label ?: debridServiceIn(text)
+                val label = when {
+                    service == null -> "Cached"
+                    app.harbor.android.data.Ranking.inLibrary(stream) -> "In $service"
+                    else -> "Cached on $service"
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f))) {
                     Icon(Icons.Rounded.Check, null, tint = Color(0xFF4ADE80), modifier = Modifier.size(app.harbor.android.ui.tv.u(10f)))
-                    Text("Cached on ${debrid.service.label}", color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8f), fontWeight = FontWeight.Bold)
+                    Text(label, color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8f), fontWeight = FontWeight.Bold)
                 }
             }
             Box(
@@ -915,6 +924,18 @@ private fun TvSourceCard(item: RankedStream, last: Boolean, debrid: app.harbor.a
             ) { Icon(Icons.Rounded.PlayArrow, "Play", tint = if (focused) HarborColors.Canvas else HarborColors.Ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(14f))) }
         }
     }
+}
+
+/** The debrid service an addon's stream names: [TB⚡] TorBox, [RD+] Real-Debrid and the rest (Harbor PC's service tags). */
+private val debridTags = listOf(
+    "TB" to "TorBox", "RD" to "Real-Debrid", "AD" to "AllDebrid", "PM" to "Premiumize", "DL" to "Debrid-Link",
+    "ED" to "EasyDebrid", "OC" to "Offcloud", "PKP" to "PikPak", "DR" to "Debrider",
+)
+private val debridTagPattern = Regex("""\[(TB|RD|AD|PM|DL|ED|OC|PKP|DR)\b""")
+
+private fun debridServiceIn(text: String): String? {
+    debridTagPattern.find(text)?.let { m -> return debridTags.firstOrNull { it.first == m.groupValues[1] }?.second }
+    return debridTags.firstOrNull { (_, name) -> text.contains(name, ignoreCase = true) }?.second
 }
 
 /** The focused card's ring: a 2 dp gap in the void and a 2 dp light ring, no lift (a wide card would cover its neighbours). */

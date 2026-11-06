@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android before 14 doesn't have Let's Encrypt's ISRG Root X2, which newer certificates chain to
+  (TorBox's download servers, for one). Harbor trusts it alongside the system's roots, so those
+  sites work on older TVs and phones. Cleartext stays allowed, as before (addons on a LAN).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

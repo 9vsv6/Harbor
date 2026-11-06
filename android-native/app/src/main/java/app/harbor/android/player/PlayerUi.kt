@@ -71,7 +71,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -177,14 +177,10 @@ private val PanelColor = Color(0xF21A1C20)
 
 @Composable
 fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, castButton: (@Composable () -> Unit)? = null) {
-    // Controls fade out after a few seconds of playback without touches.
-    var touchedAt by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(state.controlsVisible, state.playing, state.panel, touchedAt, state.keyAt) {
-        if (state.controlsVisible && state.playing && state.panel == null) {
-            delay(4_000)
-            state.controlsVisible = false
-        }
-    }
+    // Controls fade out after a few seconds of playback without touches. The timer lives in its own
+    // small scope: every key press restarts it, and it mustn't redraw the whole player each time.
+    val touchedAt = remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    ControlsAutoHide(state, touchedAt)
     LaunchedEffect(state.hint) {
         val hint = state.hint
         if (hint != null) {
@@ -208,7 +204,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
             .pointerInput(state.locked) {
                 detectTapGestures(
                     onTap = {
-                        touchedAt = System.currentTimeMillis()
+                        touchedAt.longValue = System.currentTimeMillis()
                         if (state.panel != null) state.panel = null
                         else state.controlsVisible = !state.controlsVisible
                     },
@@ -315,9 +311,9 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             }
         } else {
-            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !(state.tv && state.panel == Panel.Subtitles), enter = fadeIn(), exit = fadeOut()) {
-                if (state.tv) TvPlayerControls(state, actions) { touchedAt = System.currentTimeMillis() }
-                else HarborControls(state, prefs, actions, castButton) { touchedAt = System.currentTimeMillis() }
+            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !(state.tv && (state.panel == Panel.Subtitles || state.panel == Panel.Audio || state.liveSync != null)), enter = fadeIn(), exit = fadeOut()) {
+                if (state.tv) TvPlayerControls(state, actions) { touchedAt.longValue = System.currentTimeMillis() }
+                else HarborControls(state, prefs, actions, castButton) { touchedAt.longValue = System.currentTimeMillis() }
             }
         }
         // TV: Big Picture's Connecting screen until the video has started.
@@ -332,16 +328,27 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
 
         HarborPopovers(state, prefs, actions)
         if (state.tv && state.panel == Panel.Subtitles) TvSubtitlePanel(state, prefs, actions)
+        if (state.tv && state.panel == Panel.Audio) TvAudioPanel(state, actions)
         if (state.panel == Panel.SubStyle) SubStyleBar(state, prefs, actions)
         SubSyncBar(state, actions)
         AutoSyncPill(state, actions)
-        LiveSyncPanel(state, actions)
+        if (state.tv) TvLiveSync(state, actions) else LiveSyncPanel(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)
         EndScreen(state, actions)
     }
 }
 
+
+@Composable
+private fun ControlsAutoHide(state: PlayerState, touchedAt: androidx.compose.runtime.MutableLongState) {
+    LaunchedEffect(state.controlsVisible, state.playing, state.panel, touchedAt.longValue, state.keyAt) {
+        if (state.controlsVisible && state.playing && state.panel == null) {
+            delay(4_000)
+            state.controlsVisible = false
+        }
+    }
+}
 
 /** Every subtitle, from the video or an addon, drawn by Harbor in the chosen style. */
 @Composable

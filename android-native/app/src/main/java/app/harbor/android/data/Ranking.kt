@@ -55,11 +55,20 @@ object Ranking {
             cam = has("""\b(cam|camrip|hdcam|ts|telesync|hdts)\b"""),
             // Harbor PC's markers (streams/cached.ts): [RD+] / ⚡ / ✅ cached; [RD download] / ⏳ ⌛ ⬇ ⏬ 🔽 ☁
             // / "uncached" / "not cached" not. A stream saying both is not cached.
-            uncached = uncachedMarker.containsMatchIn(text),
-            cached = !uncachedMarker.containsMatchIn(text) &&
+            // ☁ beside ⚡ / ✅ is AIOStreams' "in your debrid library": cached, not a download to wait for.
+            uncached = uncachedMarker.containsMatchIn(text.libraryCloudRemoved()),
+            cached = !uncachedMarker.containsMatchIn(text.libraryCloudRemoved()) &&
                 (cachedMarker.containsMatchIn(text) || has("""\[(realdebrid|real-debrid|torbox|alldebrid|all-debrid|premiumize|debridlink|debrid-link|easydebrid|offcloud|rd|ad|pm|dl|tb|trb|oc|ed|putio)\+""") || has("""\bcached\b""")),
             sizeBytes = stream.behaviorHints?.videoSize ?: parseSize(text),
         )
+    }
+
+    private fun String.libraryCloudRemoved(): String = if (cachedMarker.containsMatchIn(this)) replace("☁", "") else this
+
+    /** In your debrid library (AIOStreams' ☁ beside ⚡ / ✅, or the word "library"). */
+    fun inLibrary(stream: Stream): Boolean {
+        val text = listOfNotNull(stream.name, stream.title, stream.description).joinToString(" ")
+        return (cachedMarker.containsMatchIn(text) && text.contains("☁")) || text.contains("library", ignoreCase = true)
     }
 
     private fun parseSize(text: String): Long? {

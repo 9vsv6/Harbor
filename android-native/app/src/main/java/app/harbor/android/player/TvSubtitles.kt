@@ -41,7 +41,7 @@ import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +55,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyCode
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -122,12 +128,14 @@ internal fun TvSubtitlePanel(state: PlayerState, prefs: PlayerPrefs, actions: Pl
         var lane by remember { mutableStateOf(Lane.Tracks) }
         Box(
             Modifier.fillMaxSize().background(Void.copy(alpha = 0.88f))
+                .focusProperties { canFocus = false }
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { state.panel = null },
             contentAlignment = Alignment.Center,
         ) {
             Column(
                 Modifier.width(u(655f)).height(u(447f)).clip(RoundedCornerShape(u(12f))).background(PanelColor)
                     .border(1.dp, Edge, RoundedCornerShape(u(12f)))
+                    .focusProperties { canFocus = false }
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                     .padding(horizontal = u(22f)),
             ) {
@@ -567,5 +575,219 @@ private fun SubLine(
             }
             detail?.let { Text(it, color = ink.copy(alpha = 0.65f), fontSize = s(8.5f), fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
+    }
+}
+
+// ---------------- Audio (bp-player-sources.tsx BpPlayerAudio) ----------------
+
+/**
+ * Big Picture's Audio: every track as a line (its flag, or a check on the one playing; the name, then
+ * language · codec · channels), and one bottom lane with Back and the sync offset's steps.
+ * Picking a track plays it and closes the panel; Back closes it too.
+ */
+@Composable
+internal fun TvAudioPanel(state: PlayerState, actions: PlayerActions) {
+    val unit = (LocalConfiguration.current.screenHeightDp / 540f).coerceIn(0.8f, 2.2f)
+    CompositionLocalProvider(LocalUnit provides unit) {
+        val seed = remember { FocusRequester() }
+        val tracks = state.audioTracks
+        Box(
+            Modifier.fillMaxSize().background(Void.copy(alpha = 0.88f))
+                .focusProperties { canFocus = false }
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { state.panel = null },
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                Modifier.width(u(700f)).height(u(438f)).clip(RoundedCornerShape(u(12f))).background(PanelColor)
+                    .border(1.dp, Edge, RoundedCornerShape(u(12f)))
+                    .focusProperties { canFocus = false }
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+            ) {
+                Column(Modifier.padding(start = u(22f), end = u(22f), top = u(18f)), verticalArrangement = Arrangement.spacedBy(u(2f))) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(7f))) {
+                        Icon(Icons.Rounded.GraphicEq, null, tint = HarborColors.Ink, modifier = Modifier.size(u(14f)))
+                        Text("Audio", color = HarborColors.Ink, fontSize = s(16f), fontWeight = FontWeight.SemiBold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair))
+                    }
+                    val title = state.meta?.name ?: state.title
+                    Text(
+                        listOfNotNull(title.takeIf { it.isNotBlank() }, "${tracks.size} tracks").joinToString(" · "),
+                        color = HarborColors.InkSubtle, fontSize = s(9.5f), fontWeight = FontWeight.Medium, maxLines = 1,
+                    )
+                }
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = u(22f), vertical = u(10f)),
+                    verticalArrangement = Arrangement.spacedBy(u(6f)),
+                ) {
+                    if (tracks.isEmpty()) item { Note("This file has one audio track.") }
+                    items(tracks, key = { it.key }) { track ->
+                        val lang = track.language
+                        val detail = listOfNotNull(lang?.let(::languageName), track.detail).joinToString(" · ")
+                        SubLine(
+                            track.label, detail.ifEmpty { null }, emptyList(), on = track.selected,
+                            requester = if (track.selected || (tracks.none { it.selected } && track == tracks.first())) seed else null,
+                            icon = { ink ->
+                                when {
+                                    track.selected -> Icon(Icons.Rounded.Check, null, tint = ink, modifier = Modifier.size(u(11f)))
+                                    lang != null -> LangTag(lang)
+                                    else -> Icon(Icons.Rounded.GraphicEq, null, tint = ink, modifier = Modifier.size(u(11f)))
+                                }
+                            },
+                        ) {
+                            actions.selectAudio(track.key)
+                            state.panel = null
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Edge))
+                // One lane: Left and Right walk from Back through the steps.
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = u(22f), vertical = u(10f)),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(u(9f)),
+                ) {
+                    LaneButton("Back") { state.panel = null }
+                    val delay = state.audioDelayMs
+                    Label("Sync offset", Modifier.padding(start = u(4f)))
+                    Text(
+                        String.format(Locale.US, "%+.2fs", delay / 1000f).replace("+0.00", "0.00"),
+                        color = if (delay != 0L) HarborColors.Ink else HarborColors.InkSubtle, fontSize = s(10.5f), fontWeight = FontWeight.Bold,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                    listOf(-500L, -100L, 100L, 500L).forEach { step ->
+                        LaneButton(String.format(Locale.US, "%+.1fs", step / 1000f)) { actions.setAudioDelay(delay + step) }
+                    }
+                    if (delay != 0L) LaneButton("Reset") { actions.setAudioDelay(0) }
+                }
+            }
+        }
+        LaunchedEffect(Unit) { delay(60); runCatching { seed.requestFocus() } }
+    }
+}
+
+@Composable
+private fun LaneButton(label: String, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(u(6f))
+    Box(
+        Modifier.height(u(28f)).clip(shape).background(if (focused) HarborColors.Ink else Color.Transparent)
+            .then(if (!focused) Modifier.border(1.dp, EdgeChip, shape) else Modifier)
+            .clickable(interactionSource = source, indication = null, onClick = onClick)
+            .padding(horizontal = u(14f)),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, color = if (focused) HarborColors.Canvas else HarborColors.Ink, fontSize = s(10f), fontWeight = FontWeight.Bold) }
+}
+
+// ---------------- Live sync on a TV ----------------
+
+/**
+ * Live sync for a remote: a card at the bottom, the video still playing above it. It shows the line
+ * coming up, big, with the one before and after; press OK the moment you hear it and the subtitles
+ * line up with it. Left and Right pick an earlier or later line (it stops following playback until you
+ * align); Down reaches Play, Reset and Done. Back cancels.
+ */
+@Composable
+internal fun TvLiveSync(state: PlayerState, actions: PlayerActions) {
+    androidx.activity.compose.BackHandler(enabled = state.liveSync != null) { actions.closeLiveSync(keep = false) }
+    val session = state.liveSync ?: return
+    val unit = (LocalConfiguration.current.screenHeightDp / 540f).coerceIn(0.8f, 2.2f)
+    CompositionLocalProvider(LocalUnit provides unit) {
+        val lines = session.lines
+        val subtitleNow = ((state.positionMs - state.subDelayMs) * state.subTimeScale).toLong()
+        // The line to press OK on: the next one to start, unless you picked one.
+        var pinned by remember { mutableStateOf<Long?>(null) }
+        val upcoming = lines.indexOfFirst { it.startMs >= subtitleNow }.let { if (it < 0) lines.lastIndex else it }
+        val index = pinned?.let { p -> lines.indexOfFirst { it.startMs == p } }?.takeIf { it >= 0 } ?: upcoming
+        val picker = remember { FocusRequester() }
+        var flash by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(flash) { if (flash != null) { delay(1_800); flash = null } }
+        LaunchedEffect(Unit) { delay(120); runCatching { picker.requestFocus() } }
+
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Column(
+                Modifier.padding(bottom = u(26f)).width(u(760f)).clip(RoundedCornerShape(u(12f))).background(PanelColor.copy(alpha = 0.96f))
+                    .border(1.dp, Edge, RoundedCornerShape(u(12f))).padding(horizontal = u(20f), vertical = u(14f)),
+                verticalArrangement = Arrangement.spacedBy(u(8f)),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(8f))) {
+                    Icon(Icons.Rounded.Timer, null, tint = HarborColors.Ink, modifier = Modifier.size(u(13f)))
+                    Text("Live sync", color = HarborColors.Ink, fontSize = s(14f), fontWeight = FontWeight.SemiBold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair))
+                    Text(offsetLabel(state.subDelayMs), color = HarborColors.InkSubtle, fontSize = s(9.5f), fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        flash ?: when (session.points.size) {
+                            0 -> "Press OK when you hear the line"
+                            1 -> "Aligned. A second line later fixes drift"
+                            else -> "Drift fixed"
+                        },
+                        color = if (flash != null || session.points.isNotEmpty()) HarborColors.Ink else HarborColors.InkSubtle,
+                        fontSize = s(9f), fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                // The line picker: one focus stop. Left / Right move, OK aligns.
+                val source = remember { MutableInteractionSource() }
+                val focused by source.collectIsFocusedAsState()
+                Column(
+                    Modifier.fillMaxWidth().focusRequester(picker)
+                        .onPreviewKeyEvent { e ->
+                            if (e.type != KeyEventType.KeyDown || lines.isEmpty()) return@onPreviewKeyEvent false
+                            when (e.key.nativeKeyCode) {
+                                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> { pinned = lines[(index - 1).coerceAtLeast(0)].startMs; true }
+                                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> { pinned = lines[(index + 1).coerceAtMost(lines.lastIndex)].startMs; true }
+                                else -> false
+                            }
+                        }
+                        .clip(RoundedCornerShape(u(8f))).background(if (focused) HarborColors.Ink.copy(alpha = 0.10f) else Color.Transparent)
+                        .border(if (focused) 2.dp else 1.dp, if (focused) HarborColors.Ink else Edge, RoundedCornerShape(u(8f)))
+                        .clickable(interactionSource = source, indication = null) {
+                            lines.getOrNull(index)?.let { line ->
+                                actions.liveSyncAlign(line)
+                                pinned = null
+                                flash = "Lined up with: " + line.text.lineSequence().first().take(40)
+                            }
+                        }
+                        .padding(horizontal = u(16f), vertical = u(10f)),
+                    verticalArrangement = Arrangement.spacedBy(u(4f)),
+                ) {
+                    if (lines.isEmpty()) {
+                        Text(if (session.asPlayed) "Lines show here as they play. Press Play." else "Reading subtitles...", color = HarborColors.InkMuted, fontSize = s(11f))
+                    } else {
+                        lines.getOrNull(index - 1)?.let { SyncLine(it, false) }
+                        lines.getOrNull(index)?.let { SyncLine(it, true) }
+                        lines.getOrNull(index + 1)?.let { SyncLine(it, false) }
+                    }
+                }
+                Text(
+                    "Left / Right: earlier or later line  ·  OK when you hear it  ·  Back cancels",
+                    color = HarborColors.InkSubtle, fontSize = s(8f), fontWeight = FontWeight.Medium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(u(8f))) {
+                    LaneButton(if (state.playing) "Pause" else "Play") { actions.togglePlay() }
+                    if (pinned != null) LaneButton("Follow playback") { pinned = null }
+                    if (session.dirty) LaneButton("Reset") { actions.liveSyncReset() }
+                    Spacer(Modifier.weight(1f))
+                    LaneButton("Cancel") { actions.closeLiveSync(keep = false) }
+                    LaneButton("Done") { actions.closeLiveSync(keep = true) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncLine(line: SubtitleFile.Cue, chosen: Boolean) {
+    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(u(12f))) {
+        val sec = (line.startMs / 1000).coerceAtLeast(0)
+        Text(
+            if (sec >= 3600) String.format(Locale.US, "%d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60) else String.format(Locale.US, "%d:%02d", sec / 60, sec % 60),
+            color = if (chosen) HarborColors.Ink else HarborColors.InkSubtle, fontSize = s(if (chosen) 9.5f else 8f),
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, modifier = Modifier.width(u(44f)).padding(top = u(2f)),
+        )
+        Text(
+            line.text, color = if (chosen) HarborColors.Ink else HarborColors.InkSubtle.copy(alpha = 0.7f),
+            fontSize = s(if (chosen) 14f else 9.5f), fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = if (chosen) 3 else 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }

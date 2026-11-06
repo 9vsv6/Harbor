@@ -269,6 +269,22 @@ class Repository(private val context: Context) {
         if (profile.avatar == null || missingFile || profile.avatar != picture) saveProfile(profile.copy(avatar = picture))
     }
 
+    /**
+     * The Harbor account's picture on this profile: when it has none, when its picture is a file that
+     * didn't come along to this device, or when it was the account's own (kept current). A picture
+     * you uploaded, or a tracker's you chose, stays.
+     */
+    suspend fun useAccountAvatar(url: String) {
+        val profile = _activeProfile.value ?: return
+        val s = _settings.value
+        if (s.useAnilistAvatar || s.useTraktAvatar || s.useSimklAvatar || s.useMalAvatar) return
+        val current = profile.avatar
+        val missingFile = current?.startsWith("file:///data/") == true &&
+            !java.io.File(android.net.Uri.parse(current).path.orEmpty()).exists()
+        val fromAccount = current?.startsWith("https://harborcommunity.site") == true
+        if ((current == null || missingFile || fromAccount) && current != url) saveProfile(profile.copy(avatar = url))
+    }
+
     /** Trakt's paused titles join Continue watching; its token is refreshed when due. */
     suspend fun refreshTrackers() {
         _trackers.value.mal?.takeIf { it.accessToken != null }?.let { mal ->
@@ -919,8 +935,8 @@ class Repository(private val context: Context) {
             profileId = prefs[KEY_ACTIVE_PROFILE]?.takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id
             _activeProfile.value = profiles.first { it.id == profileId }
             loadProfile(prefs)
-            // One profile: nobody to ask. Several: Harbor asks "Who's watching?" on launch, unless turned off.
-            _profileChosen.value = profiles.size == 1 || !_settings.value.askProfileOnLaunch
+            // Harbor asks "Who's watching?" on launch (even with one profile, so you can add or pick), unless turned off.
+            _profileChosen.value = !_settings.value.askProfileOnLaunch
             scope.launch { loadBuiltins() }
             refresh()
             _ready.value = true

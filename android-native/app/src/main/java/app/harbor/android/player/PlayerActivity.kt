@@ -79,6 +79,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private val autoSkipped = mutableSetOf<SkipSegment>()
     private var autoAdvanced = 0
     private var autoSubDone = false
+    /** A subtitle you picked in the menu: late sources never replace it. */
+    private var userPickedSub = false
     private var volumeLevel = -1f
     /** Trakt's paused position for this video, applied once its length is known. */
     private var pendingFraction: Float? = null
@@ -136,7 +138,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             else (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct(),
             settings = settings,
         )
-        engine = (if (settings.engine == "media3") null else MpvEngine.create(this, setup)) ?: ExoEngine(this, setup)
+        // TVs always play through Media3 (the TV's own hardware decoders; mpv falls back to software on many).
+        engine = (if (settings.engine == "media3" || state.tv) null else MpvEngine.create(this, setup)) ?: ExoEngine(this, setup)
         engine.listener = this
         state.engineName = engine.name
         state.anime4kAvailable = false // Set once the title is known to be anime (updateAnime4KButton).
@@ -224,6 +227,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         segmentsFor = ""
         autoSkipped.clear()
         autoSubDone = false
+        userPickedSub = false
         clearAddonSubtitle()
         // Harbor's "Choose subtitles before playback": the menu opens, nothing turns on by itself.
         if (state.settings.chooseSubsBeforePlayback) {
@@ -529,6 +533,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     /** `remember`: you chose it, so this title keeps it (Harbor PC's per-show subtitle); Harbor's own picks don't. */
     private fun applySubtitle(choice: SubChoice, remember: Boolean) {
+        if (remember) userPickedSub = true
         when (choice) {
             SubChoice.Off -> {
                 engine.selectText(null)
@@ -612,7 +617,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             if (state.videoId != videoId || native.isEmpty()) return@launch
             state.addonSubs = (state.addonSubs.orEmpty() + native).distinctBy { it.url }
             // What's on (nothing, or only the video's default track) isn't in your languages: these may have one.
-            if (!showingWantedLanguage()) autoSubDone = false
+            // Late sources may still give a first subtitle; replacing one that's on is Harbor's
+            // "Upgrade subtitles when better ones load" (off keeps the current track).
+            if (!userPickedSub && !showingWantedLanguage() && (state.subChoice == SubChoice.Off || state.settings.upgradeSubtitles)) autoSubDone = false
             maybeAutoSelectAddon(engine.textTracks())
         }
     }

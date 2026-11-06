@@ -45,7 +45,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -91,6 +91,30 @@ import app.harbor.android.ui.ProfileAvatar
 import app.harbor.android.ui.WhosWatching
 
 class MainActivity : ComponentActivity() {
+    /** OK keys this window saw go down; a release without its press came from the app that launched Harbor. */
+    private val pressedKeys = mutableSetOf<Int>()
+
+    /**
+     * The launcher starts Harbor on OK's press, and its release then lands here, on the first
+     * focused card or profile, as a click: Who's watching chose a profile by itself. A release
+     * whose press this window never saw is dropped.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER || code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            when (event.action) {
+                android.view.KeyEvent.ACTION_DOWN -> pressedKeys += code
+                android.view.KeyEvent.ACTION_UP -> if (!pressedKeys.remove(code)) return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pressedKeys.clear()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -99,12 +123,22 @@ class MainActivity : ComponentActivity() {
         com.lagradost.cloudstream3.CommonActivity.activity = this
         setContent {
             HarborTheme {
-                val chosen by repository.profileChosen.collectAsState()
-                if (chosen) HarborRoot(repository) else WhosWatching(repository)
-                // A newer Harbor on GitHub, offered once per launch.
-                app.harbor.android.ui.UpdatePrompt()
-                // The last crash's report, to copy or share.
-                app.harbor.android.ui.CrashPrompt()
+                // Arabic reads right to left, as Harbor PC lays it out.
+                val direction = if (app.harbor.android.i18n.I18n.rtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction) {
+                    val chosen by repository.profileChosen.collectAsState()
+                    val loaded by repository.ready.collectAsState()
+                    // Nothing until the profiles have loaded: on a slow TV, Who's watching flashed up and then
+                    // gave way to Home (one profile goes straight in), as if it had chosen by itself.
+                    if (!loaded) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(app.harbor.android.ui.HarborColors.Canvas))
+                    else if (chosen) HarborRoot(repository) else WhosWatching(repository)
+                    // A newer Harbor on GitHub, offered once per launch.
+                    app.harbor.android.ui.UpdatePrompt()
+                    // The last crash's report, to copy or share.
+                    app.harbor.android.ui.CrashPrompt()
+                    // Harbor's mark until the first page has loaded.
+                    app.harbor.android.ui.LaunchSplash()
+                }
             }
         }
         handleLink(intent)

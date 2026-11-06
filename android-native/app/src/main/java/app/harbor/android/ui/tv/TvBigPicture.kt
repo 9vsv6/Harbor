@@ -9,6 +9,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,7 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -64,6 +67,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -183,7 +187,7 @@ fun TvBigPictureHome(
     onOpen: (Meta) -> Unit,
     onResume: (CwItem) -> Unit,
 ) {
-    val shown = rows.filter { it.metas.isNotEmpty() || it.cw.isNotEmpty() || it.services.isNotEmpty() }
+    val shown = remember(rows) { rows.filter { it.metas.isNotEmpty() || it.cw.isNotEmpty() || it.services.isNotEmpty() } }
     if (shown.isEmpty()) return
     // The spotlight's subject: the focused card's title, seeded with the first card of the first row.
     val seed = shown.first().let { it.cw.firstOrNull()?.meta ?: it.metas.firstOrNull() }
@@ -192,6 +196,9 @@ fun TvBigPictureHome(
     // On the streaming row the spotlight names the service instead (bp-section's band identity).
     var band by remember { mutableStateOf<TvService?>(null) }
     var activeRow by remember { mutableIntStateOf(0) }
+    // Up asks the row above for the ring by hand: it has scrolled out of the rail, so the focus search
+    // would pass over it to the top bar.
+    var focusRowAbove by remember { mutableStateOf<String?>(null) }
     val firstFocus = remember { FocusRequester() }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
@@ -226,9 +233,22 @@ fun TvBigPictureHome(
                             },
                             tween(if (Perf.motion) 160 else 0), label = "rowfade",
                         )
-                        Box(Modifier.graphicsLayer { this.alpha = alpha }.onFocusChanged { if (it.hasFocus) activeRow = index }) {
+                        // ModulateAlpha fades each drawing as it's made: no offscreen copy of the dimmed rows every frame.
+                        Box(
+                            Modifier.graphicsLayer { this.alpha = alpha; compositingStrategy = CompositingStrategy.ModulateAlpha }
+                                .onFocusChanged { if (it.hasFocus) activeRow = index }
+                                .onPreviewKeyEvent { e ->
+                                    if (index > 0 && e.type == KeyEventType.KeyDown && e.key.nativeKeyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                                        activeRow = index - 1
+                                        focusRowAbove = shown[index - 1].key
+                                        true
+                                    } else false
+                                },
+                        ) {
                             TvRailRow(
                                 row, active = index == activeRow,
+                                takeFocus = focusRowAbove == row.key,
+                                onFocusTaken = { focusRowAbove = null },
                                 firstFocus = if (index == 0) firstFocus else null,
                                 onFocusMeta = { subject = it; band = null },
                                 onFocusService = { band = it },
@@ -290,7 +310,8 @@ internal fun TvAmbient(meta: Meta?) {
             }
             if (Perf.motion) Crossfade(art, animationSpec = tween(520), label = "ambient") { layer(it) } else layer(art)
             Box(
-                Modifier.fillMaxSize().drawWithCache {
+                // Static shading: drawn once into a layer the GPU keeps, not shaded again every frame.
+                Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithCache {
                     val envelope = Brush.horizontalGradient(
                         0f to HarborColors.Canvas, 0.17f to HarborColors.Canvas.copy(alpha = 0.5f), 0.38f to Color.Transparent,
                         endX = size.width,
@@ -299,9 +320,10 @@ internal fun TvAmbient(meta: Meta?) {
                 },
             )
         }
-        // scrim-side, the page fade at the bottom, the top fade under the bar, and the void behind the copy.
+        // scrim-side, the page fade at the bottom, the top fade under the bar, and the void behind the copy:
+        // four full-screen gradients, kept as one cached layer the GPU draws in a single pass.
         Box(
-            Modifier.fillMaxSize().drawWithCache {
+            Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithCache {
                 val side = Brush.horizontalGradient(
                     0f to Void.copy(alpha = 0.82f), 0.3f to Void.copy(alpha = 0.52f), 0.52f to Void.copy(alpha = 0.16f), 0.7f to Color.Transparent,
                     endX = size.width,
@@ -394,6 +416,8 @@ private fun SpotlightTitle(meta: Meta) {
 private fun TvRailRow(
     row: TvRow,
     active: Boolean,
+    takeFocus: Boolean,
+    onFocusTaken: () -> Unit,
     firstFocus: FocusRequester?,
     onFocusMeta: (Meta) -> Unit,
     onFocusService: (TvService) -> Unit,
@@ -405,13 +429,36 @@ private fun TvRailRow(
     var armed by remember { mutableStateOf(false) }
     LaunchedEffect(armed) { if (armed) runCatching { seeAll.requestFocus() } }
     val count = row.cw.size.takeIf { it > 0 } ?: row.services.size.takeIf { it > 0 } ?: row.metas.size
-    var focusedIndex by remember { mutableIntStateOf(-1) }
+    // Kept while the row is out of the rail, so coming back up lands on the card you left.
+    var focusedIndex by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(-1) }
+    val cardFocus = remember { mutableMapOf<Int, FocusRequester>() }
+    fun cardRequester(i: Int) = if (i == 0 && firstFocus != null) firstFocus else cardFocus.getOrPut(i) { FocusRequester() }
+    if (takeFocus) LaunchedEffect(Unit) {
+        // The row may still be coming back into the rail: try for a few frames.
+        repeat(20) {
+            if (runCatching { cardRequester(focusedIndex.coerceAtLeast(0)).requestFocus() }.isSuccess) { onFocusTaken(); return@LaunchedEffect }
+            delay(16)
+        }
+        onFocusTaken()
+    }
     Column {
         RowHeader(row, active, seeAll, armed) { armed = it }
         val gutterPx = with(LocalDensity.current) { TvInsets.Gutter.toPx() }
+    val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Jump back in reorders as you watch: the newest goes first, so the row starts over at it
+    // instead of opening part-way along where it was left.
+    val firstCw = row.cw.firstOrNull()?.meta?.id
+    var seenFirst by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(firstCw) {
+        if (firstCw != null && firstCw != seenFirst) {
+            if (seenFirst != null) rowState.scrollToItem(0)
+            seenFirst = firstCw
+        }
+    }
         // The focused card keeps to the gutter as the row moves under it.
         CompositionLocalProvider(LocalBringIntoViewSpec provides remember(gutterPx) { startAligned(gutterPx) }) {
             LazyRow(
+                state = rowState,
                 contentPadding = PaddingValues(start = TvInsets.Gutter, end = TvInsets.Gutter, top = u(6f), bottom = u(12f)),
                 horizontalArrangement = Arrangement.spacedBy(u(when { row.services.isNotEmpty() -> 10f; row.cw.isNotEmpty() -> 23f; else -> 21f })),
                 modifier = Modifier.onPreviewKeyEvent { e ->
@@ -423,13 +470,13 @@ private fun TvRailRow(
             ) {
                 when {
                     row.cw.isNotEmpty() -> itemsIndexed(row.cw, key = { _, it -> it.meta.id }) { i, item ->
-                        CwTile(item, if (i == 0) firstFocus else null, { focusedIndex = i; onFocusMeta(item.meta) }) { onResume(item) }
+                        CwTile(item, cardRequester(i), { focusedIndex = i; onFocusMeta(item.meta) }) { onResume(item) }
                     }
                     row.services.isNotEmpty() -> itemsIndexed(row.services, key = { _, it -> it.key }) { i, service ->
-                        ServiceTile(service, if (i == 0) firstFocus else null) { focusedIndex = i; onFocusService(service) }
+                        ServiceTile(service, cardRequester(i)) { focusedIndex = i; onFocusService(service) }
                     }
                     else -> itemsIndexed(row.metas, key = { i, it -> "${it.id}-$i" }) { i, meta ->
-                        PosterTile(meta, if (i == 0) firstFocus else null, { focusedIndex = i; onFocusMeta(meta) }) { onOpen(meta) }
+                        PosterTile(meta, cardRequester(i), { focusedIndex = i; onFocusMeta(meta) }) { onOpen(meta) }
                     }
                 }
             }
@@ -654,6 +701,7 @@ private val NoScroll = object : BringIntoViewSpec {
  */
 @OptIn(ExperimentalFoundationApi::class)
 internal fun tvPageScroll(topPx: Float, bottomPx: Float) = object : BringIntoViewSpec {
+    override val scrollAnimationSpec: AnimationSpec<Float> get() = tvScrollSpec
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
         val end = offset + size
         return when {
@@ -664,9 +712,23 @@ internal fun tvPageScroll(topPx: Float, bottomPx: Float) = object : BringIntoVie
     }
 }
 
+/**
+ * How a TV list follows the ring: a quick glide, or at once where motion is off (a slow TV, where
+ * Compose's default spring trails the remote by several frames).
+ */
+internal val tvScrollSpec: AnimationSpec<Float>
+    get() = if (Perf.motion) tween(160, easing = FastOutSlowInEasing) else snap()
+
+/** Every other TV list scrolls just enough to show the focused item, at [tvScrollSpec]. */
+@OptIn(ExperimentalFoundationApi::class)
+internal val TvDefaultScroll = object : BringIntoViewSpec {
+    override val scrollAnimationSpec: AnimationSpec<Float> get() = tvScrollSpec
+}
+
 /** A row keeps its focused card at the gutter, so the ring never wanders across the screen. */
 @OptIn(ExperimentalFoundationApi::class)
 internal fun startAligned(leadPx: Float) = object : BringIntoViewSpec {
+    override val scrollAnimationSpec: AnimationSpec<Float> get() = tvScrollSpec
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = offset - leadPx
 }
 
@@ -714,7 +776,7 @@ private fun ServiceSpotlight(service: TvService, modifier: Modifier) {
 @Composable
 private fun ServiceAmbient(service: TvService) {
     Box(
-        Modifier.fillMaxSize().background(Void).drawWithCache {
+        Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.background(Void).drawWithCache {
             val wash = Brush.radialGradient(
                 0f to service.tint.copy(alpha = 0.32f), 0.26f to service.tint.copy(alpha = 0.18f), 0.46f to service.tint.copy(alpha = 0.06f), 0.62f to Color.Transparent,
                 center = Offset(size.width * 0.82f, size.height * 0.3f), radius = size.width * 0.7f,

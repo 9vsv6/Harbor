@@ -25,11 +25,13 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,6 +89,10 @@ fun WhosWatching(repository: Repository) {
         Box(Modifier.fillMaxSize().background(HarborColors.Canvas))
         return
     }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(250)
+        LaunchGate.open()
+    }
     Column(
         Modifier.fillMaxSize().background(HarborColors.Canvas).verticalScroll(rememberScrollState()).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -99,24 +105,12 @@ fun WhosWatching(repository: Repository) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             profiles.forEach { profile ->
-                Column(
-                    Modifier.width(104.dp).clip(RoundedCornerShape(16.dp)).clickable { scope.launch { repository.switchProfile(profile.id) } }.padding(6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    ProfileAvatar(profile, 88.dp)
-                    Text(profile.name, color = HarborColors.InkMuted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                }
+                PickerTile(profile.name, onClick = { scope.launch { repository.switchProfile(profile.id) } }) { ProfileAvatar(profile, 88.dp) }
             }
-            Column(
-                Modifier.width(104.dp).clip(RoundedCornerShape(16.dp)).clickable { adding = true }.padding(6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            PickerTile("Add profile", onClick = { adding = true }) {
                 Box(Modifier.size(88.dp).clip(CircleShape).border(2.dp, HarborColors.Raised, CircleShape), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.Add, null, tint = HarborColors.InkMuted, modifier = Modifier.size(36.dp))
                 }
-                Text("Add profile", color = HarborColors.InkSubtle, fontSize = 15.sp)
             }
         }
     }
@@ -125,6 +119,31 @@ fun WhosWatching(repository: Repository) {
             adding = false
             if (name != null) scope.launch { repository.newProfile(name) }
         }
+    }
+}
+
+/**
+ * One choice on Who's watching: the picture, with a whole white ring round it while it holds focus
+ * (a clipped box cut the ring at its corners on TVs), and the name under it.
+ */
+@Composable
+private fun PickerTile(name: String, onClick: () -> Unit, picture: @Composable () -> Unit) {
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    Column(
+        Modifier.width(112.dp).clickable(interactionSource = source, indication = null, onClick = onClick).padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            Modifier.size(100.dp).border(3.dp, if (focused) HarborColors.Ink else Color.Transparent, CircleShape).padding(6.dp),
+            contentAlignment = Alignment.Center,
+        ) { picture() }
+        Text(
+            name, color = if (focused) HarborColors.Ink else HarborColors.InkMuted, fontSize = 15.sp,
+            fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+        )
     }
 }
 

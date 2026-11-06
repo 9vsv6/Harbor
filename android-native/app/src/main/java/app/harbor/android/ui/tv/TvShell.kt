@@ -36,6 +36,7 @@ private const val DETAIL_ROUTE = "detail/{type}/{id}"
  * owns the 56 dp gutter); every other page sits inside the 5% title-safe area, below the bar when
  * it shows. Back on Home moves focus up to the bar's active tab.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun TvShell(
     route: String?,
@@ -71,7 +72,10 @@ internal fun TvShell(
                 )
                 .focusRequester(contentFocus)
                 .focusGroup(),
-        ) { content() }
+        ) {
+            // Lists follow the remote at once on a slow TV (see tvScrollSpec); pages with their own rule override it.
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides TvDefaultScroll) { content() }
+        }
         if (showBar) {
             // Home's backdrop runs under the bar: one Canvas-to-clear fill keeps the tabs legible.
             // Always drawn (one flat gradient is cheap, and without it the hero's meta row collides

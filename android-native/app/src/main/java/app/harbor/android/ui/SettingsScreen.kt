@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -93,7 +94,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -158,7 +159,7 @@ private enum class Section(
     Profiles("Profiles", "The profiles on this device, and who's watching.", R.drawable.set_users, "profile who's watching privileges secondary nuvio cloud profiles", setOf("Profiles")),
     HarborAccount("Harbor account", "Your handle across Harbor.", R.drawable.harbor_mark, "harbor account handle sign in register recovery key discord"),
     Provider("Account provider", "Stremio or Nuvio behind your profiles, progress and addons.", R.drawable.set_refresh_cw, "account provider stremio nuvio cloud switch"),
-    Stremio("Stremio", "Your Stremio sign-in: addons and library come from it.", R.drawable.set_play, "stremio sign in email password", setOf("Stremio")),
+    Stremio("Stremio", "Your Stremio sign-in: addons and library come from it.", R.drawable.logo_stremio, "stremio sign in email password", setOf("Stremio"), logo = true),
     Nuvio("Nuvio", "Your Nuvio account, profile slot and synced addons.", R.drawable.set_play, "nuvio cloud account profile slot mapping synced addons"),
     // Harbor PC's trackers, one page each (tab-registry.ts "trackers").
     TrackTrakt("Trakt", "Scrobbles what you play, syncs your watchlist, and powers recommendations.", R.drawable.logo_trakt, "trakt scrobble watched watchlist history comments", logo = true),
@@ -226,7 +227,9 @@ private enum class Group(val label: String, val section: String, @androidx.annot
     ),
     Playback(
         "Playback", "Watching", R.drawable.set_play,
-        listOf(Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.AdSkip, Section.Intros, Section.UpNext, Section.Trailers, Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders, Section.MoreShaders, Section.Motion),
+        listOf(Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.AdSkip, Section.Intros, Section.UpNext, Section.Trailers, Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders, Section.MoreShaders, Section.Motion)
+            // TVs always play through Media3: mpv's own pages don't apply there.
+            .filterNot { app.harbor.android.perf.Perf.isTv && it in setOf(Section.Engine, Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders, Section.MoreShaders, Section.Motion) },
     ),
     Languages("Languages", "Language", R.drawable.set_languages, listOf(Section.AppLanguage, Section.AudioLanguage, Section.WhatYouSee, Section.SubtitleLanguages, Section.SubtitleSources, Section.SubtitleTiming, Section.SubtitleLook)),
     Sources(
@@ -743,7 +746,7 @@ private fun AccountSection(repository: Repository, settings: AppSettings, set: (
     if (primary || privileges.canManageStartup) Card("Profiles") {
         SwitchRow(
             "Ask \"Who's watching?\" when Harbor opens",
-            "With more than one profile. Off opens the last profile used.",
+            "Off opens the last profile used.",
             settings.askProfileOnLaunch,
         ) { v -> set { it.copy(askProfileOnLaunch = v) } }
     }
@@ -1139,12 +1142,49 @@ private fun MpvOptionsField(saved: String, onSave: (String) -> Unit) {
 
 // ---------------- Languages ----------------
 
+/** Harbor PC's display-language cards: the flag, the language in itself and in English, a greeting, a check. */
+@Composable
+private fun DisplayLanguageGrid(current: String, onPick: (String) -> Unit) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        val columns = when { maxWidth >= 760.dp -> 3; maxWidth >= 480.dp -> 2; else -> 1 }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            app.harbor.android.i18n.UiLanguages.all.chunked(columns).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { lang ->
+                        val on = lang.code == current
+                        Row(
+                            Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                                .background(if (on) HarborColors.Elevated else HarborColors.Surface)
+                                .border(1.dp, if (on) HarborColors.Accent else HarborColors.EdgeSoft, RoundedCornerShape(12.dp))
+                                .clickable { onPick(lang.code) }.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(lang.flag, fontSize = 20.sp)
+                            Column(Modifier.weight(1f)) {
+                                Text(lang.native, color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                Text(lang.name + if (lang.rtl) " · Right to left" else "", color = HarborColors.InkMuted, fontSize = 13.sp, maxLines = 1)
+                            }
+                            Text(
+                                lang.greeting, color = HarborColors.Ink, fontSize = 13.sp,
+                                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(HarborColors.Elevated).padding(horizontal = 9.dp, vertical = 4.dp),
+                            )
+                            if (on) Icon(Icons.Rounded.Check, null, tint = HarborColors.Accent, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun LanguageSection(repository: Repository, settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
     // ---- App language ----
     Part("App language") {
-        HarborHeading("Display language", "Harbor's own words are in English for now.")
-        HarborSelect(listOf("en" to "🇺🇸  English"), "en") {}
+        HarborHeading("Display language", "The language of Harbor's menus, buttons, and labels. Audio, subtitles, and title information have their own language settings.")
+        DisplayLanguageGrid(settings.appLanguage) { v -> set { it.copy(appLanguage = v) } }
         // Each of these is its own choice: changing one leaves the others as they are.
         val languages = Languages.all.map { it.code to "${it.flag}  ${it.name}" }
         HarborHeading("Description language", "Story descriptions and episode synopses from TMDB, in this language. Titles and posters keep their own settings below (needs a TMDB key).")

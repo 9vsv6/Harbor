@@ -280,6 +280,8 @@ data class AppSettings(
     val upgradeSubtitles: Boolean = false,
     /** A dot on the subtitles button while subtitles are on. */
     val subIndicatorDot: Boolean = true,
+    /** Harbor's display language (PC lib/i18n): the menus, buttons and labels. */
+    val appLanguage: String = "en",
     /** The second subtitle's size, against the first. */
     val secondSubScale: Float = 0.85f,
     val subOutlineColor: Long = 0xFF000000,

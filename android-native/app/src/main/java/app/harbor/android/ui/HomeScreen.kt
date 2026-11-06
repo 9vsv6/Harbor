@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -230,6 +230,11 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             val pending = TvReturnFocus.target
             kotlinx.coroutines.delay(1_500)
             TvReturnFocus.clearIf(pending)
+        }
+        // The launch screen lifts once Home has its rows (a frame later, so the first real layout is drawn).
+        if (current != null) LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(250)
+            LaunchGate.open()
         }
         // TV: Harbor PC's Big Picture home (ui/tv/TvBigPicture.kt), from the same rows.
         val tvRows = if (Perf.isTv && current != null && (current.isNotEmpty() || cw.isNotEmpty())) {

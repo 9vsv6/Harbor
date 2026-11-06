@@ -22,7 +22,7 @@ object Playback {
         id: String,
         debrid: DebridAccount?,
         settings: AppSettings = AppSettings(),
-        media3: Boolean = settings.engine == "media3",
+        media3: Boolean = settings.engine == "media3" || app.harbor.android.perf.Perf.isTv,
         prefer: Pair<String, String?>? = null,
         /** Told which addons failed, as (addon name, reason). */
         onFailures: ((List<Pair<String, String>>) -> Unit)? = null,

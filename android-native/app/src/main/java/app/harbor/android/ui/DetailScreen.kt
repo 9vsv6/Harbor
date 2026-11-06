@@ -41,7 +41,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -411,7 +411,12 @@ private fun DetailBody(
         // Big Picture's scrollHeroIntoView: while the hero's buttons hold focus, the page sits at its top.
         val heroScope = androidx.compose.runtime.rememberCoroutineScope()
         androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.tv.LocalUnit provides unit) {
-        if (tv) app.harbor.android.ui.tv.TvAmbient(meta.copy(background = details?.backdrop ?: meta.background ?: meta.poster))
+        if (tv) {
+            // One Meta per backdrop, so the page's other updates (ratings, cast, episodes) don't redraw it.
+            val art = details?.backdrop ?: meta.background ?: meta.poster
+            val ambient = remember(meta.id, art) { meta.copy(background = art) }
+            app.harbor.android.ui.tv.TvAmbient(ambient)
+        }
         val pageScroll = with(androidx.compose.ui.platform.LocalDensity.current) {
             remember(unit) { app.harbor.android.ui.tv.tvPageScroll((110 * unit).dp.toPx(), (48 * unit).dp.toPx()) }
         }

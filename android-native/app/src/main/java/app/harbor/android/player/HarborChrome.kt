@@ -76,7 +76,7 @@ import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -396,7 +396,7 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
 @Composable
 internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
     // On a TV, Subtitles is Big Picture's own panel (TvSubtitlePanel).
-    val panel = state.panel.takeUnless { state.tv && it == Panel.Subtitles }
+    val panel = state.panel.takeUnless { state.tv && (it == Panel.Subtitles || it == Panel.Audio) }
     // The menu the popover shows: the open one, or while it fades out, the one that was open.
     // (Falling back to Audio here flashed the Audio menu whenever a menu opened or closed.)
     var shown by remember { mutableStateOf(Panel.Audio) }
@@ -430,11 +430,11 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
             ) {
                 when (current) {
                     Panel.Audio -> AudioPopover(state, actions)
-                    Panel.Subtitles -> SubtitlesPopover(state, actions)
+                    Panel.Subtitles -> SubtitlesPopover(state, prefs, actions)
                     Panel.SubStyle -> {}
                     Panel.Picture -> ChoiceMenu(
                         "Aspect ratio",
-                        if (state.settings.engine == "exo") "Fixed shapes need the mpv engine. Pinch the video to fill or fit." else "Pinch the video to fill or fit. Harbor keeps your choice.",
+                        if (state.settings.engine == "media3") "Fixed shapes need the mpv engine. Pinch the video to fill or fit." else "Pinch the video to fill or fit. Harbor keeps your choice.",
                         Fit.entries.map { fit ->
                             MenuChoice(fit.label, state.fit == fit, when (fit) { Fit.Fit -> "Whole picture"; Fit.Fill -> "No black bars"; Fit.Stretch -> "Fills by stretching"; else -> null }) {
                                 actions.setFit(fit)
@@ -709,11 +709,21 @@ private fun MenuNote(text: String) {
 private enum class SubTab(val label: String) { All("All"), Embedded("Embedded"), External("External") }
 
 @Composable
-private fun ColumnScope.SubtitlesPopover(state: PlayerState, actions: PlayerActions) {
+private fun ColumnScope.SubtitlesPopover(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
     var tab by remember { mutableStateOf(SubTab.All) }
     var language by remember { mutableStateOf<String?>(null) }
-    val embedded = state.embeddedSubs
-    val external = state.addonSubs.orEmpty()
+    // Only your subtitle languages, as Harbor PC lists them (and what's on); every language when
+    // none of yours has any.
+    val wanted = (listOf(prefs.subLanguage) + state.settings.subtitleFallbacks + state.settings.secondarySubLanguage)
+        .filter { it.isNotEmpty() }.map(::languageKey).toSet()
+    val choice = state.subChoice
+    val allEmbedded = state.embeddedSubs
+    val allExternal = state.addonSubs.orEmpty()
+    val keepEmbedded: (TrackOption) -> Boolean = { (choice as? SubChoice.Embedded)?.key == it.key || languageKey(it.language ?: "und") in wanted }
+    val keepExternal: (Subtitle) -> Boolean = { (choice as? SubChoice.Addon)?.subtitle?.url == it.url || languageKey(it.lang) in wanted }
+    val anyMine = wanted.isNotEmpty() && (allEmbedded.any { languageKey(it.language ?: "und") in wanted } || allExternal.any { languageKey(it.lang) in wanted })
+    val embedded = if (anyMine) allEmbedded.filter(keepEmbedded) else allEmbedded
+    val external = if (anyMine) allExternal.filter(keepExternal) else allExternal
     val total = embedded.size + external.size
 
     // Languages, the most subtitles first, with their counts.
@@ -808,7 +818,7 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, actions: PlayerActi
                         index += rows.size
                     }
                     if (showExternal) {
-                        val addon = state.addonSubs
+                        val addon = state.addonSubs?.let { external }
                         when {
                             addon == null -> item { MenuNote("Searching your subtitle addons…") }
                             addon.isEmpty() && tab == SubTab.External -> item { MenuNote("Your addons found no subtitles for this.") }

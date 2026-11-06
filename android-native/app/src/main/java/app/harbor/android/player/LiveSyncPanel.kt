@@ -9,6 +9,9 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,7 +42,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -103,6 +106,8 @@ internal fun LiveSyncPanel(state: PlayerState, actions: PlayerActions) {
             val session = last ?: return@AnimatedVisibility
             Column(
                 Modifier.width(width).fillMaxHeight().background(Sheet).border(1.dp, Edge)
+                    // Swallows taps, never the remote's focus.
+                    .focusProperties { canFocus = false }
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                     .systemBarsPadding(),
             ) {
@@ -131,12 +136,18 @@ private fun androidx.compose.foundation.layout.ColumnScope.PanelBody(session: Li
             }
             Spacer(Modifier.width(6.dp))
         }
-        Box(Modifier.size(40.dp).clip(CircleShape).background(Raised).clickable { actions.closeLiveSync(keep = false) }, contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.Close, "Close", tint = Muted, modifier = Modifier.size(18.dp))
+        val closeSource = remember { MutableInteractionSource() }
+        val closeFocused by closeSource.collectIsFocusedAsState()
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).background(if (closeFocused) Color.White else Raised)
+                .clickable(interactionSource = closeSource, indication = null) { actions.closeLiveSync(keep = false) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Close, "Close", tint = if (closeFocused) Ink else Muted, modifier = Modifier.size(18.dp))
         }
     }
-    // Search a line by its words.
-    Row(
+    // Search a line by its words (not on a TV: a remote has no keyboard to type with).
+    if (!state.tv) Row(
         Modifier.padding(horizontal = 18.dp).padding(bottom = 12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Raised).border(1.dp, Edge, RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp).height(44.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -240,8 +251,14 @@ private fun androidx.compose.foundation.layout.ColumnScope.PanelBody(session: Li
     }
 
     Box(Modifier.fillMaxWidth().height(1.dp).background(Edge))
+    // On a TV the ring starts on Play: Up reaches the lines, OK on one offers Align to now.
+    val start = remember { androidx.compose.ui.focus.FocusRequester() }
+    if (state.tv) LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(120)
+        runCatching { start.requestFocus() }
+    }
     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        PanelButton(if (state.playing) "Pause" else "Play", null, modifier = Modifier.weight(1f)) { actions.togglePlay() }
+        PanelButton(if (state.playing) "Pause" else "Play", null, modifier = Modifier.weight(1f).focusRequester(start)) { actions.togglePlay() }
         PanelButton("Done", Icons.Rounded.Check, accent = true, modifier = Modifier.weight(1f)) { actions.closeLiveSync(keep = true) }
     }
 }
@@ -249,10 +266,19 @@ private fun androidx.compose.foundation.layout.ColumnScope.PanelBody(session: Li
 @Composable
 private fun LineRow(line: SubtitleFile.Cue, active: Boolean, point: Int?, query: String, onClick: () -> Unit) {
     val matched = query.isNotBlank()
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
     Row(
         Modifier.fillMaxWidth()
-            .background(if (active) HarborColors.Accent.copy(alpha = 0.12f) else if (matched) HarborColors.Accent.copy(alpha = 0.06f) else Color.Transparent)
-            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 12.dp),
+            .background(
+                when {
+                    focused -> Color(0x33FFFFFF)
+                    active -> HarborColors.Accent.copy(alpha = 0.12f)
+                    matched -> HarborColors.Accent.copy(alpha = 0.06f)
+                    else -> Color.Transparent
+                },
+            )
+            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = 18.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text(
@@ -291,13 +317,17 @@ private fun LineRow(line: SubtitleFile.Cue, active: Boolean, point: Int?, query:
 
 @Composable
 private fun PanelButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, modifier: Modifier = Modifier, accent: Boolean = false, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val ink = if (accent || focused) Ink else Color.White
     Row(
-        modifier.height(46.dp).clip(RoundedCornerShape(14.dp)).background(if (accent) HarborColors.Accent else Raised).clickable(onClick = onClick),
+        modifier.height(46.dp).clip(RoundedCornerShape(14.dp)).background(if (focused) Color.White else if (accent) HarborColors.Accent else Raised)
+            .clickable(interactionSource = source, indication = null, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        icon?.let { Icon(it, null, tint = if (accent) Ink else Color.White, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(7.dp)) }
-        Text(label, color = if (accent) Ink else Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        icon?.let { Icon(it, null, tint = ink, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(7.dp)) }
+        Text(label, color = ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

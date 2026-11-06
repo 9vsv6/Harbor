@@ -48,6 +48,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         main.launch {
             repository.settings.collect {
                 HarborDisplay.settings = it
+                app.harbor.android.i18n.I18n.load(this@HarborApp, it.appLanguage)
                 Tmdb.languageOverride = it.metadataLanguage
                 Tmdb.imageLanguage = it.imageLanguage
                 Tmdb.titleLanguage = it.titleLanguage
