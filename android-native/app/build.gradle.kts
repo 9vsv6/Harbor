@@ -118,13 +118,14 @@ android {
     }
 
     // Release builds come as one APK per ABI, so a phone downloads only arm64's
-    // libraries (about half the size); debug builds keep both in one APK.
+    // libraries (about half the size), plus one universal APK with every ABI for anyone unsure which
+    // to pick; debug builds keep both in one APK.
     splits {
         abi {
             isEnable = splitAbis
             reset()
             include(*abis.toTypedArray())
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 
