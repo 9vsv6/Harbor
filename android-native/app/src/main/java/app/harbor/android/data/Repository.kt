@@ -938,8 +938,9 @@ class Repository(private val context: Context) {
             profileId = prefs[KEY_ACTIVE_PROFILE]?.takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id
             _activeProfile.value = profiles.first { it.id == profileId }
             loadProfile(prefs)
-            // Harbor asks "Who's watching?" on launch (even with one profile, so you can add or pick), unless turned off.
-            _profileChosen.value = !_settings.value.askProfileOnLaunch
+            // Harbor asks "Who's watching?" on launch when there's more than one profile, unless turned off;
+            // with one profile it goes straight in (Switch profile still opens the picker to add one).
+            _profileChosen.value = profiles.size < 2 || !_settings.value.askProfileOnLaunch
             scope.launch { loadBuiltins() }
             refresh()
             _ready.value = true

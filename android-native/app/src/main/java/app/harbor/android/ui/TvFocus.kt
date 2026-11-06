@@ -17,34 +17,13 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/** An Android TV (or another leanback device), or a device you set to the TV layout (see [TvLayout]). */
-fun isTv(context: Context): Boolean = isRealTv(context) || TvLayout.forced(context)
+/** An Android TV (or another leanback device). */
+fun isTv(context: Context): Boolean = isRealTv(context)
 
 /** Android itself says it's a TV: driven by a remote, no touch screen. */
 fun isRealTv(context: Context): Boolean {
     val ui = context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
     return ui == Configuration.UI_MODE_TYPE_TELEVISION || context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-}
-
-/**
- * "Use TV layout": a projector or TV box running plain Android (not Android TV) gets Harbor's TV
- * layout. Kept per device, not per profile, and read before anything is drawn; changing it restarts Harbor.
- */
-object TvLayout {
-    private const val FILE = "harbor_device"
-    private const val KEY = "force_tv_layout"
-
-    fun forced(context: Context): Boolean =
-        context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(KEY, false)
-
-    fun set(context: Context, on: Boolean) {
-        context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(KEY, on).commit()
-        // Harbor starts over in the chosen layout.
-        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            ?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        if (launch != null) context.startActivity(launch)
-        Runtime.getRuntime().exit(0)
-    }
 }
 
 /**

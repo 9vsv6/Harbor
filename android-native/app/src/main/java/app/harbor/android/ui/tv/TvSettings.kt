@@ -156,11 +156,9 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val scope = androidx.compose.runtime.rememberCoroutineScope()
         val update = app.harbor.android.data.AppUpdate.status
         val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
-        val forcedLayout = remember { !app.harbor.android.ui.isRealTv(context) }
         val controls = remember(active, settings, prefs, autoPlay, connected, update) {
             controlsFor(active, settings, prefs, autoPlay, connected) + if (active == Cat.Setup) listOfNotNull(
                 Control.Push("updates", "Updates", updateLine(version, update)),
-                if (forcedLayout) Control.Push("tvlayout", "TV layout", "On. Turn it off to use the phone and tablet layout (Harbor restarts).") else null,
             ) else emptyList()
         }
         val firstFocus = remember { FocusRequester() }
@@ -191,7 +189,6 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                                         if (update is app.harbor.android.data.AppUpdate.Status.Available) app.harbor.android.data.AppUpdate.dismissed = null
                                         else if (update !is app.harbor.android.data.AppUpdate.Status.Checking && update !is app.harbor.android.data.AppUpdate.Status.Downloading)
                                             scope.launch { app.harbor.android.data.AppUpdate.check(context, manual = true) }
-                                    "tvlayout" -> app.harbor.android.ui.TvLayout.set(context, false)
                                     else -> pane = control.id
                                 }
                             }

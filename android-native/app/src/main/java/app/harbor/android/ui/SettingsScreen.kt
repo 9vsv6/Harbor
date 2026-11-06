@@ -746,7 +746,7 @@ private fun AccountSection(repository: Repository, settings: AppSettings, set: (
     if (primary || privileges.canManageStartup) Card("Profiles") {
         SwitchRow(
             "Ask \"Who's watching?\" when Harbor opens",
-            "Off opens the last profile used.",
+            "Shown when there is more than one profile. Off opens the last profile used.",
             settings.askProfileOnLaunch,
         ) { v -> set { it.copy(askProfileOnLaunch = v) } }
     }
@@ -1822,16 +1822,6 @@ private fun BackupSection(repository: Repository) {
                 repository.importBackup(json)
             }.onSuccess { say(it) }.onFailure { say(it.message ?: "Restore failed") }
         }
-    }
-
-    // Projectors and TV boxes on plain Android: the TV layout, driven by a remote.
-    if (!isRealTv(context)) SettingsSection("TV layout", "For a projector or TV box that runs plain Android rather than Android TV.") {
-        var on by remember { mutableStateOf(TvLayout.forced(context)) }
-        ToggleRow(
-            "Use TV layout",
-            "Big Picture's layout, made for a remote. Harbor restarts to switch.",
-            on,
-        ) { v -> on = v; TvLayout.set(context, v) }
     }
 
     SettingsSection("Updates", "Harbor native ${version ?: "?"}. Harbor looks for a new version each time it opens, and installs it over this one when you say so.") {
