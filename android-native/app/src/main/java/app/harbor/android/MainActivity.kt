@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -181,6 +183,8 @@ private fun HarborRoot(repository: Repository) {
     // Home's view (Home, Movies, Shows, Anime), shared by its switcher and the tablet rail.
     var browseView by rememberSaveable { mutableStateOf(BrowseView.Home) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
+    // Phones: the menu that rises from your picture in the tab bar.
+    var accountOpen by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Fixed for the process (Perf.init in HarborApp): TV gets Big Picture's top bar instead of the tab bar and rail.
@@ -281,6 +285,8 @@ private fun HarborRoot(repository: Repository) {
     // No background here: the window background (themes.xml) is already the Canvas colour.
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
     val wide = tv || maxWidth >= 720.dp
+    // Phones: Discover is one of the top bar's sections, so the tab bar stays with it.
+    val phoneBar = showBar || (!wide && route == "discover")
     Row(Modifier.fillMaxSize()) {
     // Settings has its own sidebar (with Back), as Harbor's, so the app rail steps aside there.
     if (!tv && wide && route != Tab.Profile.route) SideRail(route, browseView, onSelect = { nav.selectTab(it) }, onView = { v ->
@@ -290,7 +296,7 @@ private fun HarborRoot(repository: Repository) {
     Scaffold(
         modifier = Modifier.weight(1f),
         containerColor = Color.Transparent,
-        bottomBar = { if (showBar && !wide) TabBar(route) { nav.selectTab(it) } },
+        bottomBar = { if (phoneBar && !wide) TabBar(route, accountOpen, onAccount = { accountOpen = !accountOpen }) { accountOpen = false; nav.selectTab(it) } },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
             androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.LocalOpenList provides { id: String -> nav.navigate("list/${enc(id)}") }, app.harbor.android.ui.LocalOpenPage provides { route: String -> nav.navigate(route) { launchSingleTop = true } }) {
@@ -313,9 +319,29 @@ private fun HarborRoot(repository: Repository) {
                 popExitTransition = if (tv) ({ ExitTransition.None }) else ({ fadeOut(animationSpec = tween(700)) }),
             ) {
                 composable("discover") {
-                    app.harbor.android.ui.DiscoverScreen(
+                    // Phones: the section bar on top, as on Home (the page's own Back steps aside).
+                    if (!wide) androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
+                        app.harbor.android.ui.PhoneSectionBar(app.harbor.android.ui.PhoneSection.Discover, solid = true, onSelect = { section ->
+                            when (section) {
+                                app.harbor.android.ui.PhoneSection.Discover -> Unit
+                                app.harbor.android.ui.PhoneSection.Home -> { browseView = BrowseView.Home; nav.selectTab(Tab.Home) }
+                                app.harbor.android.ui.PhoneSection.Movies -> { browseView = BrowseView.Movies; nav.selectTab(Tab.Home) }
+                                app.harbor.android.ui.PhoneSection.Shows -> { browseView = BrowseView.Shows; nav.selectTab(Tab.Home) }
+                                app.harbor.android.ui.PhoneSection.Anime -> { browseView = BrowseView.Anime; nav.selectTab(Tab.Home) }
+                            }
+                        })
+                        Box(Modifier.weight(1f).consumeWindowInsets(androidx.compose.foundation.layout.WindowInsets.statusBars)) {
+                            app.harbor.android.ui.DiscoverScreen(
+                                repository,
+                                onBack = null,
+                                onOpen = { open(it) },
+                                onTmdbRow = { spec, title -> nav.navigate("tmdbrow?spec=${enc(Net.json.encodeToString(Tmdb.RowSpec.serializer(), spec))}&title=${enc(title)}") },
+                                onGenre = { type, genre -> nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre Movies") },
+                            )
+                        }
+                    } else app.harbor.android.ui.DiscoverScreen(
                         repository,
-                        onBack = if (wide) null else ({ nav.popBackStack() }),
+                        onBack = null,
                         onOpen = { open(it) },
                         onTmdbRow = { spec, title -> nav.navigate("tmdbrow?spec=${enc(Net.json.encodeToString(Tmdb.RowSpec.serializer(), spec))}&title=${enc(title)}") },
                         onGenre = { type, genre -> nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre Movies") },
@@ -476,6 +502,23 @@ private fun HarborRoot(repository: Repository) {
                 onPlayItem = ::startQueueItem,
                 onOpen = { open(it) },
             )
+            if (accountOpen && !wide) {
+                val profile = repository.activeProfile.collectAsState().value
+                val plugins = app.harbor.android.data.plugins.Plugins.state.collectAsState().value.installed.isNotEmpty()
+                fun page(route: String) = { nav.navigate(route) { popUpTo(Tab.Home.route); launchSingleTop = true } }
+                app.harbor.android.ui.AccountMenu(
+                    profile,
+                    listOfNotNull(
+                        app.harbor.android.ui.AccountItem("Library", R.drawable.nav_library) { nav.selectTab(Tab.MyStuff) },
+                        app.harbor.android.ui.AccountItem("Downloads", R.drawable.nav_download, page("downloads")),
+                        app.harbor.android.ui.AccountItem("Calendar", R.drawable.nav_calendar, page("calendar")),
+                        app.harbor.android.ui.AccountItem("Plugins", R.drawable.set_puzzle, page("plugins")).takeIf { plugins },
+                        app.harbor.android.ui.AccountItem("Settings", R.drawable.nav_settings) { nav.selectTab(Tab.Profile) },
+                    ),
+                    onSwitch = { repository.showProfilePicker() },
+                    onDismiss = { accountOpen = false },
+                )
+            }
             if (searchOpen) {
                 fun view(v: BrowseView) = { browseView = v; nav.selectTab(Tab.Home) }
                 fun page(route: String) = { nav.navigate(route) { popUpTo(Tab.Home.route); launchSingleTop = true } }
@@ -504,9 +547,12 @@ private fun HarborRoot(repository: Repository) {
     }
 }
 
-/** Harbor's floating tab bar: icon-only, the active tab on a light chip. */
+/**
+ * Harbor's floating tab bar on phones: Search, Home, and your picture, which opens the account menu
+ * (Library, Downloads, Calendar, Settings). The active one sits on a light chip.
+ */
 @Composable
-private fun TabBar(route: String?, onSelect: (Tab) -> Unit) {
+private fun TabBar(route: String?, accountOpen: Boolean, onAccount: () -> Unit, onSelect: (Tab) -> Unit) {
     val profile = (LocalContext.current.applicationContext as HarborApp).repository.activeProfile.collectAsState().value
     Box(
         Modifier.fillMaxWidth()
@@ -522,17 +568,18 @@ private fun TabBar(route: String?, onSelect: (Tab) -> Unit) {
                 .padding(8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Tab.entries.forEach { tab ->
-                val on = route == tab.route
+            listOf(Tab.Search, Tab.Home, Tab.Profile).forEach { tab ->
+                // Your picture stands for everything in its menu.
+                val account = tab == Tab.Profile
+                val on = if (account) accountOpen || route == Tab.Profile.route || route == Tab.MyStuff.route else !accountOpen && route == tab.route
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier.width(52.dp).height(40.dp).clip(RoundedCornerShape(13.dp))
                             .background(if (on) HarborColors.Ink else Color.Transparent)
-                            .clickable { onSelect(tab) },
+                            .clickable { if (account) onAccount() else onSelect(tab) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (tab == Tab.Profile && profile != null) {
-                            // The active profile's avatar, like Harbor's tab bar.
+                        if (account) {
                             ProfileAvatar(profile, 23.dp)
                         } else {
                             Icon(

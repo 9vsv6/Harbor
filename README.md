@@ -69,7 +69,7 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 
 **Harbor for Android** brings Harbor to phones, tablets, and Android TV as a native app, not a web view. Out of the box it runs on Cinemeta. Add a free TMDB key and it grows into a full companion for finding and watching what you love.
 
-- **One app, three layouts.** A phone layout with a bottom bar, a tablet layout with a side rail, and Harbor's Big Picture layout on Android TV, driven entirely by the remote.
+- **One app, three layouts.** A phone layout with an edge-to-edge hero, section icons across the top, and Search, Home, and your profile at the bottom; a tablet layout with a side rail; and Harbor's Big Picture layout on Android TV, driven entirely by the remote.
 - **A native player.** mpv on phones and tablets, with shaders, Anime4K upscaling, subtitle styling, and live subtitle sync. Android TV plays through Media3 and the TV's own hardware decoders, so streams start reliably even on modest TVs.
 - **Harbor's stream ranking.** The same Rust core as Harbor on the desktop parses every stream, filters out fakes, and ranks the best sources first, with "Cached on" labels for your debrid service.
 - **Subtitles done right.** Subtitles from your addons and from OpenSubtitles, SubDL, SubSource, and Wyzie, named the way Harbor PC names them and filtered to your languages.
@@ -88,15 +88,15 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 <tr>
 <td width="33%" align="center">
 <img src="/docs/media/android/phone-home.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Home with the rotating hero and Top 10.</sub>
+<sub><b>Phone</b> &middot; Home: the hero runs edge to edge under the section icons.</sub>
 </td>
 <td width="33%" align="center">
-<img src="/docs/media/android/phone-detail.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Details with IMDb and Simkl scores.</sub>
+<img src="/docs/media/android/phone-menu.jpg" width="100%"><br/>
+<sub><b>Phone</b> &middot; Your picture opens Library, Downloads, Calendar, and Settings.</sub>
 </td>
 <td width="33%" align="center">
-<img src="/docs/media/android/phone-search.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Search and Browse by Genre.</sub>
+<img src="/docs/media/android/phone-discover.jpg" width="100%"><br/>
+<sub><b>Phone</b> &middot; Discover, one tap away in the section bar.</sub>
 </td>
 </tr>
 </table>

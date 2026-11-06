@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import app.harbor.android.i18n.Text
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -222,9 +223,21 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                 listState.scrollToItem(0)
             }
         }
-        val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp
+        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val top = statusTop + 68.dp
         // TV: the hero's backdrop runs full-bleed under the floating header.
         val tvHero = Perf.isTv && !heroSlides.isNullOrEmpty()
+        // Phones: the hero runs edge to edge from the top of the screen, under the section bar
+        // (Shows keeps its heading first, so it starts below the bar).
+        val phone = showSwitcher && !Perf.isTv
+        val phoneHero = phone && view != BrowseView.Shows && !heroSlides.isNullOrEmpty()
+        val phoneTop = statusTop + PhoneSectionBarHeight
+        // The bar takes the page colour once the hero has scrolled under it.
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val heroPx = with(density) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 1.25f - phoneTop).toPx() }
+        val barSolid by remember(phoneHero, heroPx) {
+            androidx.compose.runtime.derivedStateOf { !phoneHero || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > heroPx }
+        }
         // A restore nobody claimed (its tile scrolled away) is dropped so it can't steal focus later.
         LaunchedEffect(Unit) {
             val pending = TvReturnFocus.target
@@ -249,7 +262,12 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(
-                    top = if (tvHero && view != BrowseView.Shows) 0.dp else top,
+                    top = when {
+                        tvHero && view != BrowseView.Shows -> 0.dp
+                        phoneHero -> 0.dp
+                        phone -> phoneTop + 8.dp
+                        else -> top
+                    },
                     // TV: keep the last row out of the 5% overscan band at the bottom edge.
                     bottom = if (Perf.isTv) TvInsets.SafeY + 32.dp else 32.dp,
                 ),
@@ -289,6 +307,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                                         onPlay = browse::playMeta,
                                         onToggleList = repository::toggleMyList,
                                         onOpen = browse::openMeta,
+                                        fullBleed = phoneHero,
                                     )
                                 }
                                 if (spooktober == "small" && heroSlides.isNotEmpty()) {
@@ -296,7 +315,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                                     SpooktoberEntry(
                                         compact = true,
                                         onDismiss = dismissSpooktober,
-                                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (tvHero && view != BrowseView.Shows) top + 14.dp else 14.dp, end = 30.dp).fillMaxWidth(if (wide) 0.42f else 0.62f).widthIn(max = 360.dp)
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(top = if (tvHero && view != BrowseView.Shows) top + 14.dp else if (phoneHero) phoneTop + 10.dp else 14.dp, end = if (phoneHero) 16.dp else 30.dp).fillMaxWidth(if (wide) 0.42f else 0.62f).widthIn(max = 360.dp)
                                             .wrapContentWidth(Alignment.End),
                                     )
                                 }
@@ -372,7 +391,31 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         // Harbor's floating header: the wordmark and the view switcher, over a fade.
         // On TV the top nav bar owns the branding and the search entry, so drawing this too would
         // leave a ghost "Harbor" behind the bar.
-        if (!Perf.isTv) {
+        if (phone) {
+            val openPage = LocalOpenPage.current
+            val barScope = androidx.compose.runtime.rememberCoroutineScope()
+            val here = when (view) {
+                BrowseView.Home -> PhoneSection.Home
+                BrowseView.Movies -> PhoneSection.Movies
+                BrowseView.Shows -> PhoneSection.Shows
+                BrowseView.Anime -> PhoneSection.Anime
+            }
+            PhoneSectionBar(
+                current = here,
+                solid = barSolid,
+                onSelect = { section ->
+                    // The open section's icon takes you back to its top.
+                    if (section == here) barScope.launch { listState.animateScrollToItem(0) }
+                    else when (section) {
+                        PhoneSection.Discover -> openPage("discover")
+                        PhoneSection.Home -> onView(BrowseView.Home)
+                        PhoneSection.Movies -> onView(BrowseView.Movies)
+                        PhoneSection.Shows -> onView(BrowseView.Shows)
+                        PhoneSection.Anime -> onView(BrowseView.Anime)
+                    }
+                },
+            )
+        } else if (!Perf.isTv) {
             Box(
                 Modifier.fillMaxWidth().height(top + 12.dp)
                     .background(Brush.verticalGradient(0f to HarborColors.Canvas, 0.78f to HarborColors.Canvas.copy(alpha = 0.96f), 1f to Color.Transparent)),

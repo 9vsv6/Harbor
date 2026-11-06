@@ -149,6 +149,8 @@ fun HeroCarousel(
     onPlay: (Meta) -> Unit,
     onToggleList: (Meta) -> Unit,
     onOpen: (Meta) -> Unit,
+    /** Phones: the hero runs edge to edge from the top of the screen, under the section bar. */
+    fullBleed: Boolean = false,
 ) {
     if (slides.isEmpty()) return
     var index by remember(slides) { mutableIntStateOf(0) }
@@ -170,7 +172,8 @@ fun HeroCarousel(
     val context = androidx.compose.ui.platform.LocalContext.current
     Column(Modifier.onFocusChanged { focused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(
-            Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
+            if (fullBleed) Modifier.fillMaxWidth().aspectRatio(4f / 5f).background(HarborColors.Surface)
+            else Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
                 .clip(HeroShape).background(HarborColors.Surface)
                 .border(1.dp, HarborColors.EdgeSoft, HeroShape),
         ) {
@@ -182,7 +185,8 @@ fun HeroCarousel(
                     AsyncImage(remember(art) { heroRequest(context, art) }, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     // Harbor's hero trailer: the slide holds still while it plays.
                     HeroTrailer(meta, HarborDisplay.settings.heroTrailers, startDelayMs = 1_500, loop = false) { on -> trailerOn = on }
-                    Box(Modifier.fillMaxSize().let { if (Perf.gradientScrims) it.background(HeroScrim) else it.background(HeroScrimFlat) })
+                    // Edge to edge, the art fades into the page below it.
+                    Box(Modifier.fillMaxSize().let { if (!Perf.gradientScrims) it.background(HeroScrimFlat) else it.background(if (fullBleed) HeroScrimBleed else HeroScrim) })
                     Column(
                         Modifier.align(Alignment.BottomStart).padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -246,6 +250,7 @@ fun HeroCarousel(
 private val HeroShape = RoundedCornerShape(24.dp)
 private val HeroScrim = Brush.verticalGradient(0f to Color(0x0D000000), 0.5f to Color(0x73000000), 1f to Color(0xF2000000))
 private val HeroScrimFlat = Color(0x8C000000)
+private val HeroScrimBleed = Brush.verticalGradient(0f to Color(0x33000000), 0.45f to Color(0x40000000), 0.78f to HarborColors.Canvas.copy(alpha = 0.85f), 1f to HarborColors.Canvas)
 private val PillShape = RoundedCornerShape(50)
 private val TagShape = RoundedCornerShape(3.dp)
 private val CwShape = RoundedCornerShape(16.dp)
