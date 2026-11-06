@@ -152,7 +152,17 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.More -> "Every setting"
             }
         }
-        val controls = remember(active, settings, prefs, autoPlay, connected) { controlsFor(active, settings, prefs, autoPlay, connected) }
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        val update = app.harbor.android.data.AppUpdate.status
+        val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
+        val forcedLayout = remember { !app.harbor.android.ui.isRealTv(context) }
+        val controls = remember(active, settings, prefs, autoPlay, connected, update) {
+            controlsFor(active, settings, prefs, autoPlay, connected) + if (active == Cat.Setup) listOfNotNull(
+                Control.Push("updates", "Updates", updateLine(version, update)),
+                if (forcedLayout) Control.Push("tvlayout", "TV layout", "On. Turn it off to use the phone and tablet layout (Harbor restarts).") else null,
+            ) else emptyList()
+        }
         val firstFocus = remember { FocusRequester() }
         Row(Modifier.fillMaxSize().padding(top = u(8f)), horizontalArrangement = Arrangement.spacedBy(u(20f))) {
             LazyColumn(Modifier.width(u(258f)).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(u(5f)), contentPadding = PaddingValues(bottom = u(40f))) {
@@ -174,7 +184,17 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                         when (control) {
                             is Control.Options -> OptionRow(control, f) { commit(repository, control.id, it) }
                             is Control.Multi -> MultiRow(control, f) { commit(repository, control.id, it) }
-                            is Control.Push -> PushRow(control.label, control.detail, f) { pane = control.id }
+                            is Control.Push -> PushRow(control.label, control.detail, f) {
+                                when (control.id) {
+                                    "updates" ->
+                                        // Available: the update pop-up again (even after Later); else look now.
+                                        if (update is app.harbor.android.data.AppUpdate.Status.Available) app.harbor.android.data.AppUpdate.dismissed = null
+                                        else if (update !is app.harbor.android.data.AppUpdate.Status.Checking && update !is app.harbor.android.data.AppUpdate.Status.Downloading)
+                                            scope.launch { app.harbor.android.data.AppUpdate.check(context, manual = true) }
+                                    "tvlayout" -> app.harbor.android.ui.TvLayout.set(context, false)
+                                    else -> pane = control.id
+                                }
+                            }
                             is Control.Action -> ActionRow(control.label, f) { if (control.id == "addons") onOpenAddons() else pane = "all" }
                         }
                     }
@@ -184,6 +204,16 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         }
         LaunchedEffect(depth) { runCatching { firstFocus.requestFocus() } }
     }
+}
+
+/** The Updates row's line: this version, then what the last check found. */
+private fun updateLine(version: String, status: app.harbor.android.data.AppUpdate.Status): String = "Harbor $version · " + when (status) {
+    app.harbor.android.data.AppUpdate.Status.Checking -> "Checking…"
+    app.harbor.android.data.AppUpdate.Status.UpToDate -> "You have the newest version. OK checks again."
+    is app.harbor.android.data.AppUpdate.Status.Available -> "Harbor ${status.release.version} is available. OK to update."
+    is app.harbor.android.data.AppUpdate.Status.Downloading -> "Downloading ${status.release.version}… ${(status.fraction * 100).toInt()}%"
+    is app.harbor.android.data.AppUpdate.Status.Failed -> status.message + " OK tries again."
+    app.harbor.android.data.AppUpdate.Status.Idle -> "OK checks for a new version."
 }
 
 private const val PREVIEW_STILL = "https://image.tmdb.org/t/p/w780/eGX66zonvc4bXg3rM08RUxdYSDx.jpg"

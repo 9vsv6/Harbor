@@ -156,7 +156,9 @@ fun ProfilesCard(repository: Repository, canAdd: Boolean = true) {
     var editing by remember { mutableStateOf<Profile?>(null) }
     var adding by remember { mutableStateOf(false) }
 
-    SettingsSection("Profiles", "Each profile has its own My List, Continue watching, player settings and tracker accounts.") {
+    // The page's own heading already says "Profiles": only the line under it here.
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Each profile has its own My List, Continue watching, player settings and tracker accounts.", color = HarborColors.InkMuted, fontSize = 15.5.sp, lineHeight = 22.sp)
         Column {
             profiles.forEach { profile ->
                 val current = profile.id == active?.id

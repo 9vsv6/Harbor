@@ -56,16 +56,43 @@ object Awards {
         AwardType.Cesar, AwardType.Goya, AwardType.BlueDragon, AwardType.Baeksang, AwardType.Bifa, AwardType.Saturn,
     )
 
-    /** Harbor's card award tab: the top award won, "OSCAR" or "4 OSCARS"; null when none. */
+    /**
+     * Harbor's card award pill (card-award.tsx): the top award won, "OSCAR" or "4 OSCARS"; null when
+     * none. Only wins are asked for, and the answer is kept on the device for a month, so a home screen
+     * of posters doesn't send two hundred Wikidata queries every launch.
+     */
     suspend fun cardLabel(imdbId: String): String? {
-        val wins = forTitle(imdbId).filter { it.won }.groupBy { it.type }
-        val top = priority.firstOrNull { wins.containsKey(it) } ?: return null
-        val count = wins.getValue(top).size
-        val name = if (count == 1) top.single else top.plural
-        return (if (count > 1) "$count $name" else name).uppercase()
+        cardCache[imdbId]?.let { return it.ifEmpty { null } }
+        val today = System.currentTimeMillis() / 86_400_000L
+        stored?.getString(imdbId, null)?.let { saved ->
+            val day = saved.substringBefore('|').toLongOrNull() ?: 0L
+            if (today - day < 30) return saved.substringAfter('|').also { cardCache[imdbId] = it }.ifEmpty { null }
+        }
+        val label = gate.withPermit {
+            cardCache[imdbId] ?: kotlin.run {
+                val body = run(query("P166", imdbId)) ?: return@withPermit null
+                val wins = withContext(Net.parseDispatcher) { parse(body, won = true) }.groupBy { it.type }
+                val top = priority.firstOrNull { wins.containsKey(it) }
+                val text = top?.let {
+                    val count = wins.getValue(it).size
+                    (if (count > 1) "$count ${it.plural}" else it.single).uppercase()
+                }.orEmpty()
+                cardCache[imdbId] = text
+                stored?.edit()?.putString(imdbId, "$today|$text")?.apply()
+                text
+            }
+        } ?: return null
+        return label.ifEmpty { null }
     }
 
-    private val cache = mutableMapOf<String, List<AwardEntry>>()
+    private val cardCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var stored: android.content.SharedPreferences? = null
+
+    fun init(context: android.content.Context) {
+        stored = context.applicationContext.getSharedPreferences("harbor_card_awards", android.content.Context.MODE_PRIVATE)
+    }
+
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, List<AwardEntry>>()
 
     private fun query(property: String, imdbId: String) = """
         SELECT DISTINCT ?award ?awardLabel ?category ?categoryLabel ?recipient ?recipientLabel ?date WHERE {

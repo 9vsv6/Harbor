@@ -104,6 +104,8 @@ fun LibraryScreen(
     val settings by repository.settings.collectAsState()
     val pmdb by repository.accounts.pmdb.collectAsState()
     val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
+    // What you've played on this device, even titles never added to the Stremio library.
+    val continuing by repository.continueWatching.collectAsState()
     var tab by rememberSaveable { mutableStateOf(LibTab.Library) }
     val connected = buildList {
         if (trackers.trakt?.accessToken != null) add(LibTab.Trakt)
@@ -126,8 +128,9 @@ fun LibraryScreen(
     val watchedIds = HarborDisplay.watchedIds
     // Library: Stremio's library (what you added or played) and your watchlist on this device.
     // In Nuvio mode the watchlist is the Nuvio profile's library.
-    val all = remember(library, myList, nuvioLibrary) {
+    val all = remember(library, myList, nuvioLibrary, continuing) {
         (library.filter { !it.removed || it.temp }.map { Entry(it.toMeta(), maxOf(time(it.state?.lastWatched), time(it.mtime))) } +
+            continuing.map { Entry(it.meta, it.updatedAt) } +
             (if (repository.accounts.nuvioActive) nuvioLibrary else myList).map { Entry(it, 0L) }).distinctBy { it.meta.id }
     }
 
@@ -137,8 +140,9 @@ fun LibraryScreen(
             LibTab.Library -> MetaTab(all, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.Watchlist -> MetaTab(all.filter { it.meta.id !in watchedIds }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.History -> MetaTab(
-                library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
-                    .map { Entry(it.toMeta(), time(it.state?.lastWatched ?: it.mtime)) },
+                (continuing.map { Entry(it.meta, it.updatedAt) } +
+                    library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
+                        .map { Entry(it.toMeta(), time(it.state?.lastWatched ?: it.mtime)) }).distinctBy { it.meta.id },
                 onOpen, inList = { repository.inMyList(it) }, groupByYear = false,
             )
             LibTab.TorBox -> TorboxTab(repository, onConnectTorbox, onPlayFile)

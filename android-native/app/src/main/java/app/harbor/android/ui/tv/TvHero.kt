@@ -232,11 +232,14 @@ private fun TvTitle(meta: Meta) {
     var failed by remember(meta.id) { mutableStateOf(false) }
     val logo = meta.logoUrl
     if (logo != null && !failed) {
+        val tone = app.harbor.android.ui.rememberToneLogo(logo)
         AsyncImage(
-            logo,
+            tone.request,
             contentDescription = meta.name,
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
+            colorFilter = tone.filter,
+            onSuccess = tone.onSuccess,
             onError = { failed = true },
             modifier = Modifier.heightIn(max = 92.dp).widthIn(max = 300.dp),
         )

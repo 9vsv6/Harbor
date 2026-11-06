@@ -968,7 +968,10 @@ internal fun TvConnecting(meta: Meta?, stream: Stream?, status: String?, onCance
         ) {
             var badLogo by remember(meta?.id) { mutableStateOf(false) }
             val logo = meta?.logoUrl
-            if (logo != null && !badLogo) AsyncImage(logo, meta.name, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, onError = { badLogo = true }, modifier = Modifier.heightIn(max = app.harbor.android.ui.tv.u(78f)).widthIn(max = app.harbor.android.ui.tv.u(330f)))
+            if (logo != null && !badLogo) {
+                val tone = rememberToneLogo(logo)
+                AsyncImage(tone.request, meta.name, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, colorFilter = tone.filter, onSuccess = tone.onSuccess, onError = { badLogo = true }, modifier = Modifier.heightIn(max = app.harbor.android.ui.tv.u(78f)).widthIn(max = app.harbor.android.ui.tv.u(330f)))
+            }
             else meta?.name?.let { Text(it, color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(26f), fontWeight = FontWeight.SemiBold, maxLines = 2) }
             val facts = listOfNotNull(stream?.let { facetValues(it)[Facet.Resolution] }, stream?.let { streamSize(it) }).ifEmpty { listOfNotNull(extra) }
             if (facts.isNotEmpty()) Text(facts.joinToString("  ·  ").uppercase(), color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)

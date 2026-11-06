@@ -273,11 +273,14 @@ fun TitleArt(meta: Meta, maxHeight: Int) {
     var failed by remember(meta.id) { mutableStateOf(false) }
     val logo = meta.logoUrl
     if (logo != null && !failed) {
+        val tone = rememberToneLogo(logo)
         AsyncImage(
-            logo,
+            tone.request,
             contentDescription = meta.name,
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
+            colorFilter = tone.filter,
+            onSuccess = tone.onSuccess,
             onError = { failed = true },
             modifier = Modifier.heightIn(max = maxHeight.dp).fillMaxWidth(0.74f),
         )
@@ -361,21 +364,9 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
             } else {
                 Text(meta.name, color = HarborColors.InkMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(8.dp))
             }
-            // Harbor's IMDb tag at the bottom right (RPDB posters carry their own scores).
-            meta.imdbRating?.takeIf { it.isNotBlank() && display.showRatingBadge && poster == meta.poster }?.let { rating ->
-                Row(
-                    Modifier.align(Alignment.BottomEnd).padding(7.dp).background(Color(0xD9000000), PillShape)
-                        .padding(start = 4.dp, end = 7.dp, top = 3.dp, bottom = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Box(Modifier.background(Color(0xFFF5C518), TagShape).padding(horizontal = 3.dp)) {
-                        Text("IMDb", color = Color.Black, fontSize = 7.5.sp, fontWeight = FontWeight.Black)
-                    }
-                    Text(rating, color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            CardBadges(meta, Modifier.align(Alignment.TopStart).fillMaxWidth(0.74f))
+            // Harbor's score strip at the bottom right, IMDb · Simkl (card-score-stack.tsx), on every poster as on PC.
+            ScoreStack(meta, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+            CardBadges(meta, Modifier.align(Alignment.TopStart).fillMaxWidth(0.92f))
             // Harbor's watchlist bookmark (top right) and watched check (bottom left).
             if (display.watchlistBookmark && inMyList) {
                 Icon(
@@ -542,16 +533,20 @@ private fun remainingLabel(ms: Long): String {
 }
 
 /**
- * Harbor's card badges (pick-card.tsx): "In cinema" for a movie now playing (unless it is
- * a re-run more than nine months old), "New" for this year's titles, and the top award won.
+ * Harbor's card badges (pick-card.tsx), top left: DUB, then "In cinema" for a movie now playing
+ * (unless it is a re-run more than nine months old) or "New" for this year's titles, then the top award
+ * won (card-award.tsx's ClassicAwardBadge), all while card badges are on, as on PC.
  */
 @Composable
 private fun CardBadges(meta: Meta, modifier: Modifier) {
     val display = HarborDisplay.settings
-    val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
     var award by remember(meta.id) { mutableStateOf<String?>(null) }
-    if (display.showAwardBadge && imdb != null) {
-        LaunchedEffect(imdb) { award = runCatching { app.harbor.android.data.Awards.cardLabel(imdb) }.getOrNull() }
+    if (display.showCardBadges || display.showAwardBadge) {
+        val key = HarborDisplay.tmdbKey
+        LaunchedEffect(meta.id, key) {
+            val imdb = app.harbor.android.data.CardIds.imdbFor(meta, key) ?: return@LaunchedEffect
+            award = runCatching { app.harbor.android.data.Awards.cardLabel(imdb) }.getOrNull()
+        }
     }
     var dub by remember(meta.id) { mutableStateOf(false) }
     if (display.showDubBadge && meta.id.substringBefore(':') in AnimeIdPrefixes) {
@@ -569,21 +564,78 @@ private fun CardBadges(meta: Meta, modifier: Modifier) {
         meta.year == thisYear -> "New"
         else -> null
     }
-    Column(modifier.padding(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        if (dub) Text("DUB", color = HarborColors.Canvas, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.2.sp, modifier = Modifier.background(HarborColors.Accent.copy(alpha = 0.92f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp))
+    Column(modifier.padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (dub) Text("DUB", color = HarborColors.Canvas, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.2.sp, modifier = Modifier.background(HarborColors.Accent.copy(alpha = 0.92f), BadgeShape).padding(horizontal = 6.dp, vertical = 2.dp))
         label?.let { BadgePill(it, if (it == "In cinema") "🎟" else null) }
-        award?.let { BadgePill(it, "🏆") }
+        award?.let { BadgePill(it, "🏆", award = true) }
     }
 }
 
+private val BadgeShape = RoundedCornerShape(6.dp)
+
+/** PC's card pill: the page colour at 95 %, a soft edge, small spaced capitals. */
 @Composable
-private fun BadgePill(text: String, glyph: String?) {
+private fun BadgePill(text: String, glyph: String?, award: Boolean = false) {
     Row(
-        Modifier.background(Color(0xD9000000), PillShape).padding(horizontal = 7.dp, vertical = 3.dp),
+        Modifier.background(HarborColors.Canvas.copy(alpha = 0.95f), BadgeShape).border(1.dp, HarborColors.EdgeSoft.copy(alpha = 0.6f), BadgeShape)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        glyph?.let { Text(it, fontSize = 8.5.sp) }
-        Text(text.uppercase(), color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        glyph?.let { Text(it, fontSize = 9.sp) }
+        Text(
+            text.uppercase(), color = HarborColors.Ink, fontSize = if (award) 9.sp else 9.5.sp,
+            fontWeight = if (award) FontWeight.Bold else FontWeight.SemiBold, letterSpacing = 1.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * PC's score strip (card-score-stack.tsx): IMDb, then the Simkl community score rounded, joined by a
+ * faint dot, on one plate. Each source follows its own switch (Rating badge, Simkl ratings).
+ */
+@Composable
+private fun ScoreStack(meta: Meta, modifier: Modifier) {
+    val display = HarborDisplay.settings
+    val anime = meta.id.substringBefore(':') in AnimeIdPrefixes
+    val ids = app.harbor.android.data.CardIds
+    val known = remember(meta.id) { ids.knownImdb(meta) }
+    // The row's own score, else Cinemeta's for the IMDb id (a TMDB row has none).
+    var imdbRating by remember(meta.id) {
+        mutableStateOf(meta.imdbRating?.takeIf { it.isNotBlank() } ?: known?.let { ids.knownRating(it) })
+    }
+    var simkl by remember(meta.id) { mutableStateOf(known?.let { app.harbor.android.data.SimklCards.cached(it) }) }
+    val key = HarborDisplay.tmdbKey
+    if (!anime && (display.showSimklBadge && simkl == null || display.showRatingBadge && imdbRating == null)) {
+        LaunchedEffect(meta.id, key, display.showSimklBadge, display.showRatingBadge) {
+            val imdb = ids.imdbFor(meta, key) ?: return@LaunchedEffect
+            if (display.showRatingBadge && imdbRating == null) imdbRating = ids.cinemetaRating(imdb, meta.type)
+            if (display.showSimklBadge && simkl == null) simkl = app.harbor.android.data.SimklCards.score(imdb)
+        }
+    }
+    val imdbShown = imdbRating?.takeIf { display.showRatingBadge }
+    val simklShown = simkl?.takeIf { display.showSimklBadge }
+    if (imdbShown == null && simklShown == null) return
+    Row(
+        modifier.background(HarborColors.Canvas.copy(alpha = 0.95f), BadgeShape).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        imdbShown?.let { rating ->
+            // An anime's score is MyAnimeList's (PC shows its mark there).
+            Box(Modifier.background(if (anime) Color(0xFF2E51A2) else Color(0xFFF5C518), TagShape).padding(horizontal = 2.5.dp)) {
+                Text(if (anime) "MAL" else "IMDb", color = if (anime) Color.White else Color.Black, fontSize = 7.sp, fontWeight = FontWeight.Black)
+            }
+            Text(rating, color = HarborColors.Ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        }
+        if (imdbShown != null && simklShown != null) Text("·", color = HarborColors.Ink.copy(alpha = 0.3f), fontSize = 10.sp)
+        simklShown?.let { value ->
+            androidx.compose.foundation.Image(
+                androidx.compose.ui.res.painterResource(app.harbor.android.R.drawable.logo_simkl), "Simkl",
+                Modifier.size(11.dp).clip(RoundedCornerShape(2.dp)),
+            )
+            Text(Math.round(value).toString(), color = HarborColors.Ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }

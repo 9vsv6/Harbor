@@ -510,7 +510,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             ?.let { runCatching { Net.json.parseToJsonElement(it) as? JsonArray }.getOrNull() }
             ?: return emptyList()
         // mpv marks the second ("dual") subtitle selected too; that one isn't the subtitle that's on.
-        val secondSub = if (kind == "sub") mpv.getPropertyString("current-tracks/sub2/id") else null
+        // Asked only when a second subtitle is on: mpv logs an error each time it's asked without one.
+        val secondSub = if (kind == "sub" && mpv.getPropertyString("secondary-sid").let { it != null && it != "no" && it != "auto" })
+            mpv.getPropertyString("current-tracks/sub2/id") else null
         val out = ArrayList<EngineTrack>()
         for (element in list) {
             val track = element as? JsonObject ?: continue

@@ -1824,6 +1824,16 @@ private fun BackupSection(repository: Repository) {
         }
     }
 
+    // Projectors and TV boxes on plain Android: the TV layout, driven by a remote.
+    if (!isRealTv(context)) SettingsSection("TV layout", "For a projector or TV box that runs plain Android rather than Android TV.") {
+        var on by remember { mutableStateOf(TvLayout.forced(context)) }
+        ToggleRow(
+            "Use TV layout",
+            "Big Picture's layout, made for a remote. Harbor restarts to switch.",
+            on,
+        ) { v -> on = v; TvLayout.set(context, v) }
+    }
+
     SettingsSection("Updates", "Harbor native ${version ?: "?"}. Harbor looks for a new version each time it opens, and installs it over this one when you say so.") {
         val update = app.harbor.android.data.AppUpdate.status
         val note = when (update) {
@@ -1879,7 +1889,7 @@ private fun AboutSection() {
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             HButton(onClick = { uriHandler.openUri("https://github.com/9vsv6/Harbor/issues/new") }) { Text("Report a problem") }
-            HGhostButton(onClick = { uriHandler.openUri("https://github.com/9vsv6/Harbor") }) { Text("Source code") }
+            HGhostButton(onClick = { uriHandler.openUri("https://github.com/9vsv6/Harbor/tree/android") }) { Text("Source code") }
         }
     }
 }

@@ -387,10 +387,13 @@ private fun SpotlightTitle(meta: Meta) {
     var failed by remember(meta.id, meta.logoUrl) { mutableStateOf(false) }
     val logo = meta.logoUrl
     if (logo != null && !failed) {
+        val tone = app.harbor.android.ui.rememberToneLogo(logo)
         AsyncImage(
-            logo, meta.name,
+            tone.request, meta.name,
             contentScale = ContentScale.Fit,
             alignment = Alignment.BottomStart,
+            colorFilter = tone.filter,
+            onSuccess = tone.onSuccess,
             onError = { failed = true },
             modifier = Modifier.heightIn(max = u(88f)).widthIn(max = u(215f)),
         )
@@ -606,8 +609,10 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
             var badLogo by remember(item.meta.id) { mutableStateOf(false) }
             val logo = item.meta.logoUrl
             if (logo != null && !badLogo) {
+                val tone = app.harbor.android.ui.rememberToneLogo(logo)
                 AsyncImage(
-                    logo, item.meta.name, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, onError = { badLogo = true },
+                    tone.request, item.meta.name, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart,
+                    colorFilter = tone.filter, onSuccess = tone.onSuccess, onError = { badLogo = true },
                     modifier = Modifier.heightIn(max = u(24f)).fillMaxWidth(0.76f),
                 )
             } else {

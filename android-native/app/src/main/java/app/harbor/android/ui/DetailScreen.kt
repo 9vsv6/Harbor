@@ -625,11 +625,14 @@ private fun Hero(
             else if (logo != null) {
                 var failed by remember(logo) { mutableStateOf(false) }
                 if (!failed) {
+                    val tone = rememberToneLogo(logo)
                     AsyncImage(
-                        logo,
+                        tone.request,
                         meta.name,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.CenterStart,
+                        colorFilter = tone.filter,
+                        onSuccess = tone.onSuccess,
                         onError = { failed = true },
                         modifier = Modifier.heightIn(max = if (wide) 120.dp else 92.dp).widthIn(max = if (wide) 520.dp else 300.dp),
                     )

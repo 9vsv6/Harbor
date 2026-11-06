@@ -45,6 +45,8 @@ data class Resume(
     val background: String? = null,
     val season: Int? = null,
     val episode: Int? = null,
+    /** The title's release info ("2010–2017"), so Library can file it by year. */
+    val releaseInfo: String? = null,
 )
 
 /** One card in Continue watching, from this device or from the Stremio library. */
@@ -161,7 +163,7 @@ class Repository(private val context: Context) {
         val local = resume.mapNotNull { (videoId, r) ->
             val metaId = r.metaId ?: return@mapNotNull null
             CwItem(
-                Meta(id = metaId, type = r.type ?: "movie", name = r.name.orEmpty(), poster = r.poster, background = r.background),
+                Meta(id = metaId, type = r.type ?: "movie", name = r.name.orEmpty(), poster = r.poster, background = r.background, releaseInfo = r.releaseInfo),
                 videoId, r.positionMs, r.durationMs, r.season, r.episode, r.updatedAt,
             )
         }
@@ -815,6 +817,7 @@ class Repository(private val context: Context) {
                 background = meta?.background ?: previous?.background,
                 season = video?.season ?: previous?.season,
                 episode = video?.episode ?: previous?.episode,
+                releaseInfo = meta?.releaseInfo ?: previous?.releaseInfo,
             )
         )
         _resume.value = next

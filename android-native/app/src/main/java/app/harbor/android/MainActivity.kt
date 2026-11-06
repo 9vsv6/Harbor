@@ -91,32 +91,32 @@ import app.harbor.android.ui.ProfileAvatar
 import app.harbor.android.ui.WhosWatching
 
 class MainActivity : ComponentActivity() {
-    /** OK keys this window saw go down; a release without its press came from the app that launched Harbor. */
-    private val pressedKeys = mutableSetOf<Int>()
+    /** When this window last got focus, on the clock key events use. */
+    private var focusedAt = 0L
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) focusedAt = android.os.SystemClock.uptimeMillis()
+    }
 
     /**
      * The launcher starts Harbor on OK's press, and its release then lands here, on the first
-     * focused card or profile, as a click: Who's watching chose a profile by itself. A release
-     * whose press this window never saw is dropped.
+     * focused card or profile, as a click: Who's watching chose a profile by itself. An OK release
+     * whose press began before this window had focus belongs to the other app, and is dropped.
      */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         val code = event.keyCode
-        if (code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER || code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER) {
-            when (event.action) {
-                android.view.KeyEvent.ACTION_DOWN -> pressedKeys += code
-                android.view.KeyEvent.ACTION_UP -> if (!pressedKeys.remove(code)) return true
-            }
-        }
+        val ok = code == android.view.KeyEvent.KEYCODE_DPAD_CENTER || code == android.view.KeyEvent.KEYCODE_ENTER || code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+        if (ok && event.action == android.view.KeyEvent.ACTION_UP && event.downTime < focusedAt) return true
         return super.dispatchKeyEvent(event)
     }
 
-    override fun onResume() {
-        super.onResume()
-        pressedKeys.clear()
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Harbor is always dark: light status and navigation icons, whatever the phone's own theme.
+        enableEdgeToEdge(
+            statusBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
         val repository = (application as HarborApp).repository
         // Cloudstream extensions show their toasts through the foreground activity.

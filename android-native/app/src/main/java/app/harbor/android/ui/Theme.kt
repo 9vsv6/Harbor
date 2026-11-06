@@ -19,6 +19,8 @@ import app.harbor.android.data.PosterService
 object HarborDisplay {
     var settings by mutableStateOf(AppSettings())
     var rpdbKey by mutableStateOf<String?>(null)
+    /** The TMDB key, for cards that need a TMDB title's IMDb id (scores, awards). */
+    var tmdbKey by mutableStateOf<String?>(null)
     /** Harbor's custom poster service: a URL template, or the Better Posters / PostersPlus host. */
     var customPosters by mutableStateOf<String?>(null)
     /** Ids in your list and ids you have watched, for the cards' bookmark and check. */

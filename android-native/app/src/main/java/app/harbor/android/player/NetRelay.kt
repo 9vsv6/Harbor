@@ -26,6 +26,12 @@ object NetRelay {
     private val pool = Executors.newCachedThreadPool { r -> Thread(r, "harbor-bridge").apply { isDaemon = true } }
     @Volatile private var server: ServerSocket? = null
 
+    /**
+     * A secret for this run, in every address the bridge hands out: another app on the device can reach
+     * 127.0.0.1 too, and without it could use the bridge to fetch any address (the router's page, say).
+     */
+    private val secret: String = java.util.UUID.randomUUID().toString().replace("-", "")
+
     // Streams: the connection stays open as long as the video plays; the read limit only catches a stall.
     private val client: OkHttpClient by lazy {
         Net.client.newBuilder().readTimeout(30, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).build()
@@ -41,7 +47,7 @@ object NetRelay {
         val token = Base64.encodeToString(url.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         // The file's name stays at the end, so mpv still sees its extension.
         val name = url.substringBefore('?').substringAfterLast('/').takeIf { it.isNotEmpty() && it.length < 200 } ?: "stream"
-        return "$base/s/$token/$name"
+        return "$base/s/$secret/$token/$name"
     }
 
     @Synchronized
@@ -66,20 +72,25 @@ object NetRelay {
         socket.use {
             runCatching {
                 socket.tcpNoDelay = true
+                // A client that connects and never asks doesn't hold a thread forever.
+                socket.soTimeout = 30_000
                 val head = readHead(socket.getInputStream()) ?: return
                 val lines = String(head, Charsets.ISO_8859_1).split("\r\n").filter { it.isNotEmpty() }
                 val parts = lines.first().split(' ')
                 val path = parts.getOrNull(1) ?: return
-                val token = path.removePrefix("/s/").substringBefore('/')
-                if (!path.startsWith("/s/") || token.isEmpty()) return reply(socket, "404 Not Found")
+                // Only addresses this run handed out: /s/<secret>/<url>/<name>.
+                val rest = path.removePrefix("/s/$secret/")
+                val token = rest.substringBefore('/')
+                if (!path.startsWith("/s/$secret/") || token.isEmpty()) return reply(socket, "404 Not Found")
                 val url = String(Base64.decode(token, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING))
+                if (!url.startsWith("https://", ignoreCase = true)) return reply(socket, "404 Not Found")
                 val request = Request.Builder().url(url).apply {
                     // mpv's own headers go on (its user agent, an addon's headers, the Range of a seek).
                     for (line in lines.drop(1)) {
                         val name = line.substringBefore(':').trim()
                         val value = line.substringAfter(':', "").trim()
                         if (name.isEmpty() || name.lowercase() in hopHeaders) continue
-                        header(name, value)
+                        addHeader(name, value)
                     }
                     // The length stays exact: no transparent gzip on a video.
                     header("Accept-Encoding", "identity")

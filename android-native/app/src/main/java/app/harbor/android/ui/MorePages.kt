@@ -328,7 +328,7 @@ private val BUILT_ON = listOf(
     Triple("kotlinx.serialization", "Apache-2.0", "https://github.com/Kotlin/kotlinx.serialization"),
     Triple("Anime4K (downloaded on first use)", "MIT", "https://github.com/bloc97/Anime4K"),
     Triple("Inter, Fraunces, IBM Plex Sans, Plus Jakarta Sans", "SIL OFL 1.1", "https://openfontlicense.org"),
-    Triple("Harbor (the desktop app this is the Android fork of)", "MIT", "https://github.com/Harborofficial/Harbor"),
+    Triple("Harbor (the desktop app this is the Android fork of)", "MIT", "https://github.com/9vsv6/Harbor"),
 )
 
 @Composable
@@ -336,7 +336,7 @@ internal fun LicencesPage() {
     val uri = LocalUriHandler.current
     HarborHeading("Licence", "Harbor is free and open source software, released under the MIT License.")
     Prose("Because Harbor native includes GPL components (FFmpeg, Jellyfin's decoder, NewPipeExtractor), anyone you share this APK with is entitled to Harbor's source code.")
-    HGhostButton(onClick = { uri.openUri("https://github.com/9vsv6/Harbor") }, Modifier.padding(top = 4.dp)) {
+    HGhostButton(onClick = { uri.openUri("https://github.com/9vsv6/Harbor/tree/android") }, Modifier.padding(top = 4.dp)) {
         Text("Source code")
         Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, Modifier.size(16.dp))
     }

@@ -32,6 +32,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         repository = Repository(this)
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
+        app.harbor.android.data.Awards.init(this)
         app.harbor.android.ui.HarborFonts.assets = assets
         app.harbor.android.data.Curated.init(this)
         app.harbor.android.data.PlayQueue.init(this)
@@ -59,6 +60,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
             }
         }
         main.launch { repository.rpdbKey.collect { HarborDisplay.rpdbKey = it } }
+        main.launch { repository.tmdbKey.collect { HarborDisplay.tmdbKey = it } }
         // The play queue follows the active profile.
         main.launch {
             repository.activeProfile.collect {
