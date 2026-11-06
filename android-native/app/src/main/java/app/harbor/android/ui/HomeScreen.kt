@@ -583,7 +583,8 @@ private suspend fun cinemetaRows(metaAddons: List<Addon>): List<CatalogRow> = co
     val cinemeta = metaAddons.firstOrNull { it.manifest.id == AddonClient.CINEMETA_ID } ?: return@coroutineScope emptyList()
     fun top(type: String) = cinemeta.manifest.catalogs.firstOrNull { it.type == type && it.id == "top" }
     val specs = listOf(
-        "Top 10 on Stremio" to Triple("movie", null as String?, 0..9),
+        // PC calls this "Top 10 on Stremio"; Harbor for Android names it plainly (translated in every app language).
+        "Top 10 Movies Today" to Triple("movie", null as String?, 0..9),
         "Popular Movies" to Triple("movie", null, 10..39),
         "Top 10 Drama" to Triple("movie", "Drama", 0..9),
         "Trending Series" to Triple("series", null, 0..29),
@@ -620,7 +621,9 @@ private suspend fun cinemetaRows(metaAddons: List<Addon>): List<CatalogRow> = co
         val (title, type, data) = row
         val (range, page) = data
         val metas = page.await().let { list -> list.subList(range.first.coerceAtMost(list.size), (range.last + 1).coerceAtMost(list.size)) }
-        CatalogRow("cinemeta/$title", title, metas, type, cinemeta, source.first, source.second)
+        // The row's id keeps its old name, so a row you hid or moved stays that way.
+        val id = if (title == "Top 10 Movies Today") "cinemeta/Top 10 on Stremio" else "cinemeta/$title"
+        CatalogRow(id, title, metas, type, cinemeta, source.first, source.second)
     }.filter { it.metas.isNotEmpty() }
 }
 
