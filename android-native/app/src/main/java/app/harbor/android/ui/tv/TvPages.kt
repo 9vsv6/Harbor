@@ -68,6 +68,8 @@ import app.harbor.android.ui.HarborDisplay
 import app.harbor.android.ui.HarborFonts
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 // Harbor PC's Big Picture Search (bp-search.tsx, bp-keyboard.tsx), Library (bp-library.tsx) and
@@ -148,6 +150,13 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     var kind by rememberSaveable { mutableStateOf(SearchKind.All) }
     var results by remember { mutableStateOf<List<Meta>?>(null) }
     var loading by remember { mutableStateOf(false) }
+    // A TV searches only when you press Search (or pick a suggestion): a full search on every key
+    // was too heavy for a TV and never finished while you typed.
+    var submitted by rememberSaveable { mutableStateOf("") }
+    // Each press of Search counts, so the same words can be searched again (after a network error, say).
+    var runs by rememberSaveable { mutableStateOf(0) }
+    var searchFailed by remember { mutableStateOf(false) }
+    var hints by remember { mutableStateOf<List<String>>(emptyList()) }
     var recent by remember { mutableStateOf(RecentSearches.read(context)) }
     var suggested by remember { mutableStateOf<List<Meta>>(emptyList()) }
     val field = remember { FocusRequester() }
@@ -159,12 +168,37 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
                 ?.let { (a, c) -> app.harbor.android.data.AddonClient.catalog(a, c) }.orEmpty()
         }.getOrDefault(emptyList()).take(12)
     }
-    LaunchedEffect(query) {
-        val q = query.trim()
-        if (q.length < 2) { results = null; return@LaunchedEffect }
-        delay(350)
+    LaunchedEffect(submitted, runs) {
+        val q = submitted.trim()
+        searchFailed = false
+        if (q.isEmpty()) { results = null; return@LaunchedEffect }
         loading = true
-        try { results = app.harbor.android.ui.searchCatalogs(repository, q) } finally { loading = false }
+        results = emptyList()
+        try {
+            val found = runCatching { app.harbor.android.ui.searchCatalogs(repository, q) }
+            searchFailed = found.isFailure
+            results = found.getOrDefault(emptyList())
+        } finally { loading = false }
+    }
+    // While typing: text-only suggestions, your recent searches first, then title names (one light
+    // Cinemeta lookup once you pause, no posters).
+    LaunchedEffect(query, typing) {
+        val q = query.trim()
+        val mine = recent.filter { q.isEmpty() || it.contains(q, ignoreCase = true) }.take(3)
+        hints = mine
+        if (!typing || q.length < 2) return@LaunchedEffect
+        delay(600)
+        // Five at most: they sit above the keyboard.
+        hints = (mine + runCatching { titleHints(repository, q) }.getOrDefault(emptyList()))
+            .distinctBy { it.lowercase() }.take(5)
+    }
+    fun submit(text: String) {
+        val q = text.trim()
+        query = q
+        typing = false
+        submitted = q
+        runs++
+        if (q.isNotEmpty()) { RecentSearches.add(context, q); recent = RecentSearches.read(context) }
     }
     fun open(meta: Meta) {
         if (query.isNotBlank()) { RecentSearches.add(context, query); recent = RecentSearches.read(context) }
@@ -178,13 +212,22 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
         Column(Modifier.fillMaxSize().padding(top = u(6f))) {
             SearchField(query, typing, field) { typing = true }
             val shown = results
-            if (shown == null) {
+            if (typing) {
+                // Lined up with the keyboard under it.
+                Column(Modifier.padding(top = u(8f)).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(u(2f))) {
+                    if (hints.isEmpty()) Text(
+                        if (query.isBlank()) "Type a title, then press Search." else "Press Search to find “${query.trim()}”.",
+                        color = HarborColors.InkSubtle, fontSize = s(9f),
+                    )
+                    hints.forEach { h -> HintRow(h) { submit(h) } }
+                }
+            } else if (shown == null) {
                 LazyColumn(contentPadding = PaddingValues(top = u(12f), bottom = u(50f)), verticalArrangement = Arrangement.spacedBy(u(10f))) {
                     if (recent.isNotEmpty()) item {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(6f))) {
                             Text("RECENT", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
-                                items(recent) { r -> TvPill(r, false) { query = r } }
+                                items(recent) { r -> TvPill(r, false) { submit(r) } }
                             }
                         }
                     }
@@ -206,7 +249,13 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
                     Text(if (loading) "SEARCHING" else "${shown.size} RESULTS", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
                 }
                 LazyColumn(contentPadding = PaddingValues(bottom = u(50f)), verticalArrangement = Arrangement.spacedBy(u(12f))) {
-                    if (shown.isEmpty() && !loading) item { Text("Nothing found for “${query.trim()}”.", color = HarborColors.InkMuted, fontSize = s(10f)) }
+                    if (shown.isEmpty() && !loading) item {
+                        Text(
+                            if (searchFailed) "Couldn't search right now. Check the connection, then press Search again."
+                            else "Nothing found for “${submitted.trim()}”.",
+                            color = HarborColors.InkMuted, fontSize = s(10f),
+                        )
+                    }
                     val top = when (kind) { SearchKind.All -> shown; SearchKind.Movies -> movies; SearchKind.Series -> series }.firstOrNull()
                     if (top != null) item {
                         Column(verticalArrangement = Arrangement.spacedBy(u(6f))) {
@@ -220,14 +269,43 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
             }
         }
         if (typing) TvKeyboard(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = u(40f)),
+            Modifier.align(Alignment.BottomCenter).padding(bottom = u(26f)),
             onKey = { query += it },
             onBackspace = { query = query.dropLast(1) },
-            onClear = { query = "" },
-            onDone = { typing = false; if (query.isNotBlank()) { RecentSearches.add(context, query); recent = RecentSearches.read(context) } },
+            onClear = { query = ""; submitted = "" },
+            onDone = { submit(query) },
         )
         HintBar(Modifier.align(Alignment.BottomEnd), listOf("OK" to (if (typing) "Type" else "Select"), "Back" to "Back"))
     }
+}
+
+/** One text suggestion while typing: OK searches for it. */
+@Composable
+private fun HintRow(text: String, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(u(5f))).background(if (focused) HarborColors.Ink else Color.Transparent)
+            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = u(8f), vertical = u(4f)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(u(7f)),
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = if (focused) HarborColors.Canvas else HarborColors.InkSubtle, modifier = Modifier.size(u(9f)))
+        Text(text, color = if (focused) HarborColors.Canvas else HarborColors.Ink, fontSize = s(9.5f), fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+/** Title names for what's typed, from Cinemeta's search alone: light enough for a TV while typing. */
+private suspend fun titleHints(repository: Repository, q: String): List<String> {
+    val cinemeta = repository.metaAddons().firstOrNull { it.manifest.id == app.harbor.android.data.AddonClient.CINEMETA_ID } ?: return emptyList()
+    val lists = kotlinx.coroutines.coroutineScope {
+        cinemeta.manifest.catalogs.filter { it.supportsSearch }.take(2).map { c ->
+            async { runCatching { app.harbor.android.data.AddonClient.catalog(cinemeta, c, mapOf("search" to q)) }.getOrDefault(emptyList()) }
+        }.awaitAll()
+    }
+    val names = (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i)?.name } }
+    // Names that start with what's typed come first.
+    return names.filter { it.isNotBlank() }.sortedBy { if (it.startsWith(q, ignoreCase = true)) 0 else 1 }.take(8)
 }
 
 @Composable
@@ -277,23 +355,24 @@ private fun TvKeyboard(modifier: Modifier, onKey: (String) -> Unit, onBackspace:
     val rows = if (symbols) listOf("1234567890", "!?&@#:;()/", "+=*%\"_~<>'", "$€£,.-[]{}")
     else listOf("1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.-")
     Column(
-        modifier.width(u(440f)).clip(RoundedCornerShape(u(10f))).background(Color(0xF2141517)).padding(u(10f)),
-        verticalArrangement = Arrangement.spacedBy(u(5f)),
+        // Across the screen, keys big enough to read from the sofa.
+        modifier.fillMaxWidth().clip(RoundedCornerShape(u(12f))).background(Color(0xF2141517)).padding(u(12f)),
+        verticalArrangement = Arrangement.spacedBy(u(6f)),
     ) {
         rows.forEachIndexed { r, keys ->
-            Row(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
+            Row(horizontalArrangement = Arrangement.spacedBy(u(6f))) {
                 keys.forEachIndexed { i, c ->
                     Key(c.toString(), Modifier.weight(1f), if (r == 0 && i == 0) first else null) { onKey(c.toString()) }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
+        Row(horizontalArrangement = Arrangement.spacedBy(u(6f))) {
             Key(if (symbols) "abc" else "?#+", Modifier.weight(1.4f)) { symbols = !symbols }
             Key("space", Modifier.weight(4f), label = "␣") { onKey(" ") }
             Key("delete", Modifier.weight(1.4f), icon = Icons.AutoMirrored.Rounded.Backspace) { onBackspace() }
             Key("clear", Modifier.weight(1.4f), icon = Icons.Rounded.Close) { onClear() }
         }
-        Key("Done", Modifier.fillMaxWidth(), label = "↵  Done", accent = true) { onDone() }
+        Key("Search", Modifier.fillMaxWidth(), label = "↵  Search", accent = true) { onDone() }
     }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
 }
@@ -303,8 +382,8 @@ private fun Key(text: String, modifier: Modifier, focus: FocusRequester? = null,
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     Box(
-        modifier.height(u(20f)).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
-            .clip(RoundedCornerShape(u(4f)))
+        modifier.height(u(32f)).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+            .clip(RoundedCornerShape(u(6f)))
             .background(
                 when {
                     focused -> HarborColors.Ink
@@ -316,8 +395,8 @@ private fun Key(text: String, modifier: Modifier, focus: FocusRequester? = null,
         contentAlignment = Alignment.Center,
     ) {
         val ink = if (focused || accent) HarborColors.Canvas else HarborColors.Ink
-        if (icon != null) Icon(icon, text, tint = ink, modifier = Modifier.size(u(10f)))
-        else Text(label ?: text, color = ink, fontSize = s(8.5f), fontWeight = FontWeight.SemiBold)
+        if (icon != null) Icon(icon, text, tint = ink, modifier = Modifier.size(u(17f)))
+        else Text(label ?: text, color = ink, fontSize = s(15f), fontWeight = FontWeight.SemiBold)
     }
 }
 
