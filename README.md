@@ -116,11 +116,21 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 <tr>
 <td width="50%" align="center">
 <img src="/docs/media/android/tv-home.jpg" width="100%"><br/>
-<sub><b>Android TV</b> &middot; Big Picture Home, made for the remote.</sub>
+<sub><b>Android TV</b> &middot; Big Picture Home with the menu across the top.</sub>
 </td>
 <td width="50%" align="center">
-<img src="/docs/media/android/tv-discover.jpg" width="100%"><br/>
-<sub><b>Android TV</b> &middot; Discover from the top bar.</sub>
+<img src="/docs/media/android/tv-sidebar.jpg" width="100%"><br/>
+<sub><b>Android TV</b> &middot; Or the menu down the left side (Settings &gt; Home &gt; Menu position).</sub>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center">
+<img src="/docs/media/android/tv-awards.jpg" width="100%"><br/>
+<sub><b>Android TV</b> &middot; Award pages, made for the remote.</sub>
+</td>
+<td width="50%" align="center">
+<img src="/docs/media/android/tv-settings.jpg" width="100%"><br/>
+<sub><b>Android TV</b> &middot; Settings, with description, title, and poster language.</sub>
 </td>
 </tr>
 </table>
