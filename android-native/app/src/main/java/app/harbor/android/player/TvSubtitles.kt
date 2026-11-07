@@ -222,12 +222,15 @@ private fun TracksLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerAc
     }
     val seed = remember { FocusRequester() }
     val listState = rememberLazyListState()
-    // The ring starts on what's on (or No subtitles), as Big Picture seeds the selected line.
-    LaunchedEffect(Unit) {
+    // The ring starts on what's on (or No subtitles), as Big Picture seeds the selected line. An addon
+    // subtitle that's on may only be listed once the addons answer: then it seeds when they do.
+    var seeded by remember { mutableStateOf(false) }
+    LaunchedEffect(state.addonSubs != null) {
+        if (seeded) return@LaunchedEffect
         val at = visible.indexOfFirst { it.on }
         if (at >= 0) listState.scrollToItem(at + 2) // Past the two rails, to No subtitles' place.
         delay(60)
-        runCatching { seed.requestFocus() }
+        seeded = runCatching { seed.requestFocus() }.isSuccess
     }
     LazyColumn(Modifier.fillMaxWidth(), state = listState, contentPadding = PaddingValues(bottom = u(18f)), verticalArrangement = Arrangement.spacedBy(u(6f))) {
         item {
@@ -284,7 +287,9 @@ private fun FindLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActi
     LaunchedEffect(runs) {
         results = null
         pending = 2
-        actions.findSubtitles(query) { found, left -> results = found; pending = left }
+        // Only this search's answers count: a slower earlier search can't overwrite a newer one.
+        val mine = runs
+        actions.findSubtitles(query) { found, left -> if (mine == runs) { results = found; pending = left } }
     }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
     val added = state.addonSubs.orEmpty().map { it.url }.toSet()

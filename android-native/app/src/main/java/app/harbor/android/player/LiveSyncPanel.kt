@@ -194,9 +194,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.PanelBody(session: Li
             val visible = listState.layoutInfo.visibleItemsInfo
             val inView = visible.size > 4 && activeIndex in (visible.first().index + 1)..(visible.last().index - 2)
             if (!inView) {
+                // A new line can restart this mid-scroll: the flag must still come down, or the list
+                // would keep following and never let you scroll it yourself.
                 programmatic = true
-                listState.animateScrollToItem((activeIndex - 2).coerceAtLeast(0))
-                programmatic = false
+                try { listState.animateScrollToItem((activeIndex - 2).coerceAtLeast(0)) } finally { programmatic = false }
             }
         }
         LaunchedEffect(query) { if (query.isNotBlank()) listState.scrollToItem(0) }

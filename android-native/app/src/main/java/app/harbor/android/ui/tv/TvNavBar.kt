@@ -19,9 +19,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -136,28 +139,7 @@ internal fun TvNavBar(
 ) {
     val repository = (LocalContext.current.applicationContext as HarborApp).repository
     val profile = repository.activeProfile.collectAsState().value
-    val homeView = route == Tab.Home.route
-    val pages = ExtraPage.entries
-    val pluginsInstalled = app.harbor.android.data.plugins.Plugins.state.collectAsState().value.installed.isNotEmpty()
-    val items = buildList {
-        add(NavItem(TvNavState.KEY_HOME, "Home", BrowseView.Home.glyph, homeView && view == BrowseView.Home) { onView(BrowseView.Home) })
-        add(NavItem(ExtraPage.DiscoverPage.route, "Discover", ExtraPage.DiscoverPage.glyph, route == ExtraPage.DiscoverPage.route) { onPage(ExtraPage.DiscoverPage.route) })
-        if (!HarborDisplay.settings.hideAnime) add(NavItem("anime", "Anime", BrowseView.Anime.glyph, homeView && view == BrowseView.Anime) { onView(BrowseView.Anime) })
-        add(NavItem("shows", "Shows", BrowseView.Shows.glyph, homeView && view == BrowseView.Shows) { onView(BrowseView.Shows) })
-        add(NavItem("movies", "Movies", BrowseView.Movies.glyph, homeView && view == BrowseView.Movies) { onView(BrowseView.Movies) })
-        add(NavItem(Tab.Search.route, "Search", Tab.Search.glyph, route == Tab.Search.route) { onSelect(Tab.Search) })
-        add(NavItem(Tab.MyStuff.route, "Library", Tab.MyStuff.glyph, route == Tab.MyStuff.route) { onSelect(Tab.MyStuff) })
-        add(NavItem(ExtraPage.CollectionsPage.route, "Collections", ExtraPage.CollectionsPage.glyph, route == ExtraPage.CollectionsPage.route) { onPage(ExtraPage.CollectionsPage.route) })
-        // Android-only: with the tablet search panel gone on TV, the bar is Downloads' only way in.
-        // (Calendar stays on Discover's header.)
-        add(NavItem(ExtraPage.DownloadsPage.route, "Downloads", ExtraPage.DownloadsPage.glyph, route == ExtraPage.DownloadsPage.route) { onPage(ExtraPage.DownloadsPage.route) })
-        // As SideRail: Plugins only once a plugin is installed.
-        if (pluginsInstalled) {
-            val p = pages[4]
-            add(NavItem(p.route, p.label, p.glyph, route == p.route || route?.startsWith("plugintitle") == true) { onPage(p.route) })
-        }
-    }
-    val gear = NavItem(Tab.Profile.route, "Settings", Tab.Profile.glyph, route == Tab.Profile.route) { onSelect(Tab.Profile) }
+    val (items, gear) = navItems(route, view, onSelect, onView, onPage)
     state.activeKey = (items + gear).firstOrNull { it.on }?.key ?: TvNavState.KEY_HOME
 
     var rowFocused by remember { mutableStateOf(false) }
@@ -199,6 +181,151 @@ internal fun TvNavBar(
         Spacer(Modifier.width(8.dp))
         NetworkGlyph()
         Clock()
+    }
+}
+
+/** The menu's items, shared by the top bar and the left side bar, and the gear that ends them. */
+@Composable
+private fun navItems(
+    route: String?,
+    view: BrowseView,
+    onSelect: (Tab) -> Unit,
+    onView: (BrowseView) -> Unit,
+    onPage: (String) -> Unit,
+): Pair<List<NavItem>, NavItem> {
+    val homeView = route == Tab.Home.route
+    val pages = ExtraPage.entries
+    val pluginsInstalled = app.harbor.android.data.plugins.Plugins.state.collectAsState().value.installed.isNotEmpty()
+    val items = buildList {
+        add(NavItem(TvNavState.KEY_HOME, "Home", BrowseView.Home.glyph, homeView && view == BrowseView.Home) { onView(BrowseView.Home) })
+        add(NavItem(ExtraPage.DiscoverPage.route, "Discover", ExtraPage.DiscoverPage.glyph, route == ExtraPage.DiscoverPage.route) { onPage(ExtraPage.DiscoverPage.route) })
+        if (!HarborDisplay.settings.hideAnime) add(NavItem("anime", "Anime", BrowseView.Anime.glyph, homeView && view == BrowseView.Anime) { onView(BrowseView.Anime) })
+        add(NavItem("shows", "Shows", BrowseView.Shows.glyph, homeView && view == BrowseView.Shows) { onView(BrowseView.Shows) })
+        add(NavItem("movies", "Movies", BrowseView.Movies.glyph, homeView && view == BrowseView.Movies) { onView(BrowseView.Movies) })
+        add(NavItem(Tab.Search.route, "Search", Tab.Search.glyph, route == Tab.Search.route) { onSelect(Tab.Search) })
+        add(NavItem(Tab.MyStuff.route, "Library", Tab.MyStuff.glyph, route == Tab.MyStuff.route) { onSelect(Tab.MyStuff) })
+        add(NavItem(ExtraPage.CollectionsPage.route, "Collections", ExtraPage.CollectionsPage.glyph, route == ExtraPage.CollectionsPage.route) { onPage(ExtraPage.CollectionsPage.route) })
+        // Android-only: with the tablet search panel gone on TV, the bar is Downloads' only way in.
+        // (Calendar stays on Discover's header.)
+        add(NavItem(ExtraPage.DownloadsPage.route, "Downloads", ExtraPage.DownloadsPage.glyph, route == ExtraPage.DownloadsPage.route) { onPage(ExtraPage.DownloadsPage.route) })
+        // As SideRail: Plugins only once a plugin is installed.
+        if (pluginsInstalled) {
+            val p = pages[4]
+            add(NavItem(p.route, p.label, p.glyph, route == p.route || route?.startsWith("plugintitle") == true) { onPage(p.route) })
+        }
+    }
+    val gear = NavItem(Tab.Profile.route, "Settings", Tab.Profile.glyph, route == Tab.Profile.route) { onSelect(Tab.Profile) }
+    return items to gear
+}
+
+/** The left side bar's width (Settings → Home → Menu position → Left side). */
+val TvSideWidth = 76.dp
+
+/**
+ * The menu down the left side, for those who prefer it to Big Picture's top bar: Harbor's mark, the
+ * same items as icons, then the profile and the gear at the foot. Right leaves for the page; the
+ * focused item shows its name beside it.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun TvSideBar(
+    route: String?,
+    view: BrowseView,
+    state: TvNavState,
+    onSelect: (Tab) -> Unit,
+    onView: (BrowseView) -> Unit,
+    onPage: (String) -> Unit,
+    onProfile: () -> Unit,
+    onExitRight: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val repository = (LocalContext.current.applicationContext as HarborApp).repository
+    val profile = repository.activeProfile.collectAsState().value
+    val (items, gear) = navItems(route, view, onSelect, onView, onPage)
+    state.activeKey = (items + gear).firstOrNull { it.on }?.key ?: TvNavState.KEY_HOME
+    var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    androidx.compose.foundation.layout.Column(
+        modifier.width(TvSideWidth + TvInsets.SafeX).fillMaxHeight().background(Color(0xFF0E0F11))
+            .padding(start = TvInsets.SafeX, top = TvInsets.SafeY + 14.dp, bottom = TvInsets.SafeY + 10.dp)
+            .onFocusChanged { focused = it.hasFocus }
+            .focusProperties { enter = { state.active() } }
+            .focusGroup()
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown || e.key.nativeKeyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return@onPreviewKeyEvent false
+                if (!focusManager.moveFocus(FocusDirection.Right)) onExitRight()
+                true
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(painterResource(R.drawable.harbor_mark), "Harbor", tint = HarborColors.Ink, modifier = Modifier.size(28.dp))
+        Spacer(Modifier.height(6.dp))
+        // Every item shows at once: on a short screen they share the height (44 dp at most), as the tablet rail.
+        items.forEach { SideTab(it, focused, state.requester(it.key)) }
+        Box(Modifier.padding(vertical = 2.dp).width(24.dp).height(1.dp).background(HarborColors.Ink.copy(alpha = 0.18f)))
+        ProfileSideTab(profile, state.requester("avatar"), onProfile)
+        SideTab(gear, focused, state.requester(gear.key))
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.SideTab(item: NavItem, barFocused: Boolean, requester: FocusRequester) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val fill = when {
+        focused -> HarborColors.Ink
+        item.on && barFocused -> HarborColors.Ink.copy(alpha = 0.22f).compositeOver(HarborColors.Canvas)
+        item.on -> HarborColors.Ink.copy(alpha = 0.10f)
+        else -> Color.Transparent
+    }
+    val tint = when {
+        focused -> HarborColors.Canvas
+        item.on -> HarborColors.Accent
+        else -> HarborColors.Ink.copy(alpha = 0.55f)
+    }
+    Box(Modifier.weight(1f, fill = false)) {
+        Box(
+            Modifier.sizeIn(maxWidth = 44.dp, maxHeight = 44.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
+                .focusRequester(requester).clip(RoundedCornerShape(10.dp)).background(fill)
+                .clickable(interactionSource = source, indication = HarborIndication, onClick = item.onClick),
+            contentAlignment = Alignment.Center,
+        ) { Icon(painterResource(item.glyph), item.label, tint = tint, modifier = Modifier.size(24.dp)) }
+        if (focused) SideHint(item.label, Modifier.align(Alignment.CenterEnd))
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.ColumnScope.ProfileSideTab(profile: app.harbor.android.data.Profile?, requester: FocusRequester, onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    Box(Modifier.weight(1f, fill = false)) {
+        Box(
+            Modifier.sizeIn(maxWidth = 44.dp, maxHeight = 44.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
+                .focusRequester(requester).clip(CircleShape)
+                .background(if (focused) HarborColors.Ink else Color.Transparent)
+                .clickable(interactionSource = source, indication = HarborIndication, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) { ProfileAvatar(profile, 34.dp) }
+        if (focused) SideHint(profile?.name ?: "Profile", Modifier.align(Alignment.CenterEnd))
+    }
+}
+
+/** The focused item's name, to its right, as a zero-size overlay so the bar never re-lays out. */
+@Composable
+private fun SideHint(label: String, modifier: Modifier) {
+    Box(
+        modifier.layout { measurable, _ ->
+            val p = measurable.measure(Constraints())
+            layout(0, 0) { p.place(10.dp.roundToPx(), -p.height / 2) }
+        },
+    ) {
+        Text(
+            label, color = HarborColors.Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
+            modifier = Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Elevated)
+                .border(1.dp, HarborColors.Ink.copy(alpha = 0.18f), RoundedCornerShape(50))
+                .padding(horizontal = 10.dp, vertical = 3.dp),
+        )
     }
 }
 

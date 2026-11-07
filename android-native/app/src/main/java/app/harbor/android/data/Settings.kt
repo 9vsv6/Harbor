@@ -365,6 +365,8 @@ data class AppSettings(
     val heroAutoRotate: Boolean = true,
     /** Big Picture's Edge margin on a TV: the share of the screen kept clear for overscan (0 to 0.05). */
     val tvOverscan: Float = 0.05f,
+    /** TV: the menu across the top (Big Picture's bar, the default) or down the left side ("left"). */
+    val tvNavSide: String = "top",
     val hideUnreleased: Boolean = false,
     val hideAnime: Boolean = false,
     val traktInContinueWatching: Boolean = true,

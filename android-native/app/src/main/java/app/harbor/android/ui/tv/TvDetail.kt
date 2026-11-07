@@ -188,7 +188,8 @@ fun TvCastRow(cast: List<CastMember>) {
             horizontalArrangement = Arrangement.spacedBy(u(10f)),
         ) {
             items(cast.take(24)) { person ->
-                TvTileBox(u(96f), 96f / 190f, u(4f), null, onFocused = {}, onClick = {}) { _ ->
+                val openPage = app.harbor.android.ui.LocalOpenPage.current
+                TvTileBox(u(96f), 96f / 190f, u(4f), null, onFocused = {}, onClick = { openPage(app.harbor.android.ui.PeopleRoutes.person(person.id, person.name)) }) { _ ->
                     Column(Modifier.fillMaxSize()) {
                         Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f).background(app.harbor.android.ui.HarborColors.Elevated), contentAlignment = Alignment.Center) {
                             if (person.photo != null) AsyncImage(person.photo, person.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())

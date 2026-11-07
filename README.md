@@ -69,7 +69,8 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 
 **Harbor for Android** brings Harbor to phones, tablets, and Android TV as a native app, not a web view. Out of the box it runs on Cinemeta. Add a free TMDB key and it grows into a full companion for finding and watching what you love.
 
-- **One app, three layouts.** A phone layout with an edge-to-edge hero, section icons across the top, and Search, Home, and your profile at the bottom; a tablet layout with a side rail; and Harbor's Big Picture layout on Android TV, driven entirely by the remote.
+- **One app, three layouts.** On phones, a full-width banner with Home, Movies, Shows, Anime, and Discover as labelled tabs at the bottom, and Search and your profile at the top; on tablets, a side rail; on Android TV, Harbor's Big Picture layout with the menu across the top or down the left side, driven entirely by the remote.
+- **People and awards.** Tap anyone in the cast or crew for their photo, biography, awards, and filmography. Every award (Oscars, Emmys, Golden Globes, BAFTA, Cannes and more) has its own page of winners and nominees by year.
 - **A native player.** mpv on phones and tablets, with shaders, Anime4K upscaling, subtitle styling, and live subtitle sync. Android TV plays through Media3 and the TV's own hardware decoders, so streams start reliably even on modest TVs.
 - **Harbor's stream ranking.** The same Rust core as Harbor on the desktop parses every stream, filters out fakes, and ranks the best sources first, with "Cached on" labels for your debrid service.
 - **Subtitles done right.** Subtitles from your addons and from OpenSubtitles, SubDL, SubSource, and Wyzie, named the way Harbor PC names them and filtered to your languages.
@@ -88,15 +89,15 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 <tr>
 <td width="33%" align="center">
 <img src="/docs/media/android/phone-home.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Home: the hero runs edge to edge under the section icons.</sub>
+<sub><b>Phone</b> &middot; Home, with every section a labelled tab at the bottom.</sub>
 </td>
 <td width="33%" align="center">
 <img src="/docs/media/android/phone-menu.jpg" width="100%"><br/>
 <sub><b>Phone</b> &middot; Your picture opens Library, Downloads, Calendar, and Settings.</sub>
 </td>
 <td width="33%" align="center">
-<img src="/docs/media/android/phone-discover.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Discover, one tap away in the section bar.</sub>
+<img src="/docs/media/android/phone-awards.jpg" width="100%"><br/>
+<sub><b>Phone</b> &middot; Award pages: every year's winners and nominees.</sub>
 </td>
 </tr>
 </table>
@@ -158,9 +159,11 @@ Profiles, app language, poster badges, accent colour and fonts, the home rows yo
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Home**       | A rotating hero, Continue Watching, Top 10 on Stremio, and Harbor PC's rows: Popular Movies, Trending Series, Action Hits, Sci-Fi & Fantasy, and more    |
 | **Details**    | The title's logo, IMDb and Simkl scores, awards, cast and crew, seasons and episodes, trailers, and your lists                                           |
+| **People**     | Photo, biography, awards, Known For, and the full filmography by role, sortable by popularity, rating, or newest (needs a TMDB key)                     |
+| **Awards**     | 18 awards with their winners by year, headline winners as posters, and every category with its nominees                                                 |
 | **Streams**    | Sources from your addons ranked by Harbor's Rust core, quality and size tags, and "In TorBox" / "Cached on" labels for debrid                            |
 | **Player**     | mpv (phones and tablets) or Media3 (TV), subtitle search, styling and sync, audio tracks, and playback speed                                             |
-| **Android TV** | Harbor's Big Picture layout, an on-screen keyboard for search, and panels built for the remote                                                           |
+| **Android TV** | Harbor's Big Picture layout with the menu on top or on the left, an on-screen keyboard for search, and panels built for the remote                       |
 | **Accounts**   | Stremio, Harbor account, Trakt, and Simkl                                                                                                                |
 | **Settings**   | Profiles, languages, subtitles, player, poster badges, streaming services, keys, backups, and updates                                                    |
 

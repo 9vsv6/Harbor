@@ -263,9 +263,11 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                         seekDelta = 0
                     },
                     onDragEnd = {
-                        if (axis == 1) actions.seekTo((seekFrom + seekDelta).coerceIn(0, state.durationMs))
+                        // Under a second is a nudge (or the start of a pinch), not a seek.
+                        if (axis == 1 && abs(seekDelta) >= 1_000 && state.durationMs > 0) actions.seekTo((seekFrom + seekDelta).coerceIn(0, state.durationMs))
                         axis = 0
                     },
+                    onDragCancel = { axis = 0 },
                 ) { change, drag ->
                     change.consume()
                     if (axis == 0) axis = if (abs(drag.x) > abs(drag.y)) 1 else 2

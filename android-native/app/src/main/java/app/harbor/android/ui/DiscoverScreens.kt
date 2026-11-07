@@ -3,6 +3,7 @@ package app.harbor.android.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CollectionsBookmark
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -91,11 +93,16 @@ enum class ExtraPage(val route: String, val label: String, val icon: androidx.co
 
 @Composable
 private fun PageHeader(title: String, onBack: (() -> Unit)?, trailing: @Composable () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = HarborColors.Ink) }
-        else Spacer(Modifier.width(8.dp))
-        Text(title, color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp, modifier = Modifier.weight(1f))
-        trailing()
+    // Phones: the buttons go on their own scrolling line under the title, so the title never wraps.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = HarborColors.Ink) }
+            else Spacer(Modifier.width(8.dp))
+            Text(title, color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp, maxLines = 1, modifier = Modifier.weight(1f))
+            if (!narrow) trailing()
+        }
+        if (narrow) Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(start = 8.dp)) { trailing() }
     }
 }
 
@@ -150,6 +157,7 @@ fun DiscoverScreen(
             PageHeader("Discover", onBack) {
                 HeaderChip("Calendar", Icons.Outlined.CalendarMonth) { open("calendar") }
                 HeaderChip("Collections", Icons.Outlined.CollectionsBookmark) { open("collections") }
+                HeaderChip("Awards", Icons.Outlined.EmojiEvents) { open(PeopleRoutes.AWARDS) }
             }
         }
         shelves.forEachIndexed { i, shelf ->

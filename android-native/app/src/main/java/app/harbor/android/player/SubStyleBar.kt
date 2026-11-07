@@ -121,7 +121,7 @@ internal fun SubStyleBar(state: PlayerState, prefs: PlayerPrefs, actions: Player
         ) {
             // Font · size · bold.
             Group {
-                FontMenu(s.subFont) { f -> settings { it.copy(subFont = f) } }
+                FontMenu(s.subFont, onOpen = { menuOpen = it }) { f -> settings { it.copy(subFont = f) } }
                 Divider()
                 SizeStepper(px(prefs), ::size)
                 Divider()
@@ -162,8 +162,10 @@ private fun Group(content: @Composable () -> Unit) {
 private fun Divider() = Box(Modifier.width(1.dp).height(24.dp).background(Edge))
 
 @Composable
-private fun FontMenu(value: String, onPick: (String) -> Unit) {
+private fun FontMenu(value: String, onOpen: (Boolean) -> Unit, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    // While the font list is open the bar doesn't close itself (as MoreColors and Advanced).
+    LaunchedEffect(open) { onOpen(open) }
     val label = FONTS.firstOrNull { it.first == value }?.second ?: value.substringAfterLast('/').substringBeforeLast('.')
     Box {
         Row(
@@ -190,6 +192,9 @@ private fun FontMenu(value: String, onPick: (String) -> Unit) {
 @Composable
 private fun SizeStepper(value: Int, onChange: (Int) -> Unit) {
     var dragStart by remember { mutableStateOf(0f) }
+    // The drag outlives compositions: it reads the size as it is now, not as it was when it began.
+    val current by androidx.compose.runtime.rememberUpdatedState(value)
+    val change by androidx.compose.runtime.rememberUpdatedState(onChange)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(30.dp, 44.dp).clickable { onChange(value - 1) }, contentAlignment = Alignment.Center) {
             Text("A", color = InkMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -200,7 +205,7 @@ private fun SizeStepper(value: Int, onChange: (Int) -> Unit) {
                     change.consume()
                     dragStart += dx
                     val steps = (dragStart / 18f).toInt()
-                    if (steps != 0) { onChange(value + steps); dragStart -= steps * 18f }
+                    if (steps != 0) { change(current + steps); dragStart -= steps * 18f }
                 }
             },
             contentAlignment = Alignment.Center,
@@ -264,7 +269,11 @@ private fun Looks(
         var draft by remember { mutableStateOf("") }
         fun create() {
             val name = draft.trim().ifEmpty { return }
-            val id = name.lowercase().replace(Regex("\\s+"), "-").take(24) + "-" + s.subLooks.size
+            // Unique even after looks are deleted (the count alone could repeat an id).
+            val stem = name.lowercase().replace(Regex("\\s+"), "-").take(24)
+            var n = s.subLooks.size
+            while (s.subLooks.any { it.id == "$stem-$n" }) n++
+            val id = "$stem-$n"
             settings { it.copy(subLooks = it.subLooks + now.copy(id = id, name = name)) }
             selectedId = id
             setNaming(false)

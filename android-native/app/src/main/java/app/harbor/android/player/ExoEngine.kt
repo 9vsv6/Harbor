@@ -94,14 +94,20 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                 listener?.onTracksChanged()
                 // With no decoder for the video track Media3 plays audio over black; say why instead.
                 val video = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
-                if (video.isNotEmpty() && video.none { g -> (0 until g.length).any { g.isTrackSupported(it) } }) {
+                // Once per video: track changes (a new audio track, say) fire this again.
+                if (!toldUnsupported && video.isNotEmpty() && video.none { g -> (0 until g.length).any { g.isTrackSupported(it) } }) {
+                    toldUnsupported = true
                     listener?.onError("This device can't decode ${describeVideo(video.first().getTrackFormat(0))} video.")
                 }
             }
         })
     }
 
+    /** Whether this video's "can't decode" message was already given. */
+    private var toldUnsupported = false
+
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
+        toldUnsupported = false
         // Data sources read the factory's properties when they open, so this covers the new item.
         http.setUserAgent(headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: Net.USER_AGENT)
         http.setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent", true) })
@@ -196,7 +202,11 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override val supportsShaders = false
     override fun setShaders(paths: List<String>) {}
 
-    override fun release() = player.release()
+    override fun release() {
+        // The view lets go first, so nothing in it touches the released player during teardown.
+        playerView.player = null
+        player.release()
+    }
 }
 
 private fun audioDetail(format: Format): String? {

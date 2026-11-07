@@ -11,13 +11,44 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
+import kotlinx.coroutines.sync.withPermit
 import java.util.Locale
 
 /** A person in a title's cast, for the detail page. */
-data class CastMember(val name: String, val character: String?, val photo: String?)
+data class CastMember(val name: String, val character: String?, val photo: String?, val id: Int? = null)
+
+/** A person's page (person.tsx): who they are, and every title they're credited on. */
+data class PersonDetail(
+    val id: Int,
+    val name: String,
+    val biography: String,
+    val birthday: String?,
+    val deathday: String?,
+    val placeOfBirth: String?,
+    val department: String,
+    val photo: String?,
+    val imdbId: String?,
+    val cast: List<PersonCredit>,
+    val crew: List<PersonCredit>,
+)
+
+/** One credit on a person's page; [meta] opens the title. */
+data class PersonCredit(
+    val meta: Meta,
+    val role: String?,
+    val department: String?,
+    val job: String?,
+    val popularity: Double,
+    val voteAverage: Double,
+    val voteCount: Int,
+    val episodes: Int?,
+    /** Billing order in the cast (0 is top-billed). */
+    val order: Int? = null,
+)
 
 /** What TMDB adds to a detail page: artwork, a translated overview, and the cast. */
 data class TmdbExtras(val backdrop: String?, val logo: String?, val overview: String?, val title: String?, val cast: List<CastMember>)
@@ -135,6 +166,64 @@ object Tmdb {
 
     suspend fun verify(key: String) {
         get(key, "/configuration")
+    }
+
+    /** Names seen in credits, to their TMDB person ids (and search answers, null for no match). */
+    private val personIds = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val personMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val people = java.util.concurrent.ConcurrentHashMap<Int, PersonDetail>()
+
+    fun knownPersonId(name: String): Int? = personIds[name.lowercase()]
+
+    /** A person's TMDB id by name (tmdbPersonIdByName): the most popular match, else none. */
+    suspend fun personIdByName(key: String, name: String): Int? {
+        val k = name.trim().lowercase()
+        personIds[k]?.let { return it }
+        if (k in personMisses) return null
+        val results = (get(key, "/search/person", mapOf("query" to name, "include_adult" to "false"))["results"] as? JsonArray).orEmpty().map { it.jsonObject }
+        val id = results.maxByOrNull { it["popularity"]?.jsonPrimitive?.doubleOrNull ?: 0.0 }?.get("id")?.jsonPrimitive?.intOrNull
+        if (id != null) personIds[k] = id else personMisses += k
+        return id
+    }
+
+    /** A person's page: their details and combined credits (tmdbPerson). */
+    suspend fun person(key: String, id: Int): PersonDetail {
+        people[id]?.let { return it }
+        val d = get(key, "/person/$id", mapOf("append_to_response" to "combined_credits,external_ids"))
+        // An empty biography in your language falls back to TMDB's English one, as Harbor does.
+        val bio = d.string("biography")?.takeIf { it.isNotBlank() }
+            ?: runCatching { get(key, "/person/$id", lang = "en-US").string("biography") }.getOrNull().orEmpty()
+        fun credits(name: String) = (d["combined_credits"].objectOrNull?.get(name) as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e.jsonObject
+            val meta = toMeta(o, null) ?: return@mapNotNull null
+            PersonCredit(
+                meta = meta,
+                role = o.string("character")?.takeIf { it.isNotBlank() },
+                department = o.string("department"),
+                job = o.string("job"),
+                popularity = o["popularity"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                voteAverage = o["vote_average"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                voteCount = o["vote_count"]?.jsonPrimitive?.intOrNull ?: 0,
+                episodes = o["episode_count"]?.jsonPrimitive?.intOrNull,
+                order = o["order"]?.jsonPrimitive?.intOrNull,
+            )
+        }
+        val person = PersonDetail(
+            id = id,
+            name = d.string("name").orEmpty(),
+            biography = bio,
+            birthday = d.string("birthday"),
+            deathday = d.string("deathday"),
+            placeOfBirth = d.string("place_of_birth"),
+            department = d.string("known_for_department").orEmpty(),
+            photo = d.string("profile_path")?.let { "$IMAGES/h632$it" },
+            imdbId = d.string("imdb_id") ?: d["external_ids"].objectOrNull?.string("imdb_id"),
+            cast = credits("cast"),
+            crew = credits("crew"),
+        )
+        people[id] = person
+        personIds.putIfAbsent(person.name.lowercase(), id)
+        return person
     }
 
     @kotlinx.serialization.Serializable
@@ -317,6 +406,9 @@ object Tmdb {
      */
     val localizes: Boolean get() = base(descLang) != "en" || titleLang?.let { base(it) != "en" } == true || posterBase != "en"
 
+    /** Whether IMDb cards need TMDB's title or poster: another language, or original release titles. */
+    val localizesCards: Boolean get() = titleLang == null || base(titleLang!!) != "en" || posterBase != "en"
+
     /**
      * Addon search results (IMDb titles, in English) in your title and poster languages: TMDB's own
      * search for the same words, asked in each language, matched to them by type, title and year.
@@ -354,6 +446,38 @@ object Tmdb {
                 poster = a?.string("poster_path")?.let { "$IMAGES/w342$it" } ?: meta.poster,
             )
         }
+    }
+
+    private val localCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String?, String?>>()
+    private val localGate = kotlinx.coroutines.sync.Semaphore(6)
+
+    /** A title's name and poster in your languages, if already looked up this run. */
+    fun cachedLocal(imdb: String, type: String): Pair<String?, String?>? = localCache["$type:$imdb"]
+
+    /**
+     * An IMDb title (a library item, an addon's catalog) in your title and poster languages, as Harbor
+     * PC's cards show them: TMDB's /find for the IMDb id, asked in each language that differs from
+     * English. Null parts keep the addon's own title or poster.
+     */
+    suspend fun localized(key: String, imdb: String, type: String): Pair<String?, String?> {
+        localCache["$type:$imdb"]?.let { return it }
+        // Title language "Original title": the name it was first released under.
+        val original = titleLang == null
+        val tl = if (original) "en-US" else titleLang?.takeIf { base(it) != "en" }
+        val pl = posterLang.takeIf { posterBase != "en" }
+        if (tl == null && pl == null) return (null to null).also { localCache["$type:$imdb"] = it }
+        val result = localGate.withPermit {
+            suspend fun find(lang: String): JsonObject? = runCatching {
+                val o = get(key, "/find/$imdb", mapOf("external_source" to "imdb_id"), lang)
+                ((if (type == "movie") o["movie_results"] else o["tv_results"]) as? JsonArray)?.firstOrNull()?.jsonObject
+            }.getOrNull()
+            val forTitle = tl?.let { find(it) }
+            val forPoster = if (pl != null && tl != null && base(pl) == base(tl)) forTitle else pl?.let { find(it) }
+            (forTitle?.let { if (original) it.string("original_title") ?: it.string("original_name") else it.string("title") ?: it.string("name") }?.takeIf { it.isNotBlank() }) to
+                forPoster?.string("poster_path")?.let { "$IMAGES/w342$it" }
+        }
+        localCache["$type:$imdb"] = result
+        return result
     }
 
     /** Details already fetched this session, per title and languages: a page opened again shows them at once. */
@@ -404,12 +528,14 @@ object Tmdb {
         val castJson = ((aggregate ?: credits)?.get("cast") as? JsonArray).orEmpty().map { it.jsonObject }
         val cast = castJson.take(60).map {
             val role = it.string("character") ?: (it["roles"] as? JsonArray)?.firstOrNull().objectOrNull?.string("character")
-            CastMember(it.string("name").orEmpty(), role?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w342$p" })
+            CastMember(it.string("name").orEmpty(), role?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w342$p" }, it["id"]?.jsonPrimitive?.intOrNull)
         }
         val crew = ((credits?.get("crew") as? JsonArray).orEmpty() + (aggregate?.get("crew") as? JsonArray).orEmpty()).map { it.jsonObject }
         fun jobsOf(person: JsonObject): List<String> = listOfNotNull(person.string("job")) +
             (person["jobs"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("job") }
         fun job(vararg jobs: String) = crew.filter { p -> jobsOf(p).any { it in jobs } }.mapNotNull { it.string("name") }.distinct()
+        // The crew's names to their TMDB ids, so the names on the page open their person pages.
+        crew.forEach { c -> val n = c.string("name"); val i = c["id"]?.jsonPrimitive?.intOrNull; if (n != null && i != null) personIds.putIfAbsent(n.lowercase(), i) }
         val trailer = (d["videos"].objectOrNull?.get("results") as? JsonArray).orEmpty().map { it.jsonObject }
             .firstOrNull { it.string("site") == "YouTube" && it.string("type") == "Trailer" }?.string("key")
         val creators = (d["created_by"] as? JsonArray).orEmpty().mapNotNull { it.jsonObject.string("name") }
@@ -593,7 +719,7 @@ object Tmdb {
         val logo = (logos.firstOrNull { it.string("iso_639_1") == lang } ?: logos.firstOrNull { it.string("iso_639_1") == "en" } ?: logos.firstOrNull())
             ?.string("file_path")?.let { "$IMAGES/w500$it" }
         val cast = (details["credits"].objectOrNull?.get("cast") as? JsonArray).orEmpty().take(20).map { it.jsonObject }.map {
-            CastMember(it.string("name").orEmpty(), it.string("character")?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w185$p" })
+            CastMember(it.string("name").orEmpty(), it.string("character")?.takeIf { c -> c.isNotBlank() }, it.string("profile_path")?.let { p -> "$IMAGES/w185$p" }, it["id"]?.jsonPrimitive?.intOrNull)
         }
         return TmdbExtras(
             backdrop = details.string("backdrop_path")?.let { "$IMAGES/w1280$it" },

@@ -103,7 +103,7 @@ internal fun EndScreen(state: PlayerState, actions: PlayerActions) {
             val left = state.endCountdown ?: break
             if (left <= 1) {
                 state.endCountdown = 0
-                val pick = state.endItems.getOrNull(state.endFocused)
+                val pick = state.endItems.getOrNull(state.endFocused.coerceIn(0, (state.endItems.size - 1).coerceAtLeast(0)))
                 when {
                     state.settings.endScreenOnZero == "play" && pick != null -> actions.endScreenPlay(pick)
                     // Closing is only safe once the film has finished; early, the card steps aside.
@@ -128,6 +128,8 @@ internal fun EndScreen(state: PlayerState, actions: PlayerActions) {
         val miniBottom = 16.dp
         val shrink = mode == EndScreenMode.Shrink
         // The real video is scaled into this corner (PlayerActivity); the page cuts the same hole.
+        // However the end screen goes away, the video comes back to full size.
+        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { actions.shrinkVideo(0f, 0f, 1f) } }
         LaunchedEffect(shrink, miniW, miniH) {
             with(density) {
                 if (shrink) actions.shrinkVideo(gutter.toPx(), miniBottom.toPx(), miniW.toPx() / pageW.toPx())

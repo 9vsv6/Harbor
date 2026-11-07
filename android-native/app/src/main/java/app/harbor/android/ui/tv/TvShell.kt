@@ -51,6 +51,8 @@ internal fun TvShell(
     val contentFocus = remember { FocusRequester() }
     var barFocused by remember { mutableStateOf(false) }
     val showBar = route in barRoutes
+    // Settings → Home → Menu position: Big Picture's top bar, or the menu down the left side.
+    val side = showBar && app.harbor.android.ui.HarborDisplay.settings.tvNavSide == "left"
     val home = route == Tab.Home.route
     // Pages that draw their own ambient backdrop under the bar.
     val fullBleed = home || route == DETAIL_ROUTE || route?.startsWith("streams/") == true
@@ -64,11 +66,16 @@ internal fun TvShell(
         Box(
             Modifier.fillMaxSize()
                 .then(
-                    if (fullBleed) Modifier
-                    else Modifier.padding(
-                        start = TvInsets.SafeX, end = TvInsets.SafeX, bottom = TvInsets.SafeY,
-                        top = if (showBar) TvInsets.BarHeight else TvInsets.SafeY,
-                    ),
+                    when {
+                        // The side bar takes the left edge; pages start to its right and run to the top.
+                        side && fullBleed -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX)
+                        side -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX + 8.dp, end = TvInsets.SafeX, bottom = TvInsets.SafeY, top = TvInsets.SafeY)
+                        fullBleed -> Modifier
+                        else -> Modifier.padding(
+                            start = TvInsets.SafeX, end = TvInsets.SafeX, bottom = TvInsets.SafeY,
+                            top = if (showBar) TvInsets.BarHeight else TvInsets.SafeY,
+                        )
+                    },
                 )
                 .focusRequester(contentFocus)
                 .focusGroup(),
@@ -76,7 +83,14 @@ internal fun TvShell(
             // Lists follow the remote at once on a slow TV (see tvScrollSpec); pages with their own rule override it.
             androidx.compose.runtime.CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides TvDefaultScroll) { content() }
         }
-        if (showBar) {
+        if (side) {
+            TvSideBar(
+                route, view, state,
+                onSelect = onSelect, onView = onView, onPage = onPage, onProfile = onProfile,
+                onExitRight = { runCatching { contentFocus.requestFocus() } },
+                modifier = Modifier.onFocusChanged { barFocused = it.hasFocus },
+            )
+        } else if (showBar) {
             // Home's backdrop runs under the bar: one Canvas-to-clear fill keeps the tabs legible.
             // Always drawn (one flat gradient is cheap, and without it the hero's meta row collides
             // with the icons at 3 m even on the low-end profile).

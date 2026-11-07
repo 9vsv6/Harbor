@@ -675,9 +675,15 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun release() {
         calls.shutdownNow()
         subtitleWork.shutdownNow()
-        runCatching { subtitleWork.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
         mpv.removeObserver(this)
-        runCatching { mpv.destroy() }
+        // A subtitle download or a queued call can still be inside mpv: free it once they've finished,
+        // off the main thread, so closing the player never stalls the screen or frees mpv under a
+        // running command (each engine has its own mpv, so the next video isn't touched).
+        Thread({
+            runCatching { calls.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS) }
+            runCatching { subtitleWork.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS) }
+            runCatching { mpv.destroy() }
+        }, "mpv-release").apply { isDaemon = true }.start()
     }
 }
 

@@ -58,7 +58,13 @@ object Downloads {
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         val ext = url.substringBefore('?').substringAfterLast('.', "mkv").takeIf { it.length in 2..4 } ?: "mkv"
         val name = title.replace(Regex("""[\\/:*?"<>|]"""), " ").replace(Regex("\\s+"), " ").trim().take(90) + "." + ext
-        val target = File(dir, name)
+        // Never the same file as another download (two episodes saved under one title, say).
+        var target = File(dir, name)
+        var n = 2
+        while (target.exists() || saved(context).any { it.file == target.absolutePath }) {
+            target = File(dir, name.substringBeforeLast('.') + " ($n)." + ext)
+            n++
+        }
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle(title)
             .setDescription("Harbor")
@@ -66,7 +72,7 @@ object Downloads {
             .setDestinationUri(Uri.fromFile(target))
             .setAllowedOverMetered(true)
         val id = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        store(context, saved(context) + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath))
+        synchronized(this) { store(context, saved(context) + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath)) }
         return id
     }
 
@@ -95,7 +101,7 @@ object Downloads {
     fun remove(context: Context, item: SavedDownload) {
         runCatching { (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).remove(item.downloadId) }
         runCatching { File(item.file).delete() }
-        store(context, saved(context).filterNot { it.downloadId == item.downloadId })
+        synchronized(this) { store(context, saved(context).filterNot { it.downloadId == item.downloadId }) }
     }
 
     /** A finished download of this video, to play instead of streaming. */

@@ -84,8 +84,9 @@ object Playback {
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
         val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service), anime)
         val ordered = if (core != null && core.order.isNotEmpty()) {
-            val top = core.primary?.let { kept[it] }
-            val list = core.order.map { kept[it] }
+            // Indices from the core are checked: a bad one is skipped rather than crashing the sources list.
+            val top = core.primary?.let { kept.getOrNull(it) }
+            val list = core.order.mapNotNull { kept.getOrNull(it) }
             // The desktop opens on its top pick; then playable sources before ones that can't play here.
             (listOfNotNull(top) + (list - setOfNotNull(top))).sortedByDescending { playable(it.stream) }
         } else if (settings.streamSort == "addon") {

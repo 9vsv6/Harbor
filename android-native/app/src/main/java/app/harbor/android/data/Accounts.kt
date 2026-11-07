@@ -305,7 +305,9 @@ class Accounts(private val repository: Repository) {
     suspend fun refreshPmdb() {
         val s = _pmdb.value ?: return
         runCatching { PublicMetaDb.watchedIds(s) }.getOrNull()?.let { if (_pmdb.value == s) _pmdbWatched.value = it }
-        _pmdbCw.value = if (repository.settings.value.pmdbInContinueWatching) runCatching { PublicMetaDb.continueWatching(s) }.getOrDefault(emptyList()) else emptyList()
+        val cw = if (repository.settings.value.pmdbInContinueWatching) runCatching { PublicMetaDb.continueWatching(s) }.getOrDefault(emptyList()) else emptyList()
+        // Disconnected (or another account) meanwhile: this answer is stale.
+        if (_pmdb.value == s) _pmdbCw.value = cw
     }
 
     private val lastPush = java.util.concurrent.ConcurrentHashMap<String, Long>()

@@ -412,12 +412,19 @@ private fun EntriesTab(
     val list = entries ?: run { Loading(Modifier.padding(top = 80.dp)); return }
     if (list.isEmpty()) { EmptyState("Nothing here yet", "Your list on this service is empty, or it couldn't be reached."); return }
     fun update(e: ListEntry, status: String? = null, progress: Int? = null) {
-        entries = list.map { if (it.mediaId == e.mediaId) it.copy(status = status ?: it.status, progress = progress ?: it.progress) else it }
+        // Against the latest list, so quick taps each count (not all from the same old number).
+        entries = entries?.map { if (it.mediaId == e.mediaId) it.copy(status = status ?: it.status, progress = progress ?: it.progress) else it }
         scope.launch { save(e, status, progress) }
+    }
+    /** One episode more or less, from the progress as it is now. */
+    fun step(e: ListEntry, by: Int) {
+        val now = entries?.firstOrNull { it.mediaId == e.mediaId }?.progress ?: e.progress
+        val next = (now + by).coerceAtLeast(0).let { n -> e.episodes?.let { n.coerceAtMost(it) } ?: n }
+        if (next != now) update(e, progress = next)
     }
     fun updatePrivate(e: ListEntry, isPrivate: Boolean) {
         val save = setPrivate ?: return
-        entries = list.map { if (it.mediaId == e.mediaId) it.copy(isPrivate = isPrivate) else it }
+        entries = entries?.map { if (it.mediaId == e.mediaId) it.copy(isPrivate = isPrivate) else it }
         scope.launch {
             // A failed save puts the flag back, as Harbor's commitPrivate does.
             if (runCatching { save(e, isPrivate) }.isFailure) entries = entries?.map { if (it.mediaId == e.mediaId) it.copy(isPrivate = e.isPrivate) else it }
@@ -461,12 +468,12 @@ private fun EntriesTab(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(Icons.Rounded.Remove, "One less", tint = if (e.progress > 0) HarborColors.Ink else HarborColors.InkSubtle,
-                            modifier = Modifier.size(40.dp).clickable(enabled = e.progress > 0) { update(e, progress = e.progress - 1) }.padding(10.dp))
+                            modifier = Modifier.size(40.dp).clickable(enabled = e.progress > 0) { step(e, -1) }.padding(10.dp))
                         Text("${e.progress} / ${e.episodes ?: "?"}", color = HarborColors.Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp,
                             modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
                         val more = e.episodes == null || e.progress < e.episodes
                         Icon(Icons.Rounded.Add, "One more", tint = if (more) HarborColors.Ink else HarborColors.InkSubtle,
-                            modifier = Modifier.size(40.dp).clickable(enabled = more) { update(e, progress = e.progress + 1) }.padding(10.dp))
+                            modifier = Modifier.size(40.dp).clickable(enabled = more) { step(e, 1) }.padding(10.dp))
                     }
                 }
             }

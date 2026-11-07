@@ -197,7 +197,10 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                     }
                 }
             }
-            SettingsPane(active, settings, prefs, autoPlay, connected, subLangs, subPx, Modifier.weight(1f))
+            // The summary on the right shows from the category list; inside a category only the
+            // picture and subtitle previews stay, since they show what's being changed.
+            if (depth == 1 || active == Cat.Picture || active == Cat.Subtitles) SettingsPane(active, settings, prefs, autoPlay, connected, subLangs, subPx, Modifier.weight(1f))
+            else androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
         }
         LaunchedEffect(depth) { runCatching { firstFocus.requestFocus() } }
     }
@@ -223,7 +226,12 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
     )
     Cat.Language -> listOf(
         Control.Options("appLanguage", "App language", s.appLanguage, app.harbor.android.i18n.UiLanguages.all.map { Opt(it.code, it.native) }),
-        Control.Options("detailsLanguage", "Details language", s.metadataLanguage, listOf(Opt("", "Device")) + Languages.all.map { Opt(it.code, it.name) }),
+        Control.Options("detailsLanguage", "Description language", s.metadataLanguage, listOf(Opt("", "Device")) + Languages.all.map { Opt(it.code, it.name) }),
+        Control.Options(
+            "titleLanguage", "Title language", if (s.titleLanguage.isEmpty() && !s.translateTitles) "original" else s.titleLanguage,
+            listOf(Opt("", "Device"), Opt("original", "Original title")) + Languages.all.map { Opt(it.code, it.name) },
+        ),
+        Control.Options("posterLanguage", "Poster language", s.imageLanguage, listOf(Opt("", "Device"), Opt("null", "No text")) + Languages.all.map { Opt(it.code, it.name) }),
     )
     Cat.Subtitles -> {
         val chosen = (listOf(p.subLanguage) + s.subtitleFallbacks).filter { it.isNotEmpty() }.distinct()
@@ -251,6 +259,7 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         Control.Options("heroRotate", "Rotate the top title", onOff(s.heroAutoRotate), OnOff),
         Control.Options("hideWatched", "Hide watched in catalogs", onOff(s.hideWatched), OnOff),
         Control.Options("top10", "Top 10 row", onOff(s.showTop10), OnOff),
+        Control.Options("navSide", "Menu position", s.tvNavSide, listOf(Opt("top", "Top bar"), Opt("left", "Left side"))),
     )
     Cat.Services -> listOf(
         Control.Multi("service", "Turn off what you do not have", StreamingServices.all.map { svc -> Triple(svc.key, svc.name, if (StreamingServices.isOn(s, svc)) 1 else 0) }, logos = true),
@@ -267,6 +276,8 @@ private fun commit(repository: Repository, id: String, value: String) {
     when (id) {
         "overscan" -> repository.updateSettings { it.copy(tvOverscan = value.toFloat()) }
         "detailsLanguage" -> repository.updateSettings { it.copy(metadataLanguage = value, translateOverviews = true) }
+        "titleLanguage" -> repository.updateSettings { it.copy(titleLanguage = value, translateTitles = true) }
+        "posterLanguage" -> repository.updateSettings { it.copy(imageLanguage = value) }
         "subSize" -> repository.updatePlayerPrefs { it.copy(subScale = (value.toFloat() / 46f).coerceIn(0.5f, 1.8f)) }
         "subLang" -> {
             val prefs = repository.playerPrefs.value
@@ -291,6 +302,7 @@ private fun commit(repository: Repository, id: String, value: String) {
         "heroRotate" -> repository.updateSettings { it.copy(heroAutoRotate = value == "on") }
         "hideWatched" -> repository.updateSettings { it.copy(hideWatched = value == "on") }
         "top10" -> repository.updateSettings { it.copy(showTop10 = value == "on") }
+        "navSide" -> repository.updateSettings { it.copy(tvNavSide = value) }
         "service" -> repository.updateSettings { s ->
             val svc = StreamingServices.all.first { it.key == value }
             s.copy(streaming = s.streaming + (value to !StreamingServices.isOn(s, svc)))
@@ -493,7 +505,16 @@ private fun SettingsPane(
             }
             else -> {
                 val rows: List<Pair<String, String>> = when (cat) {
-                    Cat.Language -> listOf("App language" to app.harbor.android.i18n.UiLanguages.of(s.appLanguage).native, "Details language" to (if (s.metadataLanguage.isEmpty()) "Same as the device" else langName(s.metadataLanguage)))
+                    Cat.Language -> listOf(
+                        "App language" to app.harbor.android.i18n.UiLanguages.of(s.appLanguage).native,
+                        "Description language" to (if (s.metadataLanguage.isEmpty()) "Same as the device" else langName(s.metadataLanguage)),
+                        "Title language" to when {
+                            s.titleLanguage == "original" || (s.titleLanguage.isEmpty() && !s.translateTitles) -> "Original title"
+                            s.titleLanguage.isEmpty() -> "Same as the device"
+                            else -> langName(s.titleLanguage)
+                        },
+                        "Poster language" to when (s.imageLanguage) { "" -> "Same as the device"; "null" -> "No text"; else -> langName(s.imageLanguage) },
+                    )
                     Cat.Playback -> listOf(
                         "Skip intros" to if (p.autoSkipIntro) "On" else "Off",
                         "Auto-play next episode" to if (s.autoPlayNextEpisode) "On" else "Off",
@@ -503,6 +524,7 @@ private fun SettingsPane(
                         "Rotate the top title" to if (s.heroAutoRotate) "On" else "Off",
                         "Hide watched in catalogs" to if (s.hideWatched) "On" else "Off",
                         "Top 10 row" to if (s.showTop10) "On" else "Off",
+                        "Menu position" to if (s.tvNavSide == "left") "Left side" else "Top bar",
                     )
                     Cat.Services -> StreamingServices.enabled(s).map { it.name to "On" }.take(10)
                     Cat.Setup -> listOf(

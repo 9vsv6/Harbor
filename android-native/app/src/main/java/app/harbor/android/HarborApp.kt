@@ -33,6 +33,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
         app.harbor.android.data.Awards.init(this)
+        app.harbor.android.data.AwardHistory.init(this)
         app.harbor.android.ui.HarborFonts.assets = assets
         app.harbor.android.data.Curated.init(this)
         app.harbor.android.data.PlayQueue.init(this)

@@ -172,7 +172,7 @@ fun HeroCarousel(
     val context = androidx.compose.ui.platform.LocalContext.current
     Column(Modifier.onFocusChanged { focused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(
-            if (fullBleed) Modifier.fillMaxWidth().aspectRatio(4f / 5f).background(HarborColors.Surface)
+            if (fullBleed) Modifier.fillMaxWidth().aspectRatio(10f / 9f).background(HarborColors.Surface)
             else Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
                 .clip(HeroShape).background(HarborColors.Surface)
                 .border(1.dp, HarborColors.EdgeSoft, HeroShape),
@@ -339,10 +339,20 @@ fun Rail(title: String, metas: List<Meta>, onOpen: (Meta) -> Unit, onSeeAll: (()
 @Composable
 fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val display = HarborDisplay.settings
-    val rpdb = HarborDisplay.posterFor(meta)
+    // An IMDb title (library, history, an addon's catalog) in your title and poster languages, from TMDB.
+    val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
+    val tmdbKey = HarborDisplay.tmdbKey
+    var local by remember(meta.id) { mutableStateOf(imdb?.let { app.harbor.android.data.Tmdb.cachedLocal(it, meta.type) }) }
+    if (imdb != null && tmdbKey != null && local == null && app.harbor.android.data.Tmdb.localizesCards) {
+        LaunchedEffect(imdb, tmdbKey) { local = runCatching { app.harbor.android.data.Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull() }
+    }
+    val ownPoster = local?.second ?: meta.poster
+    val title = local?.first ?: meta.name
+    // RPDB or your poster service first; otherwise the poster in your language.
+    val rpdb = HarborDisplay.posterFor(meta).let { if (it == meta.poster) ownPoster else it }
     // RPDB has no poster for some titles: fall back to the addon's.
     var rpdbFailed by remember(rpdb) { mutableStateOf(false) }
-    val poster = if (rpdbFailed) meta.poster else rpdb
+    val poster = if (rpdbFailed) ownPoster else rpdb
     // Only the tiles whose answer changes redraw when My List or Watched changes, not every poster on screen.
     val inMyList by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.myListIds } }
     val watched by remember(meta.id) { derivedStateOf { meta.id in HarborDisplay.watchedIds } }
@@ -359,15 +369,15 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
             if (poster != null) {
                 AsyncImage(
                     poster,
-                    meta.name,
+                    title,
                     placeholder = TilePlaceholder,
-                    error = if (poster == meta.poster) TilePlaceholder else null,
+                    error = if (poster == ownPoster) TilePlaceholder else null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
-                    onError = { if (poster != meta.poster) rpdbFailed = true },
+                    onError = { if (poster != ownPoster) rpdbFailed = true },
                 )
             } else {
-                Text(meta.name, color = HarborColors.InkMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(8.dp))
+                Text(title, color = HarborColors.InkMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(8.dp))
             }
             // Harbor's score strip at the bottom right, IMDb · Simkl (card-score-stack.tsx), on every poster as on PC.
             ScoreStack(meta, Modifier.align(Alignment.BottomEnd).padding(6.dp))
@@ -389,7 +399,7 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
             }
         }
         if (!display.hidePosterTitles) Text(
-            meta.name,
+            title,
             color = HarborColors.InkMuted,
             fontSize = 12.5.sp * display.cardTitleScale,
             lineHeight = 16.sp * display.cardTitleScale,

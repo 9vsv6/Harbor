@@ -177,6 +177,12 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             HomeRefresh.mark(refreshKey)
             HomeCache.write(context, cacheKey, it)
         }
+        // Nothing loaded and nothing saved (offline on a first launch): say so instead of a spinner
+        // that never ends. The rows load again when the connection comes back and the addons reload.
+        if (!cached && fresh.isNullOrEmpty()) {
+            rows[view] = emptyList()
+            failed[view] = true
+        }
     }
 
     // Letterboxd, Simkl and MyAnimeList rows, loaded beside the catalogs.
@@ -234,7 +240,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         val phoneTop = statusTop + PhoneSectionBarHeight
         // The bar takes the page colour once the hero has scrolled under it.
         val density = androidx.compose.ui.platform.LocalDensity.current
-        val heroPx = with(density) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 1.25f - phoneTop).toPx() }
+        val heroPx = with(density) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 0.9f - phoneTop).toPx() }
         val barSolid by remember(phoneHero, heroPx) {
             androidx.compose.runtime.derivedStateOf { !phoneHero || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > heroPx }
         }
@@ -321,6 +327,24 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                                 }
                             }
                         }
+                        // Phones: your streaming services as tiles under the banner, each opening what's on it.
+                        // Hidden for now (SHOW_SERVICE_TILES); the code stays for when they come back.
+                        if (SHOW_SERVICE_TILES && phone && view == BrowseView.Home && tmdbKey != null) {
+                            val region = display.region.ifEmpty { java.util.Locale.getDefault().country.ifEmpty { "US" } }
+                            val tiles = app.harbor.android.data.StreamingServices.enabled(display).map { service ->
+                                ServiceTile(service.name, service.logo, app.harbor.android.ui.tv.TvServiceTints[service.key] ?: HarborColors.Accent) {
+                                    val params = mapOf(
+                                        "with_watch_providers" to service.providerIds.joinToString("|"),
+                                        "watch_region" to region,
+                                        "sort_by" to "popularity.desc",
+                                        "vote_count.gte" to "50",
+                                    )
+                                    val spec = Tmdb.RowSpec("On ${service.name}", "/discover/movie", params, "movie")
+                                    nav.openCatalog(CatalogRow("service:${service.key}", spec.title, emptyList(), "movie", tmdb = spec))
+                                }
+                            }
+                            if (tiles.isNotEmpty()) item(key = "services") { ServiceTiles(tiles) }
+                        }
                         if (spooktober == "below-hero" || (spooktober != null && heroSlides.isEmpty())) {
                             item(key = "spooktober") { SpooktoberEntry(compact = false, onDismiss = dismissSpooktober, modifier = Modifier.padding(horizontal = 16.dp)) }
                         }
@@ -392,29 +416,10 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         // On TV the top nav bar owns the branding and the search entry, so drawing this too would
         // leave a ghost "Harbor" behind the bar.
         if (phone) {
-            val openPage = LocalOpenPage.current
-            val barScope = androidx.compose.runtime.rememberCoroutineScope()
-            val here = when (view) {
-                BrowseView.Home -> PhoneSection.Home
-                BrowseView.Movies -> PhoneSection.Movies
-                BrowseView.Shows -> PhoneSection.Shows
-                BrowseView.Anime -> PhoneSection.Anime
-            }
-            PhoneSectionBar(
-                current = here,
-                solid = barSolid,
-                onSelect = { section ->
-                    // The open section's icon takes you back to its top.
-                    if (section == here) barScope.launch { listState.animateScrollToItem(0) }
-                    else when (section) {
-                        PhoneSection.Discover -> openPage("discover")
-                        PhoneSection.Home -> onView(BrowseView.Home)
-                        PhoneSection.Movies -> onView(BrowseView.Movies)
-                        PhoneSection.Shows -> onView(BrowseView.Shows)
-                        PhoneSection.Anime -> onView(BrowseView.Anime)
-                    }
-                },
-            )
+            // Tapping the open section again in the bottom bar takes you back to its top.
+            val taps by PhoneTopTap.taps.collectAsState()
+            LaunchedEffect(taps) { if (taps > 0) listState.animateScrollToItem(0) }
+            PhoneTopBar(solid = barSolid)
         } else if (!Perf.isTv) {
             Box(
                 Modifier.fillMaxWidth().height(top + 12.dp)
@@ -479,7 +484,7 @@ private fun bigPictureRows(
     }
     if (view == BrowseView.Home && newEpisodes.isNotEmpty()) out += app.harbor.android.ui.tv.TvRow("new-episodes", "New Episodes", metas = newEpisodes.map { it.meta })
     fun catalog(row: CatalogRow, title: String = row.title) = app.harbor.android.ui.tv.TvRow(
-        row.key, title, metas = row.metas.distinctBy { it.id }.take(24), action = "See all", onAction = { nav.openCatalog(row) },
+        row.key, title, metas = row.metas.distinctBy { it.id }.take(24), action = "View all", onAction = { nav.openCatalog(row) },
     )
     val rankFirst = display.showTop10 || ((view == BrowseView.Shows || view == BrowseView.Movies) && (current.firstOrNull()?.metas?.size ?: 0) >= 10)
     current.firstOrNull()?.takeIf { rankFirst }?.let { first ->
@@ -796,3 +801,6 @@ private fun ShowsMast() {
         Text(subtitle, color = HarborColors.InkMuted, fontSize = 15.sp, lineHeight = 22.sp)
     }
 }
+
+/** The phone's service tiles under Home's banner: off for now. */
+private const val SHOW_SERVICE_TILES = false

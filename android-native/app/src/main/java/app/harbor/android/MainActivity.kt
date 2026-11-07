@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -288,18 +289,43 @@ private fun HarborRoot(repository: Repository) {
     // Phones: Discover is one of the top bar's sections, so the tab bar stays with it.
     val phoneBar = showBar || (!wide && route == "discover")
     Row(Modifier.fillMaxSize()) {
-    // Settings has its own sidebar (with Back), as Harbor's, so the app rail steps aside there.
-    if (!tv && wide && route != Tab.Profile.route) SideRail(route, browseView, onSelect = { nav.selectTab(it) }, onView = { v ->
+    // The app rail stays on every page, Settings included (its own sidebar sits beside it).
+    if (!tv && wide) SideRail(route, browseView, onSelect = { nav.selectTab(it) }, onView = { v ->
         browseView = v
         if (route != Tab.Home.route) nav.selectTab(Tab.Home)
     }, onPage = { nav.navigate(it) { popUpTo(Tab.Home.route); launchSingleTop = true } })
     Scaffold(
         modifier = Modifier.weight(1f),
         containerColor = Color.Transparent,
-        bottomBar = { if (phoneBar && !wide) TabBar(route, accountOpen, onAccount = { accountOpen = !accountOpen }) { accountOpen = false; nav.selectTab(it) } },
+        bottomBar = {
+            if (phoneBar && !wide) TabBar(route, browseView) { section ->
+                accountOpen = false
+                val view = when (section) {
+                    app.harbor.android.ui.PhoneSection.Home -> BrowseView.Home
+                    app.harbor.android.ui.PhoneSection.Movies -> BrowseView.Movies
+                    app.harbor.android.ui.PhoneSection.Shows -> BrowseView.Shows
+                    app.harbor.android.ui.PhoneSection.Anime -> BrowseView.Anime
+                    app.harbor.android.ui.PhoneSection.Discover -> null
+                }
+                when {
+                    view == null -> nav.navigate("discover") { popUpTo(Tab.Home.route); launchSingleTop = true }
+                    // The open section again: back to its top.
+                    route == Tab.Home.route && view == browseView -> app.harbor.android.ui.PhoneTopTap.taps.value++
+                    else -> { browseView = view; nav.selectTab(Tab.Home) }
+                }
+            }
+        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
-            androidx.compose.runtime.CompositionLocalProvider(app.harbor.android.ui.LocalOpenList provides { id: String -> nav.navigate("list/${enc(id)}") }, app.harbor.android.ui.LocalOpenPage provides { route: String -> nav.navigate(route) { launchSingleTop = true } }) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                app.harbor.android.ui.LocalOpenList provides { id: String -> nav.navigate("list/${enc(id)}") },
+                app.harbor.android.ui.LocalOpenPage provides { route: String -> nav.navigate(route) { launchSingleTop = true } },
+                // Phones: the top bar's Search and your picture.
+                app.harbor.android.ui.LocalPhoneActions provides app.harbor.android.ui.PhoneActions(
+                    onSearch = { accountOpen = false; nav.selectTab(Tab.Search) },
+                    onAccount = { accountOpen = !accountOpen },
+                ),
+            ) {
             TvChrome(
                 tv, route, browseView,
                 onSelect = { nav.selectTab(it) },
@@ -319,17 +345,9 @@ private fun HarborRoot(repository: Repository) {
                 popExitTransition = if (tv) ({ ExitTransition.None }) else ({ fadeOut(animationSpec = tween(700)) }),
             ) {
                 composable("discover") {
-                    // Phones: the section bar on top, as on Home (the page's own Back steps aside).
+                    // Phones: the top bar, as on Home (the page's own Back steps aside).
                     if (!wide) androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
-                        app.harbor.android.ui.PhoneSectionBar(app.harbor.android.ui.PhoneSection.Discover, solid = true, onSelect = { section ->
-                            when (section) {
-                                app.harbor.android.ui.PhoneSection.Discover -> Unit
-                                app.harbor.android.ui.PhoneSection.Home -> { browseView = BrowseView.Home; nav.selectTab(Tab.Home) }
-                                app.harbor.android.ui.PhoneSection.Movies -> { browseView = BrowseView.Movies; nav.selectTab(Tab.Home) }
-                                app.harbor.android.ui.PhoneSection.Shows -> { browseView = BrowseView.Shows; nav.selectTab(Tab.Home) }
-                                app.harbor.android.ui.PhoneSection.Anime -> { browseView = BrowseView.Anime; nav.selectTab(Tab.Home) }
-                            }
-                        })
+                        app.harbor.android.ui.PhoneTopBar(solid = true)
                         Box(Modifier.weight(1f).consumeWindowInsets(androidx.compose.foundation.layout.WindowInsets.statusBars)) {
                             app.harbor.android.ui.DiscoverScreen(
                                 repository,
@@ -407,6 +425,30 @@ private fun HarborRoot(repository: Repository) {
                     else SettingsScreen(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) })
                 }
                 composable("addons") { AddonsScreen(repository, onBack = { nav.popBackStack() }) }
+                // Harbor's person and award pages; their links are plain pushes so one person leads to the next.
+                val peopleRoute: (String) -> Unit = { r -> if (r == Tab.Profile.route) nav.selectTab(Tab.Profile) else nav.navigate(r) }
+                composable(
+                    app.harbor.android.ui.PeopleRoutes.PERSON,
+                    arguments = listOf(
+                        navArgument("id") { type = NavType.IntType; defaultValue = -1 },
+                        navArgument("name") { type = NavType.StringType; defaultValue = "" },
+                    ),
+                ) { back ->
+                    app.harbor.android.ui.PersonScreen(
+                        repository,
+                        id = back.arguments?.getInt("id")?.takeIf { it > 0 },
+                        name = back.arguments?.getString("name").orEmpty(),
+                        onBack = { nav.popBackStack() },
+                        onOpen = { open(it) },
+                        onRoute = peopleRoute,
+                    )
+                }
+                composable(app.harbor.android.ui.PeopleRoutes.AWARD, arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                    app.harbor.android.ui.AwardScreen(back.arguments?.getString("key").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) }, onRoute = peopleRoute)
+                }
+                composable(app.harbor.android.ui.PeopleRoutes.AWARDS) {
+                    app.harbor.android.ui.AwardsScreen(onBack = { nav.popBackStack() }, onRoute = peopleRoute)
+                }
                 composable(
                     "detail/{type}/{id}",
                     arguments = listOf(navArgument("type") { type = NavType.StringType }, navArgument("id") { type = NavType.StringType }),
@@ -548,51 +590,42 @@ private fun HarborRoot(repository: Repository) {
 }
 
 /**
- * Harbor's floating tab bar on phones: Search, Home, and your picture, which opens the account menu
- * (Library, Downloads, Calendar, Settings). The active one sits on a light chip.
+ * The phone's tab bar: Home, Movies, Shows, Anime and Discover, each with its name, the open one in
+ * Harbor's accent. Search and your picture live in the top bar.
  */
 @Composable
-private fun TabBar(route: String?, accountOpen: Boolean, onAccount: () -> Unit, onSelect: (Tab) -> Unit) {
-    val profile = (LocalContext.current.applicationContext as HarborApp).repository.activeProfile.collectAsState().value
-    Box(
-        Modifier.fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color.Transparent, HarborColors.Canvas.copy(alpha = 0.92f), HarborColors.Canvas)))
-            .navigationBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
-        contentAlignment = Alignment.Center,
+private fun TabBar(route: String?, view: BrowseView, onSelect: (app.harbor.android.ui.PhoneSection) -> Unit) {
+    val sections = app.harbor.android.ui.PhoneSection.entries.filter { it != app.harbor.android.ui.PhoneSection.Anime || !app.harbor.android.ui.HarborDisplay.settings.hideAnime }
+    val current = when {
+        route == "discover" -> app.harbor.android.ui.PhoneSection.Discover
+        route != Tab.Home.route -> null
+        view == BrowseView.Movies -> app.harbor.android.ui.PhoneSection.Movies
+        view == BrowseView.Shows -> app.harbor.android.ui.PhoneSection.Shows
+        view == BrowseView.Anime -> app.harbor.android.ui.PhoneSection.Anime
+        else -> app.harbor.android.ui.PhoneSection.Home
+    }
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().background(HarborColors.Canvas)) {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(HarborColors.EdgeSoft))
+    Row(
+        Modifier.fillMaxWidth().navigationBarsPadding().height(62.dp).padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier.widthIn(max = 400.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                .background(HarborColors.Elevated.copy(alpha = 0.92f))
-                .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(12.dp))
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            listOf(Tab.Search, Tab.Home, Tab.Profile).forEach { tab ->
-                // Your picture stands for everything in its menu.
-                val account = tab == Tab.Profile
-                val on = if (account) accountOpen || route == Tab.Profile.route || route == Tab.MyStuff.route else !accountOpen && route == tab.route
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier.width(52.dp).height(40.dp).clip(RoundedCornerShape(13.dp))
-                            .background(if (on) HarborColors.Ink else Color.Transparent)
-                            .clickable { if (account) onAccount() else onSelect(tab) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (account) {
-                            ProfileAvatar(profile, 23.dp)
-                        } else {
-                            Icon(
-                                androidx.compose.ui.res.painterResource(tab.glyph),
-                                contentDescription = tab.label,
-                                tint = if (on) HarborColors.Canvas else HarborColors.InkSubtle,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    }
-                }
+        sections.forEach { section ->
+            val on = section == current
+            val tint = if (on) HarborColors.Accent else HarborColors.InkSubtle
+            androidx.compose.foundation.layout.Column(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).clickable { onSelect(section) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(androidx.compose.ui.res.painterResource(section.glyph), null, tint = tint, modifier = Modifier.size(23.dp))
+                app.harbor.android.i18n.Text(
+                    section.label, color = tint, fontSize = 11.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1, modifier = Modifier.padding(top = 3.dp),
+                )
             }
         }
+    }
     }
 }
 

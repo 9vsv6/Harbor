@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
@@ -413,8 +414,14 @@ class Repository(private val context: Context) {
     /** When the addon collection last came from the account (Settings → Stremio's "Last synced"). */
     val addonsSyncedAt: StateFlow<Long> = _addonsSyncedAt.asStateFlow()
 
-    /** Reloads the addon collection and the library for the current account. */
-    suspend fun refresh() {
+    private val refreshLock = kotlinx.coroutines.sync.Mutex()
+    /** Whose library [_library] holds, so a failed fetch keeps it only for the same account. */
+    private var libraryAuth: String? = null
+
+    /** Reloads the addon collection and the library for the current account (one refresh at a time). */
+    suspend fun refresh() = refreshLock.withLock { refreshNow() }
+
+    private suspend fun refreshNow() {
         val account = _account.value
         // With Nuvio as the account provider, the Nuvio profile's addons are the collection.
         val nuvio = if (accounts.nuvioActive) accounts.nuvioAddons()?.filter { it.enabled }?.let { list ->
@@ -423,19 +430,30 @@ class Repository(private val context: Context) {
             }
         } else null
         val remote = nuvio ?: account?.let { runCatching { StremioApi.addonsRaw(it.authKey) }.getOrNull() }
+        // Offline, the last collection that loaded stands in, so titles and search still work.
+        val cache = java.io.File(context.filesDir, "addons-cache.json")
+        fun cached() = runCatching { (Net.json.parseToJsonElement(cache.readText()) as kotlinx.serialization.json.JsonArray).mapNotNull { it as? JsonObject } }.getOrDefault(emptyList())
+        val signedInOffline = account != null && nuvio == null && remote == null
         val fetched = when {
             !remote.isNullOrEmpty() -> remote
             account == null -> localCollection() ?: defaultCollection()
+            // Signed in but Stremio didn't answer (offline): your saved collection, not the defaults.
+            signedInOffline -> emptyList()
             else -> defaultCollection()
         }
-        // Offline, the last collection that loaded stands in, so titles and search still work.
-        val cache = java.io.File(context.filesDir, "addons-cache.json")
-        rawCollection = fetched.ifEmpty {
-            runCatching { (Net.json.parseToJsonElement(cache.readText()) as kotlinx.serialization.json.JsonArray).mapNotNull { it as? JsonObject } }.getOrDefault(emptyList())
-        }
+        rawCollection = fetched.ifEmpty { cached().ifEmpty { defaultCollection() } }
+        // Only a collection that really loaded replaces the saved copy.
         if (fetched.isNotEmpty()) runCatching { cache.writeText(kotlinx.serialization.json.JsonArray(fetched).toString()) }
         _addons.value = decodeCollection(rawCollection)
-        _library.value = account?.let { runCatching { StremioApi.library(it.authKey) }.getOrNull() }.orEmpty()
+        // A failed library fetch keeps the library you had (same account), instead of emptying it.
+        val library = account?.let { runCatching { StremioApi.library(it.authKey) }.getOrNull() }
+        _library.value = when {
+            account == null -> emptyList()
+            library != null -> library
+            libraryAuth == account.authKey -> _library.value
+            else -> emptyList()
+        }
+        libraryAuth = account?.authKey
         if (remote != null) _addonsSyncedAt.value = System.currentTimeMillis()
     }
 
@@ -618,7 +636,12 @@ class Repository(private val context: Context) {
     }
 
     /** When the connection comes back after an offline start, loads what couldn't load then. */
+    private var watchingConnection = false
+
     private fun watchConnection() {
+        // Once per run: a backup restore reloads everything and would register a second watcher.
+        if (watchingConnection) return
+        watchingConnection = true
         val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return
         runCatching {
             connectivity.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {

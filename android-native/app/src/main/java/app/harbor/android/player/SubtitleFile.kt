@@ -19,6 +19,9 @@ class SubtitleFile(private val cues: List<Cue>) {
 
     val isEmpty get() = cues.isEmpty()
 
+    /** How long the longest cue stays up: how far back an overlapping cue can still be showing. */
+    private val longestMs: Long = cues.maxOfOrNull { it.endMs - it.startMs }?.coerceAtLeast(0) ?: 0
+
     /** Every line with text, by start (the live sync list). */
     val lines: List<Cue> get() = cues.filter { it.text.isNotBlank() }
 
@@ -37,10 +40,13 @@ class SubtitleFile(private val cues: List<Cue>) {
         }
         if (last < 0) return null
         val showing = ArrayList<String>(2)
-        // Overlapping cues are rare and short; look back a few.
-        for (i in last downTo maxOf(0, last - 8)) {
+        // Overlapping cues: look back as far as the file's longest cue lasts, so a long sign or
+        // caption stays up while shorter lines come and go under it (capped, for broken files).
+        var i = last
+        while (i >= 0 && last - i < 400 && positionMs - cues[i].startMs <= longestMs) {
             val cue = cues[i]
             if (positionMs < cue.endMs) showing.add(0, cue.text)
+            i--
         }
         return showing.takeIf { it.isNotEmpty() }?.joinToString("\n")
     }

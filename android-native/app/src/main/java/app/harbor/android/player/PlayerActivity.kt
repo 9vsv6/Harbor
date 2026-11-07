@@ -592,6 +592,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.subLoading = true
         subtitleJob = lifecycleScope.launch {
             val file = runCatching { SubtitleFile.load(choice.subtitle.url) }.getOrNull()
+            // Another subtitle was chosen meanwhile (which cancels this load): leave it be.
+            if (state.subChoice != choice) return@launch
             state.subLoading = false
             if (file == null || file.isEmpty) {
                 state.hint = "That subtitle didn't load"
@@ -1192,12 +1194,20 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val settings = state.settings
             // "Keep the same source": the addon this episode came from; else the one remembered for the show.
             val keep = settings.keepSourceNextEpisode && currentAddonId != null
-            val prefer = if (keep) null else repository.preferredSource(metaId)
-            var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
-            // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
-            if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
-            val ready = Playback.best(ranked, debrid)
-            state.nextLoading = false
+            // A failed lookup (no network, say) mustn't leave Next locked for the rest of the video.
+            val ready = try {
+                val prefer = if (keep) null else repository.preferredSource(metaId)
+                var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
+                // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
+                if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
+                Playback.best(ranked, debrid)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } finally {
+                state.nextLoading = false
+            }
             if (ready == null) {
                 state.hint = "No source found for ${episodeCode(video)}"
                 state.hintIcon = 0
@@ -1574,14 +1584,26 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         engine.pause()
         // The Chromecast fetches the stream itself; addons that need special headers won't play there.
         CastLoader.load(client, CastItem(state.currentUrl, state.title, state.episodeLine, meta?.poster, engine.positionMs))
+        // One callback and listener per cast: the last session's come off first, and endCasting removes them.
+        castListeners()
         client.registerCallback(remoteCallback)
-        client.addProgressListener({ progress, _ -> if (progress > 0) remotePositionMs = progress }, 1_000)
+        client.addProgressListener(castProgress, 1_000)
+        castClient = client
         state.castingTo = session.castDevice?.friendlyName ?: "your TV"
         state.castPlaying = true
         state.panel = null
     }
 
+    private var castClient: RemoteMediaClient? = null
+    private val castProgress = RemoteMediaClient.ProgressListener { progress, _ -> if (progress > 0) remotePositionMs = progress }
+
+    private fun castListeners() {
+        castClient?.let { c -> runCatching { c.unregisterCallback(remoteCallback); c.removeProgressListener(castProgress) } }
+        castClient = null
+    }
+
     private fun endCasting() {
+        castListeners()
         if (state.castingTo == null) return
         state.castingTo = null
         // Carry on here from where the TV got to.
@@ -1606,6 +1628,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun onDestroy() {
         if (autoSyncJob?.isActive == true) AudioSync.cancel()
         castContext?.sessionManager?.removeSessionManagerListener(castListener, CastSession::class.java)
+        castListeners()
         ticker.removeCallbacks(tick)
         ticker.removeCallbacks(settleSeek)
         stopScrobble()

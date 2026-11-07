@@ -777,8 +777,36 @@ private fun LabelGrid(cells: List<Pair<String, String>>, columns: Int, side: Dp)
     }
 }
 
+/** The crew block: each name opens that person's page. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun CrewGrid(cells: List<Pair<String, String>>, columns: Int, side: Dp) = LabelGrid(cells, columns, side)
+private fun CrewGrid(cells: List<Pair<String, String>>, columns: Int, side: Dp) {
+    val openPage = LocalOpenPage.current
+    Column(Modifier.padding(horizontal = side), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        cells.chunked(columns).forEach { rowCells ->
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                rowCells.forEach { (label, value) ->
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Eyebrow(label)
+                        val names = value.split(", ")
+                        androidx.compose.foundation.layout.FlowRow {
+                            names.forEachIndexed { i, name ->
+                                Text(
+                                    name + if (i < names.lastIndex) ", " else "",
+                                    color = HarborColors.Ink, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable {
+                                        openPage(PeopleRoutes.person(app.harbor.android.data.Tmdb.knownPersonId(name), name))
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                repeat(columns - rowCells.size) { Box(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
 
 @Composable
 private fun CastRail(cast: List<CastMember>, total: Int, side: Dp, wide: Boolean) {
@@ -790,7 +818,12 @@ private fun CastRail(cast: List<CastMember>, total: Int, side: Dp, wide: Boolean
         }
         LazyRow(contentPadding = PaddingValues(horizontal = side), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(cast) { person ->
-                Column(Modifier.width(width), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                val openPage = LocalOpenPage.current
+                Column(
+                    Modifier.width(width).clip(RoundedCornerShape(18.dp))
+                        .clickable { openPage(PeopleRoutes.person(person.id, person.name)) },
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
                     Box(
                         Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(18.dp))
                             .background(Brush.linearGradient(listOf(Color(0xFF2B2140), Color(0xFF3A2A12)))),
@@ -940,7 +973,12 @@ private fun HeroAwards(awards: List<AwardEntry>, modifier: Modifier) {
     if (ranked.isEmpty()) return
     val top = ranked.firstOrNull { t -> byType[t].orEmpty().any { it.won } } ?: ranked.first()
     val topWon = byType[top].orEmpty().any { it.won }
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    val openPage = LocalOpenPage.current
+    val topKey = app.harbor.android.data.AwardHistory.keyOf(top)
+    Row(
+        modifier.let { if (topKey != null) it.clip(RoundedCornerShape(12.dp)).clickable { openPage(PeopleRoutes.award(topKey)) } else it },
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         Text("🏆", fontSize = 30.sp)
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
@@ -973,10 +1011,16 @@ private fun AwardsSection(awards: List<AwardEntry>, side: Dp) {
             Text("Awards", color = HarborColors.Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             Text("  ·  $wins wins  ·  ${awards.size} total", color = HarborColors.InkMuted, fontSize = 15.sp)
         }
+        val openPage = LocalOpenPage.current
         (if (all) awards else awards.take(10)).forEach { award ->
             Column {
                 RowRule()
-                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                val key = app.harbor.android.data.AwardHistory.keyOf(award.type)
+                Row(
+                    Modifier.fillMaxWidth().let { if (key != null) it.clip(RoundedCornerShape(8.dp)).clickable { openPage(PeopleRoutes.award(key)) } else it }
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
                     Text(
                         award.year?.toString() ?: "—",
                         color = if (award.won) HarborColors.Accent else HarborColors.InkSubtle,

@@ -89,6 +89,7 @@ import app.harbor.android.data.Stream
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 
 /*
  * The sources page, as Harbor's play picker (src/views/play-picker): Back and Refresh,
@@ -200,9 +201,11 @@ fun StreamsScreen(
         error = null
         status = if (stream.direct) null else "Getting the link from ${debrid?.service?.label ?: "debrid"}…"
         job = scope.launch {
-            runCatching { Playback.resolve(stream, debrid, item.addon.manifest.id) }
-                .onSuccess { onPlay(it) }
-                .onFailure { error = it.message }
+            val result = runCatching { Playback.resolve(stream, debrid, item.addon.manifest.id) }
+            // Cancelled (Cancel, or another source tapped meanwhile): not an error, and the newer
+            // play's Connecting state is left alone.
+            if (!isActive) return@launch
+            result.onSuccess { onPlay(it) }.onFailure { if (it !is kotlinx.coroutines.CancellationException) error = it.message }
             status = null
             connecting = null
         }
