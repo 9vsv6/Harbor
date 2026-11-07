@@ -112,7 +112,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 25
-        versionName = "1.0.14"
+        versionName = "1.0.13"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
