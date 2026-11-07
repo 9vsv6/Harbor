@@ -319,6 +319,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
                     if (query.isNotBlank()) SearchResults(query) { open(groupOf(it), it) }
                     else TabletRail(
                         repository,
+                        onOpenAddons = onOpenAddons,
                         current = section,
                         open = openBands.mapNotNull { n -> Group.entries.firstOrNull { it.name == n } }.toSet(),
                         onToggle = { g -> openBands = if (g.name in openBands) openBands - g.name else openBands + g.name },
@@ -372,7 +373,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
  * icons (trackers with their logos). A band of one page is a single row.
  */
 @Composable
-private fun TabletRail(repository: Repository, current: Section, open: Set<Group>, onToggle: (Group) -> Unit, onOpen: (Section) -> Unit) {
+private fun TabletRail(repository: Repository, onOpenAddons: () -> Unit, current: Section, open: Set<Group>, onToggle: (Group) -> Unit, onOpen: (Section) -> Unit) {
     val profile by repository.activeProfile.collectAsState()
     val harbor by repository.accounts.harbor.collectAsState()
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -387,6 +388,9 @@ private fun TabletRail(repository: Repository, current: Section, open: Set<Group
                 Text(if (harbor != null) "Signed in to Harbor" else "Signed out of Harbor", color = HarborColors.InkMuted, fontSize = 13.sp, maxLines = 1)
             }
         }
+        // As on phones: Switch profile and Addons right under who you are.
+        RailAction(Icons.Outlined.Group, "Switch profile") { repository.showProfilePicker() }
+        RailAction(Icons.Outlined.Inventory2, "Addons", onClick = onOpenAddons)
         Group.entries.forEach { g ->
             val single = g.children.singleOrNull()
             if (single != null) {
@@ -469,6 +473,18 @@ private fun PhoneSectionPage(section: Section, repository: Repository, onOpenAdd
 }
 
 /** A band's row: its icon and name, and a caret when it opens (null: a single page). */
+@Composable
+private fun RailAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(icon, null, tint = HarborColors.Ink, modifier = Modifier.size(20.dp))
+        Text(label, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+    }
+}
+
 @Composable
 private fun BandHeader(g: Group, on: Boolean, caret: Boolean?, onClick: () -> Unit) {
     Row(
