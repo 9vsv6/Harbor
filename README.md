@@ -95,10 +95,6 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 <img src="/docs/media/android/phone-menu.jpg" width="100%"><br/>
 <sub><b>Phone</b> &middot; Your picture opens Library, Downloads, Calendar, and Settings.</sub>
 </td>
-<td width="33%" align="center">
-<img src="/docs/media/android/phone-awards.jpg" width="100%"><br/>
-<sub><b>Phone</b> &middot; Award pages: every year's winners and nominees.</sub>
-</td>
 </tr>
 </table>
 
@@ -121,16 +117,6 @@ HARBOR IS AN OPEN CONCEPT AND NOT AN ENTITY. WE DO NOT PROFIT OR ACCEPT MONEY FO
 <td width="50%" align="center">
 <img src="/docs/media/android/tv-sidebar.jpg" width="100%"><br/>
 <sub><b>Android TV</b> &middot; Or the menu down the left side (Settings &gt; Home &gt; Menu position).</sub>
-</td>
-</tr>
-<tr>
-<td width="50%" align="center">
-<img src="/docs/media/android/tv-awards.jpg" width="100%"><br/>
-<sub><b>Android TV</b> &middot; Award pages, made for the remote.</sub>
-</td>
-<td width="50%" align="center">
-<img src="/docs/media/android/tv-settings.jpg" width="100%"><br/>
-<sub><b>Android TV</b> &middot; Settings, with description, title, and poster language.</sub>
 </td>
 </tr>
 </table>
