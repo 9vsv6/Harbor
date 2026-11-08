@@ -452,7 +452,10 @@ object Tmdb {
     private val localGate = kotlinx.coroutines.sync.Semaphore(6)
 
     /** A title's name and poster in your languages, if already looked up this run. */
-    fun cachedLocal(imdb: String, type: String): Pair<String?, String?>? = localCache["$type:$imdb"]
+    fun cachedLocal(imdb: String, type: String): Pair<String?, String?>? = localCache[localKey(imdb, type)]
+
+    /** Per language: after you change the title or poster language, cards ask again. */
+    private fun localKey(imdb: String, type: String) = "$type:$imdb|$titleLang|$posterLang"
 
     /**
      * An IMDb title (a library item, an addon's catalog) in your title and poster languages, as Harbor
@@ -460,12 +463,13 @@ object Tmdb {
      * English. Null parts keep the addon's own title or poster.
      */
     suspend fun localized(key: String, imdb: String, type: String): Pair<String?, String?> {
-        localCache["$type:$imdb"]?.let { return it }
+        val cacheKey = localKey(imdb, type)
+        localCache[cacheKey]?.let { return it }
         // Title language "Original title": the name it was first released under.
         val original = titleLang == null
         val tl = if (original) "en-US" else titleLang?.takeIf { base(it) != "en" }
         val pl = posterLang.takeIf { posterBase != "en" }
-        if (tl == null && pl == null) return (null to null).also { localCache["$type:$imdb"] = it }
+        if (tl == null && pl == null) return (null to null).also { localCache[cacheKey] = it }
         val result = localGate.withPermit {
             suspend fun find(lang: String): JsonObject? = runCatching {
                 val o = get(key, "/find/$imdb", mapOf("external_source" to "imdb_id"), lang)
@@ -476,7 +480,7 @@ object Tmdb {
             (forTitle?.let { if (original) it.string("original_title") ?: it.string("original_name") else it.string("title") ?: it.string("name") }?.takeIf { it.isNotBlank() }) to
                 forPoster?.string("poster_path")?.let { "$IMAGES/w342$it" }
         }
-        localCache["$type:$imdb"] = result
+        localCache[cacheKey] = result
         return result
     }
 
@@ -484,6 +488,9 @@ object Tmdb {
     private val detailsCache = object : LinkedHashMap<String, TmdbDetails>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TmdbDetails>?) = size > 40
     }
+
+    /** The languages text and art are fetched in right now: part of the key of anything cached from TMDB. */
+    val languageKey: String get() = "$descLang|$titleLang|$posterLang|$region"
 
     private fun detailsKey(imdbId: String, type: String) = "$imdbId|$type|$descLang|$titleLang|$posterLang|$region"
 

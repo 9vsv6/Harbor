@@ -1,5 +1,8 @@
 package app.harbor.android.player
 
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -408,6 +411,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
         if (panel != null && panel != Panel.SubStyle) {
             Box(
                 Modifier.fillMaxSize().background(if (panel == Panel.Sources) Color(0x99000000) else Color.Transparent)
+                    .then(if (state.tv) Modifier.focusProperties { canFocus = false } else Modifier)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { state.panel = null },
             )
         }
@@ -925,10 +929,22 @@ private fun Anime4KMenu(state: PlayerState, prefs: PlayerPrefs, actions: PlayerA
 @Composable
 private fun SourcesSwitcher(state: PlayerState, actions: PlayerActions, modifier: Modifier) {
     val sources = state.sources
+    // TV: the remote starts on the first source that can be picked (Close, until the list is in).
+    val closeFocus = remember { FocusRequester() }
+    val firstFocus = remember { FocusRequester() }
+    val playingNow = sources?.indexOfFirst { it.stream.url != null && it.stream.url == state.currentUrl }?.takeIf { it >= 0 }
+        ?: sources?.indexOfFirst { state.currentStreamKey != null && Playback.streamKey(it.stream) == state.currentStreamKey } ?: -1
+    val firstPick = sources?.indices?.firstOrNull { it != playingNow } ?: -1
+    if (state.tv) LaunchedEffect(sources == null, firstPick) {
+        runCatching { (if (firstPick >= 0) firstFocus else closeFocus).requestFocus() }
+    }
     Column(
         modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF1A1B1E)).border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(20.dp))
+            .then(if (state.tv) Modifier.focusProperties { canFocus = false } else Modifier)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
     ) {
+        val closeSource = remember { MutableInteractionSource() }
+        val closeFocused by closeSource.collectIsFocusedAsState()
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(Pop), contentAlignment = Alignment.Center) {
                 if (sources == null) CircularProgressIndicator(Modifier.size(18.dp), color = Muted, strokeWidth = 2.dp)
@@ -946,23 +962,27 @@ private fun SourcesSwitcher(state: PlayerState, actions: PlayerActions, modifier
                 modifier = Modifier.weight(1f).padding(start = 14.dp),
             )
             Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(Pop).clickable { state.panel = null },
+                Modifier.size(40.dp).focusRequester(closeFocus).clip(RoundedCornerShape(10.dp)).background(if (closeFocused) Color.White else Pop)
+                    .clickable(interactionSource = closeSource, indication = null) { state.panel = null },
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.Close, "Close", tint = Muted, modifier = Modifier.size(18.dp)) }
+            ) { Icon(Icons.Rounded.Close, "Close", tint = if (closeFocused) Color(0xFF121316) else Muted, modifier = Modifier.size(18.dp)) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x14FFFFFF)))
         if (sources != null) {
             // One row is the one playing: the same link, else the first with the same name.
-            val playing = sources.indexOfFirst { it.stream.url != null && it.stream.url == state.currentUrl }
-                .takeIf { it >= 0 } ?: sources.indexOfFirst { state.currentStreamKey != null && Playback.streamKey(it.stream) == state.currentStreamKey }
+            val playing = playingNow
             LazyColumn(Modifier.weight(1f, fill = false)) {
                 itemsIndexed(sources) { index, source ->
                     val stream = source.stream
                     val current = index == playing
+                    val rowSource = remember { MutableInteractionSource() }
+                    val rowFocused by rowSource.collectIsFocusedAsState()
                     Row(
-                        Modifier.fillMaxWidth().background(if (current) Color(0x1AF0A35E) else Color.Transparent)
+                        Modifier.fillMaxWidth().then(if (index == firstPick) Modifier.focusRequester(firstFocus) else Modifier)
+                            .background(if (rowFocused) Color(0x2EFFFFFF) else if (current) Color(0x1AF0A35E) else Color.Transparent)
+                            .then(if (rowFocused) Modifier.border(2.dp, Color.White) else Modifier)
                             .drawBehind { if (current) drawRect(HarborColors.Accent, size = size.copy(width = 3.dp.toPx())) }
-                            .clickable(enabled = !current) { actions.playSource(source) }
+                            .clickable(enabled = !current, interactionSource = rowSource, indication = if (state.tv) null else androidx.compose.foundation.LocalIndication.current) { actions.playSource(source) }
                             .padding(horizontal = 20.dp, vertical = 14.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
@@ -1009,7 +1029,7 @@ private fun SourcesSwitcher(state: PlayerState, actions: PlayerActions, modifier
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Tap any source to swap in place", color = Subtle, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+            Text(if (state.tv) "Press OK on a source to switch to it" else "Tap any source to swap in place", color = Subtle, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
         }
     }
 }

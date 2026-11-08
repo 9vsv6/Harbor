@@ -49,7 +49,6 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         val main = MainScope()
         main.launch {
             repository.settings.collect {
-                HarborDisplay.settings = it
                 app.harbor.android.i18n.I18n.load(this@HarborApp, it.appLanguage)
                 Tmdb.languageOverride = it.metadataLanguage
                 Tmdb.imageLanguage = it.imageLanguage
@@ -58,6 +57,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
                 Tmdb.favourRegion = it.favourRegion
                 Tmdb.translateTitles = it.translateTitles
                 Tmdb.translateOverviews = it.translateOverviews
+                // Last: screens redraw from this, and should find the languages above already set.
+                HarborDisplay.settings = it
             }
         }
         main.launch { repository.rpdbKey.collect { HarborDisplay.rpdbKey = it } }

@@ -1,5 +1,7 @@
 package app.harbor.android.ui
 
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -955,7 +957,15 @@ private fun Modifier.tvRing(focused: Boolean, radius: androidx.compose.ui.unit.D
  * dark, its logo, the source's quality and size, a running bar, CONNECTING and Cancel.
  */
 @Composable
-internal fun TvConnecting(meta: Meta?, stream: Stream?, status: String?, onCancel: () -> Unit, extra: String? = null) {
+internal fun TvConnecting(
+    meta: Meta?,
+    stream: Stream?,
+    status: String?,
+    onCancel: () -> Unit,
+    extra: String? = null,
+    failure: TvConnectFailure? = null,
+    interactive: Boolean = true,
+) {
     val cancel = remember { androidx.compose.ui.focus.FocusRequester() }
     Box(Modifier.fillMaxSize().background(app.harbor.android.ui.tv.Void).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}) {
         (meta?.background ?: meta?.poster)?.let { art ->
@@ -978,27 +988,50 @@ internal fun TvConnecting(meta: Meta?, stream: Stream?, status: String?, onCance
             else meta?.name?.let { Text(it, color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(26f), fontWeight = FontWeight.SemiBold, maxLines = 2) }
             val facts = listOfNotNull(stream?.let { facetValues(it)[Facet.Resolution] }, stream?.let { streamSize(it) }).ifEmpty { listOfNotNull(extra) }
             if (facts.isNotEmpty()) Text(facts.joinToString("  ·  ").uppercase(), color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-            // A bar that runs while the link is fetched: there is no real percentage to show.
-            val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "connecting")
-            val x by transition.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "bar")
-            BoxWithConstraints(Modifier.padding(top = app.harbor.android.ui.tv.u(6f)).fillMaxWidth().height(app.harbor.android.ui.tv.u(2.5f)).clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.12f))) {
-                Box(Modifier.offset(x = (maxWidth * 0.8f) * x).fillMaxWidth(0.2f).fillMaxHeight().clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.85f)))
+            if (failure != null) {
+                Text("This source didn't play", color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(15f), fontWeight = FontWeight.SemiBold)
+                Text(failure.message, color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(9.5f), maxLines = 3)
+            } else {
+                // A bar that runs while the link is fetched: there is no real percentage to show.
+                val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "connecting")
+                val x by transition.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1400)), label = "bar")
+                BoxWithConstraints(Modifier.padding(top = app.harbor.android.ui.tv.u(6f)).fillMaxWidth().height(app.harbor.android.ui.tv.u(2.5f)).clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.12f))) {
+                    Box(Modifier.offset(x = (maxWidth * 0.8f) * x).fillMaxWidth(0.2f).fillMaxHeight().clip(RoundedCornerShape(50)).background(HarborColors.Ink.copy(alpha = 0.85f)))
+                }
+                Text((status?.takeIf { it.isNotBlank() } ?: "Connecting").let { if (it.startsWith("Getting the link")) "Connecting" else it.removeSuffix("…") }.uppercase(), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
             }
-            Text((status?.takeIf { it.isNotBlank() } ?: "Connecting").let { if (it.startsWith("Getting the link")) "Connecting" else it.removeSuffix("…") }.uppercase(), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(8.5f), fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-            val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-            val focused by source.collectIsFocusedAsState()
-            Row(
-                Modifier.padding(top = app.harbor.android.ui.tv.u(10f)).height(app.harbor.android.ui.tv.u(29f)).focusRequester(cancel)
-                    .clip(RoundedCornerShape(app.harbor.android.ui.tv.u(6f))).background(if (focused) HarborColors.Ink else HarborColors.Ink.copy(alpha = 0.85f))
-                    .clickable(interactionSource = source, indication = null, onClick = onCancel).padding(horizontal = app.harbor.android.ui.tv.u(15f)),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(6f)),
-            ) {
-                Icon(Icons.Rounded.Close, null, tint = HarborColors.Canvas, modifier = Modifier.size(app.harbor.android.ui.tv.u(10f)))
-                Text("Cancel", color = HarborColors.Canvas, fontSize = app.harbor.android.ui.tv.s(10f), fontWeight = FontWeight.Bold)
+            // Left out while a menu is open over this page, so focus stays in the menu.
+            if (interactive) Row(Modifier.padding(top = app.harbor.android.ui.tv.u(10f)), horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(8f))) {
+                if (failure != null) {
+                    TvConnectButton("Other sources", Icons.Rounded.SwapHoriz, cancel, failure.onSources)
+                    TvConnectButton("Try again", Icons.Rounded.Refresh, null, failure.onRetry)
+                    TvConnectButton("Back", Icons.AutoMirrored.Rounded.ArrowBack, null, onCancel)
+                } else {
+                    TvConnectButton("Cancel", Icons.Rounded.Close, cancel, onCancel)
+                }
             }
         }
     }
-    androidx.compose.runtime.LaunchedEffect(Unit) { runCatching { cancel.requestFocus() } }
-    androidx.activity.compose.BackHandler(onBack = onCancel)
+    androidx.compose.runtime.LaunchedEffect(failure != null, interactive) { if (interactive) runCatching { cancel.requestFocus() } }
+    androidx.activity.compose.BackHandler(enabled = interactive, onBack = onCancel)
+}
+
+/** Why the source on the TV's Connecting page failed, and what can be done about it. */
+internal class TvConnectFailure(val message: String, val onRetry: () -> Unit, val onSources: () -> Unit)
+
+@Composable
+private fun TvConnectButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, focus: androidx.compose.ui.focus.FocusRequester?, onClick: () -> Unit) {
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val ink = if (focused) HarborColors.Canvas else HarborColors.Ink
+    Row(
+        Modifier.height(app.harbor.android.ui.tv.u(32f)).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+            .clip(RoundedCornerShape(app.harbor.android.ui.tv.u(6f))).background(if (focused) HarborColors.Ink else HarborColors.Ink.copy(alpha = 0.14f))
+            .clickable(interactionSource = source, indication = null, onClick = onClick).padding(horizontal = app.harbor.android.ui.tv.u(15f)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(6f)),
+    ) {
+        Icon(icon, null, tint = ink, modifier = Modifier.size(app.harbor.android.ui.tv.u(11f)))
+        Text(label, color = ink, fontSize = app.harbor.android.ui.tv.s(10.5f), fontWeight = FontWeight.Bold, maxLines = 1)
+    }
 }

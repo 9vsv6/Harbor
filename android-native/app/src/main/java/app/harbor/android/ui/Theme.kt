@@ -18,6 +18,10 @@ import app.harbor.android.data.PosterService
  */
 object HarborDisplay {
     var settings by mutableStateOf(AppSettings())
+
+    /** Changes when any language of titles, descriptions or posters does: a key for what shows them. */
+    val textLanguages: String
+        get() = settings.let { "${it.metadataLanguage}|${it.titleLanguage}|${it.imageLanguage}|${it.translateTitles}|${it.translateOverviews}" }
     var rpdbKey by mutableStateOf<String?>(null)
     /** The TMDB key, for cards that need a TMDB title's IMDb id (scores, awards). */
     var tmdbKey by mutableStateOf<String?>(null)

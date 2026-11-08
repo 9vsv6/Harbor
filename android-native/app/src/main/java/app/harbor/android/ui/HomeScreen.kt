@@ -106,7 +106,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     // Rebuilt from scratch when the TMDB key changes.
     val homeLanguages = HarborDisplay.settings.homeLanguages
     // Rows are fetched again when the title, description or poster language changes.
-    val textLanguages = HarborDisplay.settings.let { "${it.metadataLanguage}|${it.titleLanguage}|${it.imageLanguage}|${it.translateTitles}|${it.translateOverviews}" }
+    val textLanguages = HarborDisplay.textLanguages
     val rows = remember(tmdbKey, homeLanguages, textLanguages) { mutableStateMapOf<BrowseView, List<CatalogRow>>() }
     val failed = remember(tmdbKey, homeLanguages, textLanguages) { mutableStateMapOf<BrowseView, Boolean>() }
 

@@ -64,6 +64,10 @@ import java.util.Locale
  */
 class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private lateinit var engine: Engine
+    private lateinit var engineSetup: EngineSetup
+    private lateinit var playerRoot: FrameLayout
+    /** A TV moved from Media3 to mpv for a video Media3 couldn't play; that happens once. */
+    private var triedMpv = false
     private val state = PlayerState()
     private val repository get() = (application as HarborApp).repository
     private val prefs: PlayerPrefs get() = repository.playerPrefs.value
@@ -138,7 +142,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             else (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct(),
             settings = settings,
         )
-        // TVs always play through Media3 (the TV's own hardware decoders; mpv falls back to software on many).
+        engineSetup = setup
+        // TVs start on Media3 (the TV's own hardware decoders); mpv takes over only for what Media3 can't play.
         engine = (if (settings.engine == "media3" || state.tv) null else MpvEngine.create(this, setup)) ?: ExoEngine(this, setup)
         engine.listener = this
         state.engineName = engine.name
@@ -154,13 +159,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 }
             }
         }
-        setContentView(
-            FrameLayout(this).apply {
-                setBackgroundColor(android.graphics.Color.BLACK)
-                addView(engine.view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            },
-        )
+        playerRoot = FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            addView(engine.view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(overlay, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        setContentView(playerRoot)
 
         engine.setSpeed(prefs.speed)
         state.speed = prefs.speed
@@ -462,8 +466,40 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun onError(message: String) {
+        if (state.tv && !triedMpv && (engine as? ExoEngine)?.cantPlay == true) {
+            triedMpv = true
+            // Posted: this call comes from inside the Media3 player that's about to be released.
+            ticker.post {
+                if (!isDestroyed && !switchToMpv()) {
+                    state.error = message
+                    state.buffering = false
+                }
+            }
+            return
+        }
         state.error = message
         state.buffering = false
+    }
+
+    /** Hands the current video to mpv, at the same position, in place of Media3. False if mpv can't start here. */
+    private fun switchToMpv(): Boolean {
+        val mpv = MpvEngine.create(this, engineSetup) ?: return false
+        val old = engine
+        val at = old.positionMs.takeIf { it > 1_000 }
+        old.listener = null
+        playerRoot.removeView(old.view)
+        old.release()
+        engine = mpv
+        mpv.listener = this
+        state.engineName = mpv.name
+        // Index 0: under the controls.
+        playerRoot.addView(mpv.view, 0, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        mpv.setSpeed(state.speed)
+        mpv.setFit(state.fit)
+        mpv.applySubtitleStyle(prefs, state.settings, state.controlsVisible && !state.inPip)
+        begin(state.videoId, state.currentUrl, at)
+        updateAnime4KButton()
+        return true
     }
 
     override fun onVideoSizeChanged() = updatePipParams()
@@ -682,6 +718,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         // Harbor PC's pickDesiredSubtitleTrack: language first, in your order; within a language,
         // "Prefer embedded" puts the video's own track before an addon's. The video's own pick
         // (often its default English track) never stands in for a language you asked for.
+        // "Prefer embedded" needs to know what's in the video. Addons often answer before the video has
+        // opened; settling then would pick their subtitle, and the check below would never run again.
+        if (settings.preferEmbeddedSubs && text.isEmpty() && engine.audioTracks().isEmpty() && engine.videoSize == null) return
         for (lang in wanted) {
             val inVideo = embedded.firstOrNull { sameLanguage(it.language, lang) }
             if (settings.preferEmbeddedSubs && inVideo != null) {
@@ -829,13 +868,14 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     if (state.panel != null) state.panel = null else state.controlsVisible = false
                     return true
                 }
-                val handled = state.panel != null || (state.tv && state.controlsVisible && state.playing)
+                val handled = state.panel != null || (state.tv && state.controlsVisible && state.playing && !state.tvCovered)
                 if (event.repeatCount == 0) backPressHandled = handled
                 return if (handled) true else super.dispatchKeyEvent(event)
             }
         }
         val hidden = !state.controlsVisible && state.panel == null && state.endScreen == null && state.liveSync == null
-        if (!hidden || state.locked) return super.dispatchKeyEvent(event)
+        // The Connecting page has its own buttons: the remote goes to them, not to play/pause and seeking.
+        if (!hidden || state.locked || state.tvCovered) return super.dispatchKeyEvent(event)
         when (code) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 if (down) keySeek(forward = code == KeyEvent.KEYCODE_DPAD_RIGHT)

@@ -2,6 +2,9 @@ package app.harbor.android.player
 
 import android.content.Context
 import android.graphics.Color
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import androidx.annotation.OptIn
 import androidx.compose.ui.graphics.asImageBitmap
@@ -17,6 +20,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -74,6 +78,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                cantPlay = error.errorCode in UNPLAYABLE
                 listener?.onError(
                     when (error.errorCode) {
                         PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "The server refused the video (${error.cause?.message?.take(60) ?: "HTTP error"})."
@@ -95,8 +100,10 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                 // With no decoder for the video track Media3 plays audio over black; say why instead.
                 val video = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
                 // Once per video: track changes (a new audio track, say) fire this again.
-                if (!toldUnsupported && video.isNotEmpty() && video.none { g -> (0 until g.length).any { g.isTrackSupported(it) } }) {
+                // "Exceeds capabilities" isn't "no decoder": Media3 still tries those, and many TVs under-report.
+                if (!toldUnsupported && video.isNotEmpty() && video.none { g -> (0 until g.length).any { g.isTrackSupported(it, true) } }) {
                     toldUnsupported = true
+                    cantPlay = true
                     listener?.onError("This device can't decode ${describeVideo(video.first().getTrackFormat(0))} video.")
                 }
             }
@@ -106,12 +113,40 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     /** Whether this video's "can't decode" message was already given. */
     private var toldUnsupported = false
 
+    /** Media3 itself can't read or decode this video (not a network or server failure): another engine might. */
+    var cantPlay = false
+        private set
+
+    private val main = Handler(Looper.getMainLooper())
+    /** Bumped by each load and by release, so a slow stream-type check can't start an old video. */
+    private var loadAttempt = 0
+
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
         toldUnsupported = false
+        cantPlay = false
         // Data sources read the factory's properties when they open, so this covers the new item.
         http.setUserAgent(headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: Net.USER_AGENT)
         http.setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent", true) })
-        player.setMediaItem(MediaItem.fromUri(url), startMs)
+        val attempt = ++loadAttempt
+        val uri = Uri.parse(url)
+        val fileType = uri.lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase(Locale.ROOT)
+        if (Util.inferContentType(uri) != C.CONTENT_TYPE_OTHER || fileType in PLAIN_FILES || uri.scheme?.startsWith("http", ignoreCase = true) != true) {
+            start(MediaItem.fromUri(url), startMs)
+            return
+        }
+        // No telling extension (/stream/abc?token=...): Media3 would take an HLS or DASH address for a
+        // plain file and fail. Ask the server what it is first.
+        player.stop()
+        kotlin.concurrent.thread(isDaemon = true, name = "media3-stream-type") {
+            val mime = streamType(url, headers)
+            main.post {
+                if (attempt == loadAttempt) start(MediaItem.Builder().setUri(url).apply { if (mime != null) setMimeType(mime) }.build(), startMs)
+            }
+        }
+    }
+
+    private fun start(item: MediaItem, startMs: Long) {
+        player.setMediaItem(item, startMs)
         player.prepare()
         player.play()
     }
@@ -203,11 +238,51 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override fun setShaders(paths: List<String>) {}
 
     override fun release() {
+        loadAttempt++
         // The view lets go first, so nothing in it touches the released player during teardown.
         playerView.player = null
         player.release()
     }
 }
+
+/** Failures that come from the video itself: its container, its codecs, or this device's decoders for them. */
+private val UNPLAYABLE = setOf(
+    PlaybackException.ERROR_CODE_UNSPECIFIED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+    PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FAILED,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+    PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED,
+)
+
+/** File endings that are plain video or audio files, so their addresses need no stream-type check. */
+private val PLAIN_FILES = setOf("mkv", "mp4", "m4v", "webm", "avi", "mov", "ts", "m2ts", "mpg", "mpeg", "flv", "wmv", "ogv", "3gp", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wav", "aiff")
+
+private val sniffClient by lazy { Net.client.newBuilder().callTimeout(3, java.util.concurrent.TimeUnit.SECONDS).build() }
+
+/** HLS or DASH when the server or the first bytes say so; null means treat it as a plain file. */
+private fun streamType(url: String, headers: Map<String, String>): String? = runCatching {
+    val request = okhttp3.Request.Builder().url(url).header("User-Agent", Net.USER_AGENT).header("Range", "bytes=0-2047")
+        .apply { headers.forEach { (name, value) -> header(name, value) } }.build()
+    sniffClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) return@use null
+        val type = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
+        val bytes = ByteArray(2048)
+        val read = response.body?.byteStream()?.read(bytes) ?: -1
+        val start = if (read > 0) String(bytes, 0, read, Charsets.ISO_8859_1).trimStart() else ""
+        when {
+            "mpegurl" in type || start.startsWith("#EXTM3U") -> MimeTypes.APPLICATION_M3U8
+            "dash+xml" in type || "<MPD" in start -> MimeTypes.APPLICATION_MPD
+            else -> null
+        }
+    }
+}.getOrNull()
 
 private fun audioDetail(format: Format): String? {
     val codec = when (format.sampleMimeType) {

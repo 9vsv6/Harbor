@@ -163,7 +163,10 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         }
         val firstFocus = remember { FocusRequester() }
         Row(Modifier.fillMaxSize().padding(top = u(8f)), horizontalArrangement = Arrangement.spacedBy(u(20f))) {
-            LazyColumn(Modifier.width(u(258f)).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(u(5f)), contentPadding = PaddingValues(bottom = u(40f))) {
+            // Inside a category the options run to the edge of the screen. Only Picture keeps the
+            // side frame, since that frame is the setting.
+            val wide = depth == 2 && active != Cat.Picture
+            LazyColumn((if (wide) Modifier.weight(1f) else Modifier.width(u(258f))).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(u(5f)), contentPadding = PaddingValues(bottom = u(40f))) {
                 if (depth == 1) {
                     itemsIndexed(Cat.entries) { i, c ->
                         CategoryRow(
@@ -177,6 +180,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                         }
                     }
                 } else {
+                    if (active == Cat.Subtitles) item(key = "sample") { SubtitleSample(subPx) }
                     itemsIndexed(controls, key = { _, it -> it.id }) { i, control ->
                         val f = if (i == 0) firstFocus else null
                         when (control) {
@@ -197,10 +201,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                     }
                 }
             }
-            // The summary on the right shows from the category list; inside a category only the
-            // picture and subtitle previews stay, since they show what's being changed.
-            if (depth == 1 || active == Cat.Picture || active == Cat.Subtitles) SettingsPane(active, settings, prefs, autoPlay, connected, subLangs, subPx, Modifier.weight(1f))
-            else androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            if (!wide) SettingsPane(active, settings, prefs, autoPlay, connected, subLangs, subPx, Modifier.weight(1f))
         }
         LaunchedEffect(depth) { runCatching { firstFocus.requestFocus() } }
     }
@@ -334,13 +335,20 @@ private fun CategoryRow(label: String, summary: String, focus: FocusRequester?, 
 }
 
 @Composable
+private fun SubtitleSample(px: String) {
+    Box(Modifier.fillMaxWidth().height(u(58f)).clip(RoundedCornerShape(u(6f))).background(Panel), contentAlignment = Alignment.Center) {
+        Text("This is how a subtitle will look.", color = Color.White, fontSize = (px.toFloat() * 0.27f * LocalUnit.current).sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+@Composable
 private fun ControlLabel(text: String) {
     Text(text.uppercase(), color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp, modifier = Modifier.padding(top = u(4f), bottom = u(3f)))
 }
 
 /** A cell: the choice in force sits on the --bp-on plate, the focused one turns white. */
 @Composable
-private fun Cell(text: String, on: Boolean, focus: FocusRequester?, modifier: Modifier = Modifier, fontSize: Float = 8.5f, onClick: () -> Unit, content: (@Composable () -> Unit)? = null) {
+private fun Cell(text: String, on: Boolean, focus: FocusRequester?, modifier: Modifier = Modifier, fontSize: Float = 8.5f, onClick: () -> Unit, content: (@Composable (focused: Boolean) -> Unit)? = null) {
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     val shape = RoundedCornerShape(u(5f))
@@ -358,7 +366,7 @@ private fun Cell(text: String, on: Boolean, focus: FocusRequester?, modifier: Mo
             .padding(horizontal = u(9f)),
         contentAlignment = Alignment.Center,
     ) {
-        if (content != null) content()
+        if (content != null) content(focused)
         else Text(
             text, color = if (focused) HarborColors.Canvas else if (on) HarborColors.Ink else HarborColors.InkSubtle,
             fontSize = s(fontSize), fontWeight = if (on || focused) FontWeight.Bold else FontWeight.SemiBold, maxLines = 1,
@@ -373,7 +381,8 @@ private fun OptionRow(control: Control.Options, focus: FocusRequester?, onPick: 
         val start = control.options.indexOfFirst { it.value == control.value }.coerceAtLeast(0)
         val fit = control.options.size <= 4
         if (fit) {
-            Row(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
+            // A few choices (On / Off, sizes) stay a comfortable width instead of stretching across the TV.
+            Row(Modifier.widthIn(max = u(340f)), horizontalArrangement = Arrangement.spacedBy(u(5f))) {
                 control.options.forEachIndexed { i, o ->
                     val size = if (control.letter) 8f + i * 2.5f else 8.5f
                     Cell(if (control.letter) "A" else o.label, o.value == control.value, if (i == start) focus else null, Modifier.weight(1f), size, onClick = { onPick(o.value) })
@@ -392,9 +401,9 @@ private fun MultiRow(control: Control.Multi, focus: FocusRequester?, onToggle: (
     Column {
         ControlLabel(control.label)
         if (control.logos) {
-            // Services: a grid of their marks, three across, so every one is a press away.
+            // Services: a grid of their marks, six across, so every one is a press away.
             Column(verticalArrangement = Arrangement.spacedBy(u(5f))) {
-                control.items.chunked(3).forEachIndexed { r, row ->
+                control.items.chunked(6).forEachIndexed { r, row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
                         row.forEachIndexed { c, (key, name, rank) ->
                             val svc = StreamingServices.all.first { it.key == key }
@@ -402,16 +411,16 @@ private fun MultiRow(control: Control.Multi, focus: FocusRequester?, onToggle: (
                                 AsyncImage("file:///android_asset/${svc.logo}", name, contentScale = ContentScale.Fit, modifier = Modifier.height(u(12f)).fillMaxWidth(), alpha = if (rank > 0) 1f else 0.45f)
                             }
                         }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                        repeat(6 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(u(5f))) {
                 itemsIndexed(control.items) { i, (key, name, rank) ->
-                    Cell(name, rank > 0, if (i == 0) focus else null, onClick = { onToggle(key) }) {
+                    Cell(name, rank > 0, if (i == 0) focus else null, onClick = { onToggle(key) }) { focused ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(4f))) {
-                            Text(name, color = if (rank > 0) HarborColors.Ink else HarborColors.InkSubtle, fontSize = s(8.5f), fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text(name, color = if (focused) HarborColors.Canvas else if (rank > 0) HarborColors.Ink else HarborColors.InkSubtle, fontSize = s(8.5f), fontWeight = FontWeight.SemiBold, maxLines = 1)
                             if (rank > 0) Box(Modifier.size(u(11f)).clip(CircleShape).background(Void), contentAlignment = Alignment.Center) {
                                 Text("$rank", color = HarborColors.Ink, fontSize = s(6.5f), fontWeight = FontWeight.Bold)
                             }

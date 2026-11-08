@@ -313,20 +313,23 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             }
         } else {
-            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !(state.tv && (state.panel == Panel.Subtitles || state.panel == Panel.Audio || state.liveSync != null)), enter = fadeIn(), exit = fadeOut()) {
-                if (state.tv) TvPlayerControls(state, actions) { touchedAt.longValue = System.currentTimeMillis() }
-                else HarborControls(state, prefs, actions, castButton) { touchedAt.longValue = System.currentTimeMillis() }
+            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !state.tvCovered && !(state.tv && (state.panel == Panel.Subtitles || state.panel == Panel.Audio || state.panel == Panel.Sources || state.liveSync != null)), enter = fadeIn(), exit = fadeOut()) {
+                // Left to right in every language: a timeline and its buttons don't mirror.
+                androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                    if (state.tv) TvPlayerControls(state, actions) { touchedAt.longValue = System.currentTimeMillis() }
+                    else HarborControls(state, prefs, actions, castButton) { touchedAt.longValue = System.currentTimeMillis() }
+                }
             }
         }
-        // TV: Big Picture's Connecting screen until the video has started.
-        if (state.tv && state.durationMs == 0L && state.error == null && !state.ended) TvPlayerConnecting(state, actions)
+        // TV: Big Picture's Connecting screen until the video has started; a failure shows there too.
+        if (state.tvCovered) TvPlayerConnecting(state, actions)
 
         Hint(state)
         ContentAdvisoryLayer(state, actions)
-        if (!state.stillWatching) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
-        ResumePill(state, actions, Modifier.align(Alignment.BottomStart))
+        if (!state.stillWatching && !state.tvCovered) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
+        if (!state.tvCovered) ResumePill(state, actions, Modifier.align(Alignment.BottomStart))
 
-        state.error?.let { ErrorCard(it, state, actions, Modifier.align(Alignment.Center)) }
+        if (!state.tv) state.error?.let { ErrorCard(it, state, actions, Modifier.align(Alignment.Center)) }
 
         HarborPopovers(state, prefs, actions)
         if (state.tv && state.panel == Panel.Subtitles) TvSubtitlePanel(state, prefs, actions)

@@ -342,9 +342,10 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
     // An IMDb title (library, history, an addon's catalog) in your title and poster languages, from TMDB.
     val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
     val tmdbKey = HarborDisplay.tmdbKey
-    var local by remember(meta.id) { mutableStateOf(imdb?.let { app.harbor.android.data.Tmdb.cachedLocal(it, meta.type) }) }
+    val languages = HarborDisplay.textLanguages
+    var local by remember(meta.id, languages) { mutableStateOf(imdb?.let { app.harbor.android.data.Tmdb.cachedLocal(it, meta.type) }) }
     if (imdb != null && tmdbKey != null && local == null && app.harbor.android.data.Tmdb.localizesCards) {
-        LaunchedEffect(imdb, tmdbKey) { local = runCatching { app.harbor.android.data.Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull() }
+        LaunchedEffect(imdb, tmdbKey, languages) { local = runCatching { app.harbor.android.data.Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull() }
     }
     val ownPoster = local?.second ?: meta.poster
     val title = local?.first ?: meta.name

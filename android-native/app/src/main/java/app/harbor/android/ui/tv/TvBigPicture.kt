@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.sp
 import app.harbor.android.data.CwItem
 import app.harbor.android.data.Meta
 import app.harbor.android.data.Tmdb
+import app.harbor.android.ui.HarborDisplay
 import app.harbor.android.perf.Perf
 import app.harbor.android.ui.HarborColors
 import app.harbor.android.ui.ImdbBadge
@@ -138,10 +139,16 @@ internal val LocalUnit = staticCompositionLocalOf { 1f }
 
 /** Whole details for the spotlight, fetched once per title (TMDB in your languages, else the addon's meta). */
 internal object TvEnrich {
-    val cache = ConcurrentHashMap<String, Meta>()
+    private val cache = ConcurrentHashMap<String, Meta>()
+
+    /** Per language: after a language change the spotlight fetches the new text. */
+    private fun key(id: String) = "$id|${Tmdb.languageKey}"
+
+    fun cached(id: String): Meta? = cache[key(id)]
 
     suspend fun load(meta: Meta, tmdbKey: String?, metaAddons: suspend () -> List<app.harbor.android.data.Addon>): Meta {
-        cache[meta.id]?.let { return it }
+        val cacheKey = key(meta.id)
+        cache[cacheKey]?.let { return it }
         var out = meta
         val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
         if (out.description.isNullOrBlank() || out.background == null || out.genres.isNullOrEmpty()) {
@@ -160,6 +167,7 @@ internal object TvEnrich {
         if (tmdbKey != null && imdb != null) {
             runCatching { Tmdb.details(tmdbKey, imdb, meta.type) }.getOrNull()?.let { d ->
                 out = out.copy(
+                    name = d.title?.takeIf { it.isNotBlank() } ?: out.name,
                     description = d.overview?.takeIf { it.isNotBlank() } ?: out.description,
                     background = d.backdrop ?: out.background,
                     logo = d.logo ?: out.logo,
@@ -168,7 +176,7 @@ internal object TvEnrich {
                 )
             }
         }
-        cache[meta.id] = out
+        cache[cacheKey] = out
         return out
     }
 }
@@ -275,11 +283,11 @@ fun TvBigPictureHome(
 @Composable
 private fun rememberEnriched(meta: Meta?, tmdbKey: String?, metaAddons: suspend () -> List<app.harbor.android.data.Addon>): Meta? {
     var out by remember { mutableStateOf(meta) }
-    LaunchedEffect(meta?.id) {
+    LaunchedEffect(meta?.id, HarborDisplay.textLanguages) {
         if (meta == null) { out = null; return@LaunchedEffect }
         // The copy changes on the frame focus lands; the details catch up a moment later.
-        out = TvEnrich.cache[meta.id] ?: meta
-        if (TvEnrich.cache[meta.id] != null) return@LaunchedEffect
+        out = TvEnrich.cached(meta.id) ?: meta
+        if (TvEnrich.cached(meta.id) != null) return@LaunchedEffect
         delay(180) // A held key passes over cards without fetching each one.
         out = TvEnrich.load(meta, tmdbKey, metaAddons)
     }
@@ -568,15 +576,28 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
     val context = LocalContext.current
     val restore = LocalHomeFocusRestore.current
     val requester = focus ?: remember { FocusRequester() }
+    // An IMDb title in your title and poster languages, as on phones (only when those aren't English).
+    val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
+    val tmdbKey = HarborDisplay.tmdbKey
+    val languages = HarborDisplay.textLanguages
+    var local by remember(meta.id, languages) { mutableStateOf(imdb?.let { Tmdb.cachedLocal(it, meta.type) }) }
+    if (imdb != null && tmdbKey != null && local == null && Tmdb.localizesCards) {
+        LaunchedEffect(imdb, tmdbKey, languages) {
+            delay(200) // A held key passes over cards without looking each one up.
+            local = runCatching { Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull()
+        }
+    }
+    val poster = local?.second ?: meta.poster
+    val title = local?.first ?: meta.name
     TvTileBox(width ?: u(121f), 2f / 3f, u(5f), requester, onFocused, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { focused ->
-        val request = remember(meta.poster) { meta.poster?.let { ImageRequest.Builder(context).data(it).size(Perf.posterWidthPx, (Perf.posterWidthPx * 1.5f).toInt()).build() } }
-        if (request != null) AsyncImage(request, meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        val request = remember(poster) { poster?.let { ImageRequest.Builder(context).data(it).size(Perf.posterWidthPx, (Perf.posterWidthPx * 1.5f).toInt()).build() } }
+        if (request != null) AsyncImage(request, title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         CardTag(meta, Modifier.align(Alignment.TopStart))
         // The title shows on the focused card (or a card with no art), over a fade (bp-tile).
-        if (focused || meta.poster == null) {
+        if (focused || poster == null) {
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.5f to Color.Transparent, 1f to Void)))
             Text(
-                meta.name, color = HarborColors.Ink, fontSize = s(9f), fontWeight = FontWeight.Bold, lineHeight = s(11f),
+                title, color = HarborColors.Ink, fontSize = s(9f), fontWeight = FontWeight.Bold, lineHeight = s(11f),
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = u(6f), vertical = u(5f)),
             )
@@ -600,7 +621,7 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
         else -> null
     }
     // The card's art: the title's backdrop once the details know it.
-    var art by remember(item.meta.id) { mutableStateOf(item.meta.background ?: TvEnrich.cache[item.meta.id]?.background ?: item.meta.poster) }
+    var art by remember(item.meta.id) { mutableStateOf(item.meta.background ?: TvEnrich.cached(item.meta.id)?.background ?: item.meta.poster) }
     TvTileBox(u(221f), 16f / 9f, u(4f), requester, onFocused, onClick = { TvReturnFocus.mark(item.meta.id); onClick() }) {
         val request = remember(art) { art?.let { ImageRequest.Builder(context).data(it).size(640, 360).precision(Precision.INEXACT).build() } }
         if (request != null) AsyncImage(request, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -634,7 +655,7 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
         }
     }
     LaunchedEffect(item.meta.id) {
-        if (item.meta.background == null) TvEnrich.cache[item.meta.id]?.background?.let { art = it }
+        if (item.meta.background == null) TvEnrich.cached(item.meta.id)?.background?.let { art = it }
     }
     if (restore) LaunchedEffect(item.meta.id) { if (TvReturnFocus.consume(item.meta.id)) runCatching { requester.requestFocus() } }
 }

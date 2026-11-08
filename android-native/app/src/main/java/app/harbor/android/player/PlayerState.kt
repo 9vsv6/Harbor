@@ -116,6 +116,8 @@ class PlayerState {
     var videoId by mutableStateOf("")
     var sources by mutableStateOf<List<RankedStream>?>(null)
     var currentUrl by mutableStateOf("")
+    /** TV: the full-screen Connecting page (or its "didn't play" state) is up, instead of the player. */
+    val tvCovered: Boolean get() = tv && (error != null || (durationMs == 0L && !ended))
     /** The playing source's name line, to mark it in the switcher. */
     var currentStreamKey by mutableStateOf<String?>(null)
     /** "4K", "1080p"… from the source, beside the title. */
