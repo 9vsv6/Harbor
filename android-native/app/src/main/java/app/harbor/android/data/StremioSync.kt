@@ -80,9 +80,13 @@ object StremioSync {
         for ((key, raw) in all) {
             val item = runCatching { Net.json.parseToJsonElement(raw as String).jsonObject }.getOrNull()
             if (item == null) { prefs?.edit()?.remove(key)?.apply(); continue }
-            val remote = StremioApi.libraryItem(authKey, item.string("_id") ?: continue)
-            if (mtime(remote) < mtime(item)) StremioApi.putLibraryItem(authKey, keepMembership(item, remote))
-            prefs?.edit()?.remove(key)?.apply()
+            val id = item.string("_id") ?: continue
+            // One write that fails stays queued for next time, without holding up the ones after it.
+            runCatching {
+                val remote = StremioApi.libraryItem(authKey, id)
+                if (mtime(remote) < mtime(item)) StremioApi.putLibraryItem(authKey, keepMembership(item, remote))
+                prefs?.edit()?.remove(key)?.apply()
+            }
         }
     }
 

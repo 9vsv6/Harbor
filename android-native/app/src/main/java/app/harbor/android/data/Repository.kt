@@ -559,7 +559,10 @@ class Repository(private val context: Context) {
         _settings.value = next
         if (before.traktInContinueWatching != next.traktInContinueWatching) scope.launch { refreshTrackers() }
         if (before.pmdbInContinueWatching != next.pmdbInContinueWatching) scope.launch { accounts.refreshPmdb() }
-        scope.launch { context.store.edit { it[keySettings] = Net.json.encodeToString(AppSettings.serializer(), next) } }
+        // These writes run on several threads and can land out of order: each saves what's current, so
+        // the last to land is never an older value. (After a profile switch, what this change produced.)
+        val key = keySettings
+        scope.launch { context.store.edit { it[key] = Net.json.encodeToString(AppSettings.serializer(), if (key == keySettings) _settings.value else next) } }
     }
 
     private val _rpdbKey = MutableStateFlow<String?>(null)
@@ -611,6 +614,14 @@ class Repository(private val context: Context) {
         if (!_settings.value.rememberLastStream) return null
         val saved = _lastStreams.value[metaId] ?: return null
         return saved.substringBefore("|") to saved.substringAfter("|", "").ifEmpty { null }
+    }
+
+    /** Forgets a remembered source that failed to open, if it's still the one remembered for this title. */
+    fun forgetStream(metaId: String, addonId: String, streamName: String) {
+        if (_lastStreams.value[metaId] != "$addonId|$streamName") return
+        val next = _lastStreams.value - metaId
+        _lastStreams.value = next
+        scope.launch { context.store.edit { it[keyLastStreams] = Net.json.encodeToString(stringMap, next) } }
     }
 
     fun rememberStream(metaId: String, addonId: String, streamName: String) {
@@ -741,7 +752,8 @@ class Repository(private val context: Context) {
     fun updatePlayerPrefs(change: (PlayerPrefs) -> PlayerPrefs) {
         val next = change(_playerPrefs.value)
         _playerPrefs.value = next
-        scope.launch { context.store.edit { it[keyPlayer] = Net.json.encodeToString(PlayerPrefs.serializer(), next) } }
+        val key = keyPlayer
+        scope.launch { context.store.edit { it[key] = Net.json.encodeToString(PlayerPrefs.serializer(), if (key == keyPlayer) _playerPrefs.value else next) } }
     }
 
     // ---- My List (Harbor's watchlist), kept on this device ----

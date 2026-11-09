@@ -133,6 +133,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val settings = repository.settings.value
         state.settings = settings
         state.tv = app.harbor.android.ui.isTv(this)
+        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).let { audio ->
+            state.volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC) / audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat().coerceAtLeast(1f)
+        }
         // MpvEngine.configure reads the device profile; idempotent if the app already set it up.
         app.harbor.android.perf.Perf.init(this, app.harbor.android.perf.Perf.forcedTv)
         val device = Locale.getDefault().language
@@ -223,6 +226,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private fun begin(videoId: String, url: String, startAt: Long? = null) {
         state.videoId = videoId
         state.currentUrl = url
+        state.hasPlayed = false
         state.sources = null
         state.error = null
         state.ended = false
@@ -421,7 +425,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun onPlayingChanged(playing: Boolean) {
         state.playing = playing
         // Playing means whatever error was showing no longer applies.
-        if (playing) state.error = null
+        if (playing) {
+            state.error = null
+            state.hasPlayed = true
+            // Replayed from the end: it isn't over any more, and a queued "next" mustn't take you away.
+            state.ended = false
+        }
         if (playing) scrobble("start") else if (!engine.ended) scrobble("pause")
         updatePipParams()
     }
@@ -470,15 +479,22 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             triedMpv = true
             // Posted: this call comes from inside the Media3 player that's about to be released.
             ticker.post {
-                if (!isDestroyed && !switchToMpv()) {
-                    state.error = message
-                    state.buffering = false
-                }
+                if (!isDestroyed && !switchToMpv()) showError(message)
             }
             return
         }
+        showError(message)
+    }
+
+    private fun showError(message: String) {
         state.error = message
         state.buffering = false
+        // A source that never started isn't "the one that worked": it shouldn't auto-play next time.
+        if (!state.hasPlayed) {
+            val addon = currentAddonId
+            val key = currentStreamKey
+            if (addon != null && key != null) repository.forgetStream(metaId, addon, key)
+        }
     }
 
     /** Hands the current video to mpv, at the same position, in place of Media3. False if mpv can't start here. */
@@ -492,6 +508,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         engine = mpv
         mpv.listener = this
         state.engineName = mpv.name
+        // mpv draws its own subtitles: a line Media3 had on screen would otherwise stay there.
+        state.cues = emptyList()
         // Index 0: under the controls.
         playerRoot.addView(mpv.view, 0, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         mpv.setSpeed(state.speed)
@@ -1300,7 +1318,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun playSource(source: RankedStream) {
-        val position = engine.positionMs
+        // Null when the last source never opened: the new one then starts from your saved place, not 0:00.
+        val position = engine.positionMs.takeIf { it > 0 }
         state.panel = null
         state.hint = "Switching source…"
         state.hintIcon = 0
@@ -1319,7 +1338,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     /** The stream has buffered for too long: move to the next source that opens, from the same spot. */
     private fun switchOnStall() {
         val videoId = state.videoId
-        val position = engine.positionMs
+        val position = engine.positionMs.takeIf { it > 0 }
         currentStreamKey?.let { stalledKeys += "$currentAddonId|$it" }
         state.hint = "Slow source: trying the next one…"
         state.hintIcon = 0
@@ -1386,6 +1405,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         volumeLevel = (volumeLevel + delta).coerceIn(0f, engine.maxVolume)
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(volumeLevel.coerceAtMost(1f) * max), 0)
         engine.setVolume(volumeLevel.coerceAtLeast(1f))
+        state.volume = volumeLevel.coerceAtMost(1f)
         return volumeLevel
     }
 
@@ -1488,8 +1508,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun toggleMute() {
         state.muted = !state.muted
+        // Only the player's own volume: the device's stays where you left it.
         engine.setVolume(if (state.muted) 0f else volumeLevel.coerceAtLeast(1f))
-        if (!state.muted) setVolumeLevel(state.volume)
     }
 
     override fun setVolumeLevel(level: Float) {
@@ -1509,7 +1529,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun retry() {
-        val position = engine.positionMs
+        val position = engine.positionMs.takeIf { it > 0 }
+            ?: if (state.settings.resumePlayback) repository.resumeFor(state.videoId, metaId) else 0L
         state.error = null
         state.buffering = true
         engine.load(state.currentUrl, headers, position)

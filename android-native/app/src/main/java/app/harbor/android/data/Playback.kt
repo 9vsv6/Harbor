@@ -78,7 +78,8 @@ object Playback {
         prefer: Pair<String, String?>?,
     ): List<RankedStream> {
         val rank = addons.withIndex().associate { it.value to it.index }
-        val all = groups.sortedBy { rank[it.addon] ?: Int.MAX_VALUE }.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }
+        // An addon can list a source twice (asked under two ids for anime, say): one row each, as lists key on it.
+        val all = groups.sortedBy { rank[it.addon] ?: Int.MAX_VALUE }.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }.distinctBy(::rowKey)
         val kept = all.filter { allowed(it.stream, settings) }
         val playable = { s: Stream -> s.playable(debrid != null) }
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
@@ -151,6 +152,10 @@ object Playback {
             ?: return ordered
         return listOf(pick) + (ordered - pick)
     }
+
+    /** One source's identity within a list. Unique in what `ranked` returns, so lists can key on it. */
+    fun rowKey(item: RankedStream): String =
+        item.addon.manifest.id + "|" + (item.stream.url ?: item.stream.infoHash) + "|" + item.stream.fileIdx + "|" + item.stream.name + "|" + item.stream.title
 
     /** What identifies a source between visits: its name line, which carries quality and service. */
     fun streamKey(stream: Stream): String = (stream.name ?: stream.title ?: "").replace('\n', ' ').trim().take(80)

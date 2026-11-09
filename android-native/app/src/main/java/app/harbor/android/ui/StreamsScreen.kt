@@ -414,7 +414,7 @@ fun StreamsScreen(
                 condensed -> item(key = "condensed") {
                     CondensedPicker(shown, meta, title.substringBefore(" · "), settings, debrid != null, wide) { play(it) }
                 }
-                else -> items(shown, key = { it.addon.manifest.id + "|" + (it.stream.url ?: it.stream.infoHash) + "|" + it.stream.name + "|" + it.stream.title }) { item ->
+                else -> items(shown, key = { Playback.rowKey(it) }) { item ->
                     val last = remembered != null && item.addon.manifest.id == remembered.first &&
                         (remembered.second == null || Playback.streamKey(item.stream) == remembered.second) && item === shown.first()
                     SourceCard(item, wide, last, settings, item.stream.playable(debrid != null), onDownload = {
@@ -782,7 +782,7 @@ private fun TvSourcesPage(
                             color = HarborColors.InkMuted, fontSize = app.harbor.android.ui.tv.s(11f), modifier = Modifier.padding(top = app.harbor.android.ui.tv.u(20f)),
                         )
                     }
-                    else -> items(shown.size, key = { i -> shown[i].let { it.addon.manifest.id + "|" + (it.stream.url ?: it.stream.infoHash) + "|" + it.stream.name + "|" + it.stream.title } }) { i ->
+                    else -> items(shown.size, key = { i -> Playback.rowKey(shown[i]) }) { i ->
                         val item = shown[i]
                         val last = remembered != null && item.addon.manifest.id == remembered.first &&
                             (remembered.second == null || Playback.streamKey(item.stream) == remembered.second) && i == 0

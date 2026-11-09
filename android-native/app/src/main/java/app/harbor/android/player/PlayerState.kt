@@ -117,7 +117,9 @@ class PlayerState {
     var sources by mutableStateOf<List<RankedStream>?>(null)
     var currentUrl by mutableStateOf("")
     /** TV: the full-screen Connecting page (or its "didn't play" state) is up, instead of the player. */
-    val tvCovered: Boolean get() = tv && (error != null || (durationMs == 0L && !ended))
+    val tvCovered: Boolean get() = tv && (error != null || (durationMs == 0L && !hasPlayed && !ended))
+    /** This video has started. A live stream never reports a length, so that alone can't mean "still connecting". */
+    var hasPlayed by mutableStateOf(false)
     /** The playing source's name line, to mark it in the switcher. */
     var currentStreamKey by mutableStateOf<String?>(null)
     /** "4K", "1080p"… from the source, beside the title. */

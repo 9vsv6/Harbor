@@ -234,6 +234,10 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
         return UiCue(text = words, image = image, top = top, width = if (size != Cue.DIMEN_UNSET) size else 0f)
     }
 
+    override fun setVolume(level: Float) {
+        player.volume = level.coerceIn(0f, 1f)
+    }
+
     override val supportsShaders = false
     override fun setShaders(paths: List<String>) {}
 

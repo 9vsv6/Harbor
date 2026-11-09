@@ -73,7 +73,10 @@ object AddonClient {
         for (addon in addons.filter { it.manifest.supports("meta", type, id) }) {
             val meta = runCatching {
                 val body = fetch(path(addon, "meta", type, id))
-                withContext(Net.parseDispatcher) { body["meta"]?.let { Net.json.decodeFromJsonElement(Meta.serializer(), it) } }
+                withContext(Net.parseDispatcher) {
+                    // Episode lists key on the id: an addon that repeats one would crash the title page.
+                    body["meta"]?.let { Net.json.decodeFromJsonElement(Meta.serializer(), it) }?.let { m -> m.copy(videos = m.videos?.distinctBy { v -> v.id }) }
+                }
             }.getOrNull()
             if (meta != null) return meta
         }

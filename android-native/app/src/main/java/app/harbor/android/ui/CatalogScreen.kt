@@ -75,7 +75,8 @@ fun CatalogScreen(
         }
         val page = runCatching { AddonClient.catalog(addon, catalog, extra) }.getOrDefault(emptyList())
         val known = metas.map { it.id }.toSet()
-        val fresh = page.filter { it.id !in known }
+        // distinctBy: a title repeated within one page would crash the grid (each cell's key must be unique).
+        val fresh = page.filter { it.id !in known }.distinctBy { it.id }
         if (fresh.isEmpty()) done = true
         metas = metas + fresh
         loading = false
@@ -121,7 +122,7 @@ private fun TmdbCatalog(repository: Repository, spec: Tmdb.RowSpec, title: Strin
         loading = true
         val next = runCatching { Tmdb.row(k, spec, page + 1) }.getOrDefault(emptyList())
         val known = metas.map { it.id }.toSet()
-        val fresh = next.filter { it.id !in known }
+        val fresh = next.filter { it.id !in known }.distinctBy { it.id }
         if (fresh.isEmpty()) done = true
         metas = metas + fresh
         page++

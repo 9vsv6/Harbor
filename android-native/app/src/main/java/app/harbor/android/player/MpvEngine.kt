@@ -412,6 +412,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         eof = false
         position = 0.0
         duration = 0.0
+        cacheTime = 0.0
         // Header names are case-insensitive: a plugin's "user-agent" is the user agent, not a second header.
         val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
         mpv.setPropertyString("user-agent", ua ?: Net.USER_AGENT)

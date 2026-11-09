@@ -325,7 +325,9 @@ private fun RailHeader(title: String, onSeeAll: (() -> Unit)?) {
 }
 
 @Composable
-fun Rail(title: String, metas: List<Meta>, onOpen: (Meta) -> Unit, onSeeAll: (() -> Unit)? = null) {
+fun Rail(title: String, list: List<Meta>, onOpen: (Meta) -> Unit, onSeeAll: (() -> Unit)? = null) {
+    // A title listed twice would give two rows the same key, which crashes a lazy list.
+    val metas = remember(list) { list.distinctBy { it.type + it.id } }
     if (metas.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RailHeader(title, onSeeAll)
