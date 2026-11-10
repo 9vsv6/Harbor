@@ -1,0 +1,149 @@
+name: Android release
+
+# Builds Harbor for Android (android-native/) and publishes the signed APKs.
+#
+# - Push a tag android-vX.Y.Z that matches versionName in android-native/app/build.gradle.kts:
+#   the APKs are built, signed and published as the release "Harbor X.Y.Z for Android", marked
+#   latest, with Harbor_X.Y.Z_android.apk (phones and tablets), _android-armv7.apk (32-bit TVs)
+#   and _android-universal.apk. The in-app updater looks for exactly these names.
+#   Release notes come from android-native/release-notes/X.Y.Z.md when that file exists.
+# - Run it by hand (Actions -> Android release -> Run workflow) to build only: the APKs are kept
+#   as a workflow artifact. Tick "publish" to also publish the release for the current version.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions), the same release key the
+# published APKs have always used:
+#   ANDROID_KEYSTORE_BASE64   base64 of the keystore file
+#   ANDROID_KEYSTORE_PASSWORD
+#   ANDROID_KEY_ALIAS
+#   ANDROID_KEY_PASSWORD
+# Without them the build stops: an APK signed with any other key can't update an installed Harbor.
+
+on:
+  push:
+    tags: ["android-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Also publish the release for this version (tag android-v<versionName>)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NDK_VERSION: 27.2.12479018
+  # The release certificate's SHA-256. A build signed with anything else is never published.
+  RELEASE_CERT_SHA256: 778390a46eb5c8af0be3c71fc411c807810e328effea4020dc3d19c00f0816a4
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' android-native/app/build.gradle.kts | head -1)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "android-v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match versionName $version in android-native/app/build.gradle.kts."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android NDK and CMake
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "ndk;$NDK_VERSION" "cmake;3.22.1" > /dev/null
+
+      - name: Rust for Android
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: android-native/harbor-core-jni
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android-native/**/*.gradle.kts', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ]; then
+            echo "::error::The release signing secrets aren't set (see the top of this workflow)."
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/harbor-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          {
+            echo "storeFile=$keystore"
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          } > android-native/key.properties
+
+      - name: Build
+        run: bash android-native/gradlew -p android-native assembleRelease --no-daemon --stacktrace
+
+      - name: Check the signature and name the APKs
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          out=android-native/app/build/outputs/apk/release
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          mkdir -p dist
+          cp "$out/app-arm64-v8a-release.apk" "dist/Harbor_${VERSION}_android.apk"
+          cp "$out/app-armeabi-v7a-release.apk" "dist/Harbor_${VERSION}_android-armv7.apk"
+          cp "$out/app-universal-release.apk" "dist/Harbor_${VERSION}_android-universal.apk"
+          for apk in dist/*.apk; do
+            cert="$("$tools/apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
+            if [ "$cert" != "$RELEASE_CERT_SHA256" ]; then
+              echo "::error::$apk is signed with $cert, not the release key."
+              exit 1
+            fi
+          done
+          sha256sum dist/*.apk | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -f android-native/key.properties
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harbor-android-${{ steps.version.outputs.version }}
+          path: dist/*.apk
+          retention-days: 14
+
+      - name: Publish the release
+        if: github.ref_type == 'tag' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="android-v$VERSION"
+          notes="android-native/release-notes/$VERSION.md"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            # The release exists (made by hand, say): replace its APKs.
+            gh release upload "$tag" dist/*.apk --clobber
+          else
+            if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --generate-notes; fi
+            gh release create "$tag" dist/*.apk --target "$GITHUB_SHA" --title "Harbor $VERSION for Android" --latest "$@"
+          fi
