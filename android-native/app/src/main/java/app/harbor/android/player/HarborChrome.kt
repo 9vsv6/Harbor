@@ -161,15 +161,8 @@ internal fun HarborControls(
             ) { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Back", tint = Color.White, modifier = Modifier.size(34.dp)) }
             Column(Modifier.weight(1f).padding(start = 6.dp, top = 6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        state.title,
-                        color = Color.White,
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                    PlayerTitle(state, Modifier.weight(1f, fill = false))
+
                     state.quality?.takeIf { state.settings.qualityInPlayer }?.let { quality ->
                         Box(Modifier.padding(start = 10.dp, end = 6.dp).size(width = 2.dp, height = 13.dp).background(HarborColors.Accent))
                         Text(quality, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -1141,7 +1134,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             if (offset != 0L || state.subTimeScale != 1.0) Box(Modifier.size(6.dp).clip(CircleShape).background(HarborColors.Accent))
         }
         androidx.compose.material3.DropdownMenu(open, onDismissRequest = { open = false }, containerColor = PopRaised, modifier = Modifier.width(240.dp)) {
-            // Auto sync by audio is hidden for now (its code stays: startAutoSync).
+            SyncItem("Auto sync", "Audio") { open = false; actions.startAutoSync() }
             SyncItem("Live sync", "Guided") { open = false; actions.startLiveSync() }
             SyncItem("Manual offset", if (offset != 0L) "%+.1f".format(Locale.US, offset / 1000f) else null) {
                 open = false

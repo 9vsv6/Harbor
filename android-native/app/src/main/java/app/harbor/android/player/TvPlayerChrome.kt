@@ -135,7 +135,7 @@ internal fun TvPlayerControls(state: PlayerState, actions: PlayerActions, onTouc
 private fun Identity(state: PlayerState) {
     val meta = state.meta
     var badLogo by remember(meta?.id) { mutableStateOf(false) }
-    val logo = meta?.logoUrl
+    val logo = meta?.logoUrl?.takeIf { state.settings.playerTitleArtwork }
     if (logo != null && !badLogo) {
         AsyncImage(logo, state.title, contentScale = ContentScale.Fit, alignment = Alignment.BottomStart, onError = { badLogo = true }, modifier = Modifier.heightIn(max = u(36f)).widthIn(max = u(170f)))
     } else {

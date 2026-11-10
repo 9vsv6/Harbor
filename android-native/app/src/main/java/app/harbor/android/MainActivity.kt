@@ -131,12 +131,14 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction) {
                     val chosen by repository.profileChosen.collectAsState()
                     val loaded by repository.ready.collectAsState()
+                    val setupStep by repository.setupStep.collectAsState()
                     // Nothing until the profiles have loaded: on a slow TV, Who's watching flashed up and then
                     // gave way to Home (one profile goes straight in), as if it had chosen by itself.
                     if (!loaded) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().background(app.harbor.android.ui.HarborColors.Canvas))
+                    else if (setupStep < app.harbor.android.data.SetupProgress.COMPLETE) app.harbor.android.ui.FirstLaunchSetup(repository, setupStep)
                     else if (chosen) HarborRoot(repository) else WhosWatching(repository)
                     // A newer Harbor on GitHub, offered once per launch.
-                    app.harbor.android.ui.UpdatePrompt()
+                    if (loaded && setupStep == app.harbor.android.data.SetupProgress.COMPLETE) app.harbor.android.ui.UpdatePrompt()
                     // The last crash's report, to copy or share.
                     app.harbor.android.ui.CrashPrompt()
                     // Harbor's mark until the first page has loaded.

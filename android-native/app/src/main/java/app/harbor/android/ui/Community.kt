@@ -24,6 +24,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -130,10 +132,16 @@ internal fun ReviewCard(
     /** "Blur comments and reviews by default": every card waits for a tap, spoiler or not. */
     blurred: Boolean = false,
     openLabel: String = "Read on Letterboxd",
+    translationTarget: String = HarborDisplay.settings.appLanguage,
 ) {
     var revealed by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
     val hidden = (spoiler || blurred) && !revealed
+    var translated by remember(text, translationTarget) { mutableStateOf<String?>(null) }
+    var showTranslation by remember(text, translationTarget) { mutableStateOf(false) }
+    var translating by remember(text, translationTarget) { mutableStateOf(false) }
+    var translationError by remember(text, translationTarget) { mutableStateOf(false) }
+    val translationScope = rememberCoroutineScope()
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(HarborColors.Surface).animateContentSize().padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -157,7 +165,7 @@ internal fun ReviewCard(
         }
         Box(Modifier.clickable { if (hidden) revealed = true else expanded = !expanded }) {
             Text(
-                text,
+                if (showTranslation) translated ?: text else text,
                 color = HarborColors.InkMuted,
                 fontSize = 14.5.sp,
                 lineHeight = 21.sp,
@@ -175,6 +183,19 @@ internal fun ReviewCard(
                 )
             }
         }
+        if (!hidden) androidx.compose.material3.TextButton(onClick = translate@{
+            if (translating) return@translate
+            if (translated != null) showTranslation = !showTranslation
+            else translationScope.launch {
+                translating = true; translationError = false
+                try {
+                    translated = app.harbor.android.data.ReviewTranslation.translate(text, translationTarget)
+                    showTranslation = true
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { translationError = true }
+                finally { translating = false }
+            }
+        }) { Text(if (translating) "Translating…" else if (showTranslation) "Show original" else if (translationError) "Translation unavailable · Retry" else "Translate") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 Icon(Icons.Rounded.Favorite, null, tint = Color(0xFFFB7185), modifier = Modifier.size(13.dp))

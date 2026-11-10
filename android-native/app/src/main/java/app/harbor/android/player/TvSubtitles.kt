@@ -396,9 +396,11 @@ private fun SyncLane(state: PlayerState, actions: PlayerActions) {
     LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = u(18f)), verticalArrangement = Arrangement.spacedBy(u(4f))) {
         item {
             Rail {
-                // Auto sync by audio is hidden for now; live sync lines up a line you hear.
-                Label("Live sync")
-                Chip("Live sync", Icons.Rounded.Timer, requester = first) {
+                Label("Auto sync")
+                Chip(if (busy) "Cancel sync" else "Auto sync", Icons.Rounded.Timer, requester = first) {
+                    if (busy) actions.cancelAutoSync() else if (!off) actions.startAutoSync()
+                }
+                Chip("Live sync", Icons.Rounded.Timer) {
                     if (off) return@Chip
                     state.panel = null
                     actions.startLiveSync()

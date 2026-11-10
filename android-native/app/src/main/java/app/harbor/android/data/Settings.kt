@@ -83,6 +83,13 @@ data class AppSettings(
     // ---- Playback: player ----
     /** "mpv" (Harbor's player) or "media3" (Android's own). */
     val engine: String = "mpv",
+    val rememberAudioTracks: Boolean = true,
+    val preferOfflineDownloads: Boolean = true,
+    val autoDownloadNext: Boolean = false,
+    val playerTitleArtwork: Boolean = true,
+    val hideWatchedRecommendations: Boolean = false,
+    val allowFutureEpisodes: Boolean = true,
+    val assStripStyles: Boolean = false,
     /** Start where you left off; off starts every video from the beginning. */
     val resumePlayback: Boolean = true,
     /** Show "Resumed at 12:34 · Start over" when resuming. */
@@ -158,6 +165,9 @@ data class AppSettings(
     val subtitlesOffByDefault: Boolean = false,
     /** Harbor's default is off; inside-the-video subtitles are in sync with the file, so Harbor prefers them. */
     val preferEmbeddedSubs: Boolean = false,
+    val subtitleAutoSync: Boolean = false,
+    val subtitleAutoSyncAsr: Boolean = true,
+    val autoSyncApplyCorrections: Boolean = false,
     val hideSdh: Boolean = false,
     /** A second subtitle shown at the same time (mpv); empty is off. */
     val secondarySubLanguage: String = "",

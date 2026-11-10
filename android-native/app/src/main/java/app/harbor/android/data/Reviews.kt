@@ -60,6 +60,12 @@ object Reviews {
         return list
     }
 
+    suspend fun episode(imdb: String, season: Int, episode: Int, clientId: String?, page: Int, sort: String): List<TraktComment> {
+        require(imdb.matches(Regex("tt\\d+")) && season >= 0 && episode > 0 && page > 0)
+        return parse(Net.call(Request.Builder().url("https://api.trakt.tv/shows/$imdb/seasons/$season/episodes/$episode/comments/$sort?extended=images&page=$page&limit=25")
+            .header("trakt-api-version", "2").header("trakt-api-key", clientId?.takeIf { it.isNotBlank() } ?: HARBOR_TRAKT_CLIENT).build()))
+    }
+
     private fun parse(body: String?): List<TraktComment> {
         val array = body?.let { runCatching { Net.json.parseToJsonElement(it) as? JsonArray }.getOrNull() } ?: return emptyList()
         return array.mapNotNull { it as? JsonObject }.mapNotNull { c ->

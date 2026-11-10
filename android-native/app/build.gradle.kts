@@ -25,10 +25,12 @@ val splitAbis = gradle.startParameter.taskNames.any { it.contains("Release", ign
 // The same Rust crate the desktop app links, so ranking matches it exactly. Needs rustup with
 // the aarch64-linux-android and x86_64-linux-android targets, and the NDK below.
 val ndkVersionUsed = "27.2.12479018"
-val sdkDir: String = Properties().apply {
+val sdkFromProperties: String? = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
-}.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: ""
+}.getProperty("sdk.dir")
+val sdkDir = sequenceOf(sdkFromProperties, System.getenv("ANDROID_HOME"), System.getenv("ANDROID_SDK_ROOT"))
+    .filterNotNull().firstOrNull { File(it).isDirectory } ?: ""
 val rustTargets = mapOf("arm64-v8a" to "aarch64-linux-android", "armeabi-v7a" to "armv7-linux-androideabi", "x86_64" to "x86_64-linux-android")
 // The NDK names its 32-bit ARM compilers armv7a-…, where Rust says armv7-….
 val clangPrefix = mapOf("armv7-linux-androideabi" to "armv7a-linux-androideabi")
@@ -105,12 +107,17 @@ tasks.named("preBuild") { dependsOn(fetchFontshareFonts) }
 android {
     namespace = "app.harbor.android"
     compileSdk = 36
+    ndkVersion = ndkVersionUsed
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
 
     defaultConfig {
         // Harbor for Android: its own id, so it installs beside any other Harbor or Lart build.
         applicationId = "app.harbor.android"
         minSdk = 26
         targetSdk = 36
+        // Whisper has a private C++ runtime. mpv's newer shared runtime must keep winning
+        // its existing dependency merge; substituting the NDK's can prevent mpv loading.
+        externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
         versionCode = 26
         versionName = "1.0.14"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
@@ -174,6 +181,7 @@ kotlin {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     // Installs the baseline profile (baselineprofile/) so the first launch is already compiled.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")

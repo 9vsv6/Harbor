@@ -14,7 +14,9 @@ import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.RendererCapabilities
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.text.TextOutput
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.extractor.text.CueDecoder
 import java.util.concurrent.ConcurrentSkipListMap
 
@@ -25,8 +27,42 @@ import java.util.concurrent.ConcurrentSkipListMap
 @OptIn(UnstableApi::class)
 class HarborRenderersFactory(context: Context, val cues: CueStore, val audioDelay: AudioDelay) : DefaultRenderersFactory(context) {
     init {
-        setExtensionRendererMode(EXTENSION_RENDERER_MODE_ON)
+        // TV firmware often advertises Dolby/DTS support that fails or produces silence.
+        // Decode supported audio to PCM with FFmpeg; video still uses the TV's hardware decoder.
+        setExtensionRendererMode(if (app.harbor.android.perf.Perf.isTv) EXTENSION_RENDERER_MODE_PREFER else EXTENSION_RENDERER_MODE_ON)
+        if (app.harbor.android.perf.Perf.isTv) {
+            setMediaCodecSelector { mimeType, secure, tunneling ->
+                val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
+                // Platform software video decoders can accept 4K/10-bit files yet play far too
+                // slowly on a TV. Use the native hardware here, and let mpv/FFmpeg handle the rest.
+                if (MimeTypes.isVideo(mimeType)) decoders.filterNot { it.softwareOnly } else decoders
+            }
+        }
         setEnableDecoderFallback(true)
+    }
+
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: android.os.Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        // This FFmpeg package registers a video renderer too. Never prefer that CPU decoder
+        // over TV hardware along with audio: mpv handles video that the hardware can't decode.
+        super.buildVideoRenderers(
+            context,
+            if (app.harbor.android.perf.Perf.isTv) EXTENSION_RENDERER_MODE_OFF else extensionRendererMode,
+            mediaCodecSelector,
+            enableDecoderFallback,
+            eventHandler,
+            eventListener,
+            allowedVideoJoiningTimeMs,
+            out,
+        )
     }
 
     override fun buildTextRenderers(
@@ -72,13 +108,17 @@ class CueStore {
     @Volatile var trackId: String? = null
         private set
     private var sequence = 0L
+    @Volatile private var longestMs = 0L
 
     fun reset(trackId: String?) {
         entries.clear()
+        longestMs = 0L
+        sequence = 0L
         this.trackId = trackId
     }
 
     fun add(entry: TimedCues) {
+        if (entry.endMs != C.TIME_UNSET) longestMs = maxOf(longestMs, entry.endMs - entry.startMs)
         // Keys are start * 64 + a sequence number, so events starting together are all kept.
         val base = entry.startMs * 64
         if (entries.subMap(base, base + 64).values.any { it == entry }) return
@@ -100,13 +140,14 @@ class CueStore {
     /** The cues showing at `positionMs`. Open-ended events last until the next one starts. */
     fun at(positionMs: Long): List<Cue> {
         val result = ArrayList<Cue>()
-        val head = entries.headMap(positionMs * 64 + 64, true).descendingMap()
+        val head = entries.headMap(positionMs * 64 + 64, false).descendingMap()
         var nextStart = Long.MAX_VALUE
         for (entry in head.values) {
-            if (positionMs - entry.startMs > 60_000) break
             val end = if (entry.endMs == C.TIME_UNSET) nextStart else entry.endMs
             if (positionMs < end) result.addAll(0, entry.cues)
             if (entry.startMs < nextStart) nextStart = entry.startMs
+            // Check the newest open-ended event before stopping; it may last for minutes.
+            if (positionMs - entry.startMs > longestMs) break
         }
         return result
     }

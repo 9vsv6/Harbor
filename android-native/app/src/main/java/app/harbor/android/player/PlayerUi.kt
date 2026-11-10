@@ -126,6 +126,9 @@ interface PlayerActions {
     /** Live sync: Harbor's panel of every subtitle line; align the one you hear to now. */
     fun startLiveSync()
     fun startAutoSync()
+    fun applyAutoSync()
+    fun undoAutoSync()
+    fun dismissAutoSync()
     fun cancelAutoSync()
     fun liveSyncAlign(line: SubtitleFile.Cue)
     fun liveSyncReset()
@@ -145,6 +148,7 @@ interface PlayerActions {
     fun skipSegment()
     fun playNext()
     fun playEpisode(video: Video)
+    fun downloadEpisode(video: Video)
     fun loadSources()
     fun playSource(source: RankedStream)
     fun enterPip()
@@ -337,6 +341,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         if (state.panel == Panel.SubStyle) SubStyleBar(state, prefs, actions)
         SubSyncBar(state, actions)
         AutoSyncPill(state, actions)
+        AutoSyncDialogs(state, actions)
         if (state.tv) TvLiveSync(state, actions) else LiveSyncPanel(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)
@@ -698,6 +703,9 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
         val index = shown.indexOfFirst { it.id == state.videoId }
         if (index > 0) listState.scrollToItem(index)
     }
+    Pill(if (state.settings.autoDownloadNext) "Auto-download next: On" else "Auto-download next: Off", primary = state.settings.autoDownloadNext) {
+        actions.updateSettings { it.copy(autoDownloadNext = !it.autoDownloadNext) }
+    }
     if (seasons.size > 1) {
         androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
             items(seasons) { s -> Pill(if (s == 0) "Specials" else "Season $s", primary = s == season) { season = s } }
@@ -722,6 +730,7 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
                     app.harbor.android.ui.EpisodeReleaseCountdown(video.released)
                     if (playing) Text("Playing", color = Color(0xCCFFFFFF), fontSize = 12.sp)
                 }
+                Pill("Download", primary = false) { actions.downloadEpisode(video) }
             }
         }
     }

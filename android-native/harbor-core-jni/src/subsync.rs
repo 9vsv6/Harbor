@@ -511,7 +511,7 @@ fn load_mpv() -> Result<Mpv, String> {
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Writes `len_sec` of the film's audio from `start_sec` to `out_path` as mono 16 kHz f32 samples.
-fn decode_audio(url: &str, headers: &str, aid: &str, start_sec: f32, len_sec: f32, out_path: &str, timeout: Duration) -> Result<(), String> {
+fn decode_audio(url: &str, headers: &str, aid: &str, ca_file: &str, start_sec: f32, len_sec: f32, out_path: &str, timeout: Duration) -> Result<(), String> {
     let mpv = load_mpv()?;
     let handle = unsafe { (mpv.create)() };
     if handle.is_null() {
@@ -553,6 +553,8 @@ fn decode_audio(url: &str, headers: &str, aid: &str, start_sec: f32, len_sec: f3
     ] {
         set(k, v)?;
     }
+    set("tls-verify", "yes")?;
+    if !ca_file.is_empty() { set("tls-ca-file", ca_file)?; }
     set("ao-pcm-file", out_path)?;
     set("aid", if aid.is_empty() { "auto" } else { aid })?;
     set("start", &format!("{start_sec:.3}"))?;
@@ -625,10 +627,12 @@ pub extern "system" fn Java_app_harbor_android_player_AudioSync_nativeDecode<'l>
     len_sec: jfloat,
     out_path: JString<'l>,
     timeout_sec: jfloat,
+    ca_file: JString<'l>,
 ) -> jstring {
     let read = |env: &mut JNIEnv, s: &JString| -> String { env.get_string(s).map(|s| s.into()).unwrap_or_default() };
     let (url, headers, aid, out) = (read(&mut env, &url), read(&mut env, &headers), read(&mut env, &aid), read(&mut env, &out_path));
-    let result = std::panic::catch_unwind(|| decode_audio(&url, &headers, &aid, start_sec, len_sec, &out, Duration::from_secs_f32(timeout_sec.max(1.0))))
+    let ca_file = read(&mut env, &ca_file);
+    let result = std::panic::catch_unwind(|| decode_audio(&url, &headers, &aid, &ca_file, start_sec, len_sec, &out, Duration::from_secs_f32(timeout_sec.max(1.0))))
         .unwrap_or_else(|_| Err("panicked".into()));
     match result {
         Ok(()) => std::ptr::null_mut(),

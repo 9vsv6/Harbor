@@ -414,14 +414,21 @@ private fun Advanced(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Override embedded styles", color = Ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Force your look onto subtitles that carry their own styling.", color = InkSubtle, fontSize = 12.sp, lineHeight = 16.sp)
+                        Text("Use my subtitle style", color = Ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Off keeps the subtitle's original styling.", color = InkSubtle, fontSize = 12.sp, lineHeight = 16.sp)
                     }
                     Switch(
                         // As on the PC: off goes back to the mode you had (Keep, size or font only), not a fixed one.
                         s.assOverride == "force", { on -> onSettings { if (on) { assLookBefore = it.assOverride; it.copy(assOverride = "force") } else it.copy(assOverride = assLookBefore) } },
                         colors = SwitchDefaults.colors(checkedTrackColor = HarborColors.Accent),
                     )
+                }
+                if (s.assOverride == "force") Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Strip inline styling", color = Ink, fontSize = 13.5.sp)
+                        Text("Advanced: may change signs and karaoke.", color = InkSubtle, fontSize = 12.sp)
+                    }
+                    Switch(s.assStripStyles, { on -> onSettings { it.copy(assStripStyles = on) } })
                 }
             }
         }

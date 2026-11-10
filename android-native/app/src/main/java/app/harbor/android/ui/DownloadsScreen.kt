@@ -34,6 +34,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,6 +51,8 @@ import app.harbor.android.data.DownloadState
 import app.harbor.android.data.Downloads
 import app.harbor.android.data.SavedDownload
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
 private enum class DownloadFilter(val label: String) { All("All"), Active("Active"), Saved("Saved"), Issues("Issues") }
@@ -63,10 +67,35 @@ private fun bytes(n: Long): String = when {
 @Composable
 fun DownloadsScreen(onBack: (() -> Unit)?, onPlay: (SavedDownload) -> Unit) {
     val context = LocalContext.current
-    var states by remember { mutableStateOf(Downloads.states(context)) }
+    var states by remember { mutableStateOf(emptyList<DownloadState>()) }
+    var loading by remember { mutableStateOf(true) }
     var filter by rememberSaveable { mutableStateOf(DownloadFilter.All) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var retrying by remember { mutableStateOf(false) }
+    var batchStatus by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val repository = (context.applicationContext as app.harbor.android.HarborApp).repository
+    fun toggle(id: Long) { selected = if (id in selected) selected - id else selected + id }
+    LaunchedEffect(filter) { selected = emptySet() }
+    if (confirmDelete) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("Delete / cancel ${selected.size} downloads?") },
+        text = { Text("Saved files will be deleted and active downloads will be cancelled.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = {
+            val items = states.filter { it.item.downloadId in selected }.map { it.item }
+            confirmDelete = false
+            scope.launch {
+                withContext(Dispatchers.IO) { items.forEach { Downloads.remove(context, it) } }
+                selected = selected - items.map { it.downloadId }.toSet()
+                states = withContext(Dispatchers.IO) { Downloads.states(context) }
+            }
+        }) { Text("Delete / cancel") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) { Text("Back") } },
+    )
     // The system download manager has no callbacks for progress; read it every second.
-    LaunchedEffect(Unit) { while (true) { states = Downloads.states(context); delay(1_000) } }
+    LaunchedEffect(Unit) { while (true) { states = withContext(Dispatchers.IO) { Downloads.states(context) }; loading = false; delay(1_000) } }
     val active = states.count { !it.finished && !it.failed }
     val saved = states.filter { it.finished }.sumOf { it.total }
     val shown = states.filter {
@@ -109,28 +138,58 @@ fun DownloadsScreen(onBack: (() -> Unit)?, onPlay: (SavedDownload) -> Unit) {
                 }
             }
         }
-        if (shown.isEmpty()) item {
+        item(key = "batch-actions") {
+            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { androidx.compose.material3.TextButton(onClick = { selecting = !selecting; selected = emptySet() }) { Text(if (selecting) "Done (${selected.size} selected)" else "Select downloads") } }
+                if (selecting) {
+                    item { androidx.compose.material3.TextButton(onClick = { selected = shown.map { it.item.downloadId }.toSet() }) { Text("Select all shown") } }
+                    item { androidx.compose.material3.TextButton(enabled = selected.isNotEmpty(), onClick = {
+                        val shows = states.filter { it.item.downloadId in selected }.map { it.item.metaId }.toSet()
+                        selected = shown.filter { it.item.metaId in shows }.map { it.item.downloadId }.toSet()
+                    }) { Text("Select series") } }
+                    item { androidx.compose.material3.TextButton(enabled = !retrying && states.any { it.failed && it.item.downloadId in selected }, onClick = {
+                        val items = states.filter { it.failed && it.item.downloadId in selected }.map { it.item }
+                        retrying = true
+                        scope.launch {
+                            var done = 0
+                            items.forEach { item -> runCatching { withContext(Dispatchers.IO) { Downloads.retry(context, repository, item) } }.onSuccess { done++ } }
+                            batchStatus = "$done of ${items.size} downloads restarted"
+                            retrying = false; selected = emptySet(); states = withContext(Dispatchers.IO) { Downloads.states(context) }
+                        }
+                    }) { Text(if (retrying) "Retrying…" else "Retry failed") } }
+                    item { androidx.compose.material3.TextButton(enabled = selected.isNotEmpty() && !retrying, onClick = { confirmDelete = true }) { Text("Delete / cancel selected") } }
+                    item { androidx.compose.material3.TextButton(onClick = { selected = emptySet() }) { Text("Clear selection") } }
+                }
+            }
+            batchStatus?.let { Text(it, color = HarborColors.InkMuted, modifier = Modifier.padding(horizontal = 16.dp)) }
+        }
+        if (loading) item { Text("Loading downloads…", color = HarborColors.InkMuted, modifier = Modifier.padding(16.dp)) }
+        else if (shown.isEmpty()) item {
             EmptyState(
                 "No downloads yet",
                 "Tap the download button on a source to save it for offline play. Direct and debrid links can be saved; torrents and live playlists can't.",
             )
         }
         items(shown, key = { it.item.downloadId }) { state ->
-            DownloadRow(state, onPlay = { onPlay(state.item) }, onDelete = {
-                Downloads.remove(context, state.item)
-                states = Downloads.states(context)
+            DownloadRow(state, selecting = selecting, selected = state.item.downloadId in selected,
+                onSelect = { toggle(state.item.downloadId) }, onPlay = { onPlay(state.item) }, onDelete = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { Downloads.remove(context, state.item) }
+                    states = withContext(Dispatchers.IO) { Downloads.states(context) }
+                }
             })
         }
     }
 }
 
 @Composable
-private fun DownloadRow(state: DownloadState, onPlay: () -> Unit, onDelete: () -> Unit) {
+private fun DownloadRow(state: DownloadState, selecting: Boolean, selected: Boolean, onSelect: () -> Unit, onPlay: () -> Unit, onDelete: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(enabled = state.finished, onClick = onPlay).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().clickable(enabled = selecting || state.finished, onClick = if (selecting) onSelect else onPlay).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (selecting) androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { onSelect() })
         Box(Modifier.width(56.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(8.dp)).background(HarborColors.Elevated)) {
             state.item.poster?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         }
@@ -156,11 +215,11 @@ private fun DownloadRow(state: DownloadState, onPlay: () -> Unit, onDelete: () -
                 )
             }
         }
-        if (state.finished) {
+        if (state.finished && !selecting) {
             Box(Modifier.size(42.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = onPlay), contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.PlayArrow, "Play", tint = HarborColors.Canvas, modifier = Modifier.size(24.dp))
             }
         }
-        IconButton(onClick = onDelete) { Icon(Icons.Rounded.Delete, if (state.finished) "Delete" else "Cancel", tint = HarborColors.InkSubtle) }
+        if (!selecting) IconButton(onClick = onDelete) { Icon(Icons.Rounded.Delete, if (state.finished) "Delete" else "Cancel", tint = HarborColors.InkSubtle) }
     }
 }

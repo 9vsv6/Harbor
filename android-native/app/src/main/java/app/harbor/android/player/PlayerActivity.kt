@@ -68,6 +68,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private lateinit var playerRoot: FrameLayout
     /** A TV moved from Media3 to mpv for a video Media3 couldn't play; that happens once. */
     private var triedMpv = false
+    private var playbackAttempt = 0
+    private var fallbackPending = false
+    private var loadStartMs = 0L
     private val state = PlayerState()
     private val repository get() = (application as HarborApp).repository
     private val prefs: PlayerPrefs get() = repository.playerPrefs.value
@@ -91,6 +94,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var animeMarked = false
     private var scrobbling = false
     private var audioChecked = false
+    private var userPickedAudio = false
+    private var audioScope = ""
+    private var originalAudio: String? = null
+    private var predownloadFor = ""
+    private var predownloadAt = 0L
+    private var onlineUrl: String? = null
+    private var offlineRecovery = false
     private var castContext: CastContext? = null
     private var remotePositionMs = 0L
     private var anime4kJob: Job? = null
@@ -140,7 +150,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         app.harbor.android.perf.Perf.init(this, app.harbor.android.perf.Perf.forcedTv)
         val device = Locale.getDefault().language
         val setup = EngineSetup(
-            audioLanguages = settings.audioLanguages.ifEmpty { listOf(device) },
+            audioLanguages = app.harbor.android.data.AudioChoices.languages(settings.audioLanguages, null, false, device),
             subtitleLanguages = if (settings.subtitlesOffByDefault) emptyList()
             else (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct(),
             settings = settings,
@@ -205,15 +215,36 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         currentStreamKey = intent.getStringExtra(EXTRA_STREAM_KEY)
         currentSource = intent.getStringExtra(EXTRA_SOURCE)
         currentStream = app.harbor.android.data.Stream(name = currentStreamKey, title = intent.getStringExtra(EXTRA_STREAM_TITLE))
+        audioScope = app.harbor.android.data.AudioChoices.scope(repository)
+        originalAudio = null
+        userPickedAudio = false
         showSource()
         autoAdvanced = 0
         anime4kChosenHere = false
         meta = null
         updateAnime4KButton()
         begin(videoId, url)
+        val expectedMeta = metaId
+        val expectedType = type
         lifecycleScope.launch {
-            meta = AddonClient.meta(repository.metaAddons(), type, metaId)
+            val loadedMeta = AddonClient.meta(repository.metaAddons(), expectedType, expectedMeta)
+            if (metaId != expectedMeta || isDestroyed) return@launch
+            meta = loadedMeta
             state.meta = meta
+            if ("original" in state.settings.audioLanguages) {
+                val current = meta
+                val resolvedOriginal = current?.let { m ->
+                    m.originalLanguage ?: runCatching {
+                        val code = repository.tmdbKey.value?.let { key -> runCatching { app.harbor.android.data.Tmdb.originalAudioLanguage(key, m) }.getOrNull() }
+                        code ?: app.harbor.android.data.Keyless.details(m)?.originalLanguage?.let { name -> app.harbor.android.data.Languages.all.firstOrNull { l ->
+                            l.name.equals(name, true) || Locale(l.code).getDisplayLanguage(Locale.getDefault()).equals(name, true)
+                        }?.code }
+                    }.getOrNull()
+                }
+                if (metaId != expectedMeta || isDestroyed) return@launch
+                originalAudio = resolvedOriginal
+                if (!userPickedAudio) { audioChecked = false; avoidCommentary(engine.audioTracks()) }
+            }
             describe()
             loadXray()
             updateAnime4KButton()
@@ -223,9 +254,24 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     /** Starts `videoId` from `url`, resuming where this device or Stremio left off. */
-    private fun begin(videoId: String, url: String, startAt: Long? = null) {
+    private fun begin(videoId: String, url: String, startAt: Long? = null, keepEngine: Boolean = false, preferLocal: Boolean = true) {
+        clearAppliedAutoSync()
+        cancelAutoSync()
+        lastSyncFailed = false
+        val sameVideo = state.videoId == videoId
+        playbackAttempt++
+        fallbackPending = false
+        if (!keepEngine) {
+            triedMpv = false
+            // A fallback belongs to one source. Give the next file the native TV decoder
+            // again, rather than leaving every subsequent episode on software decoding.
+            if (state.tv && engine is MpvEngine) replaceEngine(ExoEngine(this, engineSetup))
+        }
         state.videoId = videoId
-        state.currentUrl = url
+        val local = if (preferLocal && state.settings.preferOfflineDownloads) app.harbor.android.data.Downloads.local(this, videoId) else null
+        state.currentUrl = local?.let { android.net.Uri.fromFile(it).toString() } ?: url
+        onlineUrl = url.takeUnless { it.startsWith("file:") || it.startsWith("content:") } ?: onlineUrl.takeIf { sameVideo }
+        offlineRecovery = false
         state.hasPlayed = false
         state.sources = null
         state.error = null
@@ -249,6 +295,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         stopScrobble()
         animeMarked = false
         audioChecked = false
+        userPickedAudio = false
         secondaryDone = false
         bufferingSince = 0L
         state.creditsAtMs = 0
@@ -268,7 +315,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         ticker.removeCallbacks(settleSeek)
         pendingSeekMs = -1L
         pendingSeekSentAt = 0L
-        engine.load(url, headers, resume)
+        loadStartMs = resume
+        engine.load(state.currentUrl, headers, resume)
         engine.setAudioDelay(state.audioDelayMs)
         describe()
         // Debug builds only: a subtitle URL from the launch, for testing subtitles without an addon.
@@ -409,6 +457,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 }
             } else bufferingSince = 0L
 
+            maybeAutomaticSubtitleSync()
+            prepareNextDownload()
             val sleepAt = state.sleepAt
             if (sleepAt != null && sleepAt > 0 && System.currentTimeMillis() >= sleepAt) {
                 engine.pause()
@@ -447,7 +497,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         // Harbor's "Delete after I finish watching", for a downloaded file.
         if (state.settings.deleteAfterWatching && state.currentUrl.startsWith("file:")) {
             val path = android.net.Uri.parse(state.currentUrl).path
-            app.harbor.android.data.Downloads.saved(this).firstOrNull { it.file == path }?.let { app.harbor.android.data.Downloads.remove(this, it) }
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                app.harbor.android.data.Downloads.saved(this@PlayerActivity).firstOrNull { it.file == path }?.let { app.harbor.android.data.Downloads.remove(this@PlayerActivity, it) }
+            }
         }
         state.controlsVisible = state.endScreen == null
         if (state.sleepAt == -1L) {
@@ -475,11 +527,33 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun onError(message: String) {
+        if (fallbackPending) return
         if (state.tv && !triedMpv && (engine as? ExoEngine)?.cantPlay == true) {
             triedMpv = true
+            fallbackPending = true
+            val failedEngine = engine
+            val attempt = playbackAttempt
             // Posted: this call comes from inside the Media3 player that's about to be released.
             ticker.post {
-                if (!isDestroyed && !switchToMpv()) showError(message)
+                // A source selection, retry or close can overtake this queued callback.
+                if (!isDestroyed && !isFinishing && attempt == playbackAttempt && engine === failedEngine) {
+                    fallbackPending = false
+                    if (!switchToMpv()) showError(message)
+                }
+            }
+            return
+        }
+        if (state.currentUrl.startsWith("file:") && !offlineRecovery) {
+            offlineRecovery = true
+            app.harbor.android.data.Downloads.markUnplayable(this, state.videoId)
+            val attempt = playbackAttempt
+            val position = engine.positionMs.takeIf { it > 0 } ?: loadStartMs
+            lifecycleScope.launch {
+                val ready = onlineUrl?.let { Ready(currentStream ?: app.harbor.android.data.Stream(url = it), it, currentAddonId) }
+                    ?: runCatching { Playback.best(rankedHere(state.videoId), repository.debrid.value) }.getOrNull()
+                if (attempt != playbackAttempt || isFinishing || isDestroyed) return@launch
+                if (ready == null) { showError("The saved file couldn't play and no streaming source is available."); return@launch }
+                switchTo(state.videoId, ready, position)
             }
             return
         }
@@ -500,24 +574,31 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     /** Hands the current video to mpv, at the same position, in place of Media3. False if mpv can't start here. */
     private fun switchToMpv(): Boolean {
         val mpv = MpvEngine.create(this, engineSetup) ?: return false
+        // Media3 may fail before its first seek. Keep the explicitly requested position too.
+        val at = engine.positionMs.takeIf { it > 0 } ?: loadStartMs
+        replaceEngine(mpv)
+        begin(state.videoId, state.currentUrl, at, keepEngine = true)
+        updateAnime4KButton()
+        return true
+    }
+
+    private fun replaceEngine(next: Engine) {
         val old = engine
-        val at = old.positionMs.takeIf { it > 1_000 }
         old.listener = null
         playerRoot.removeView(old.view)
         old.release()
-        engine = mpv
-        mpv.listener = this
-        state.engineName = mpv.name
-        // mpv draws its own subtitles: a line Media3 had on screen would otherwise stay there.
+        engine = next
+        next.listener = this
+        state.engineName = next.name
         state.cues = emptyList()
+        state.audioTracks = emptyList()
+        state.embeddedSubs = emptyList()
         // Index 0: under the controls.
-        playerRoot.addView(mpv.view, 0, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        mpv.setSpeed(state.speed)
-        mpv.setFit(state.fit)
-        mpv.applySubtitleStyle(prefs, state.settings, state.controlsVisible && !state.inPip)
-        begin(state.videoId, state.currentUrl, at)
-        updateAnime4KButton()
-        return true
+        playerRoot.addView(next.view, 0, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        next.setSpeed(state.speed)
+        next.setFit(state.fit)
+        next.setVolume(if (state.muted) 0f else volumeLevel.coerceAtLeast(1f))
+        next.applySubtitleStyle(prefs, state.settings, state.controlsVisible && !state.inPip)
     }
 
     override fun onVideoSizeChanged() = updatePipParams()
@@ -568,6 +649,23 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
      */
     private fun avoidCommentary(audio: List<EngineTrack>) {
         if (audioChecked || audio.isEmpty()) return
+        if (userPickedAudio) return
+        val choices = app.harbor.android.data.AudioChoices
+        val remembered = if (state.settings.rememberAudioTracks) choices.match(choices.get(this, audioScope, metaId), audio) else null
+        if (remembered != null) {
+            audioChecked = true
+            if (!remembered.selected) engine.selectAudio(remembered.key)
+            return
+        }
+        val wantedLanguages = choices.languages(state.settings.audioLanguages, originalAudio,
+            metaId.startsWith("kitsu:") || metaId.startsWith("mal:") || metaId.startsWith("anilist:") || meta?.genres?.any { it.equals("anime", true) } == true,
+            Locale.getDefault().language)
+        val preferred = wantedLanguages.firstNotNullOfOrNull { lang -> audio.firstOrNull { !it.commentary && !skipped(it.label, it.detail) && choices.sameLanguage(it.language, lang) } }
+        if (preferred != null) {
+            audioChecked = true
+            if (!preferred.selected) engine.selectAudio(preferred.key)
+            return
+        }
         audioChecked = true
         val selected = audio.firstOrNull { it.selected } ?: return
         if (!selected.commentary && !skipped(selected.label, selected.detail)) return
@@ -579,6 +677,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun selectAudio(key: String) {
+        clearAppliedAutoSync()
+        cancelAutoSync()
+        automaticSyncKey = ""
+        userPickedAudio = true
+        if (state.settings.rememberAudioTracks) engine.audioTracks().firstOrNull { it.key == key }?.let {
+            app.harbor.android.data.AudioChoices.save(this, audioScope, metaId, it)
+        }
         engine.selectAudio(key)
         state.panel = null
     }
@@ -587,6 +692,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     /** `remember`: you chose it, so this title keeps it (Harbor PC's per-show subtitle); Harbor's own picks don't. */
     private fun applySubtitle(choice: SubChoice, remember: Boolean) {
+        if (state.subChoice != choice) clearAppliedAutoSync()
+        cancelAutoSync()
+        lastSyncFailed = false
         if (remember) userPickedSub = true
         when (choice) {
             SubChoice.Off -> {
@@ -622,7 +730,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     subtitleJob?.cancel()
                     subtitleFile = null
                     subtitleJob = lifecycleScope.launch {
-                        val file = runCatching { SubtitleFile.load(choice.subtitle.url) }.getOrNull()
+                        val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang) }.getOrNull()
                         if (state.subChoice == choice) subtitleFile = file?.takeUnless { it.isEmpty }
                     }
                 }
@@ -645,7 +753,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         clearAddonSubtitle()
         state.subLoading = true
         subtitleJob = lifecycleScope.launch {
-            val file = runCatching { SubtitleFile.load(choice.subtitle.url) }.getOrNull()
+            val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang) }.getOrNull()
             // Another subtitle was chosen meanwhile (which cancels this load): leave it be.
             if (state.subChoice != choice) return@launch
             state.subLoading = false
@@ -1051,6 +1159,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun setSubDelay(delayMs: Long) {
+        appliedAutoSync = null // Manual timing now belongs to the user.
+        cancelAutoSync()
         val clamped = applySubDelay(delayMs)
         // Harbor's subtitle sync indicator: the offset on screen while nudging.
         if (state.settings.subSyncIndicator && clamped != 0L) {
@@ -1060,7 +1170,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     private fun applySubDelay(delayMs: Long): Long {
-        val clamped = delayMs.coerceIn(-30_000, 30_000)
+        val clamped = delayMs.coerceIn(-180_000, 180_000)
         state.subDelayMs = clamped
         engine.setSubDelay(clamped)
         return clamped
@@ -1069,6 +1179,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     // ---- Live sync: Harbor's panel of every line; tap the one you hear to align it ----
 
     override fun startLiveSync() {
+        cancelAutoSync()
         state.panel = null
         val choice = state.subChoice
         val file = subtitleFile
@@ -1112,47 +1223,135 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     // ---- Auto sync by audio (Harbor PC's subsync): the film's speech against the subtitle's lines ----
 
     private var autoSyncJob: kotlinx.coroutines.Job? = null
+    private var syncGeneration = 0
+    private var automaticSyncKey = ""
+    private var syncingAutomatically = false
+    private var lastSyncFailed = false
+    private var appliedAutoSync: AutoSyncOffer? = null
 
-    override fun startAutoSync() {
-        state.panel = null
+    private fun subtitleSyncKey(choice: SubChoice.Addon) =
+        "$playbackAttempt|${choice.subtitle.url}|${engine.audioTracks().firstOrNull { it.selected }?.key}"
+
+    /** A correction belongs to its subtitle/source, never to the next embedded track. */
+    private fun clearAppliedAutoSync() {
+        val applied = appliedAutoSync ?: return
+        appliedAutoSync = null
+        state.subTimeScale = applied.previousScale
+        engine.setSubSpeed(1.0 / applied.previousScale)
+        applySubDelay(applied.previousDelay)
+    }
+
+    private fun maybeAutomaticSubtitleSync() {
+        if (!state.settings.subtitleAutoSync) {
+            automaticSyncKey = ""
+            if (syncingAutomatically && autoSyncJob?.isActive == true) cancelAutoSync()
+            return
+        }
+        val choice = state.subChoice as? SubChoice.Addon ?: return
+        if (!state.hasPlayed || !audioChecked || state.durationMs < 120_000 || subtitleFile == null || state.panel != null ||
+            state.liveSync != null || state.autoSyncOffer != null || AudioSync.isRunning || autoSyncJob?.isActive == true) return
+        val key = subtitleSyncKey(choice)
+        if (key == automaticSyncKey) return
+        automaticSyncKey = key
+        runAutoSync(automatic = true)
+    }
+
+    override fun startAutoSync() = runAutoSync(automatic = false)
+
+    private fun runAutoSync(automatic: Boolean) {
+        if (!automatic) state.panel = null
         if (autoSyncJob?.isActive == true) return
         val choice = state.subChoice
         val file = subtitleFile
-        val hint = { text: String -> state.hint = text; state.hintIcon = 0 }
+        fun failure(text: String) { if (automatic) state.hint = text else state.autoSyncError = text }
         when {
-            choice == SubChoice.Off -> return hint("Turn on subtitles first")
-            choice !is SubChoice.Addon -> return hint("Auto sync works on subtitles from your addons. Try live sync for this one")
-            file == null -> return hint(if (subtitleJob?.isActive == true) "Loading subtitle…" else "Couldn't read this subtitle. Try live sync")
-            state.castingTo != null -> return hint("Auto sync isn't available while casting")
+            choice == SubChoice.Off -> return failure("Turn on subtitles first")
+            choice !is SubChoice.Addon -> return failure("Embedded subtitles keep their timing. Select a downloaded text subtitle for auto sync.")
+            file == null -> return failure(if (subtitleJob?.isActive == true) "Loading subtitle… Try again when it finishes." else "Couldn't read this subtitle. Try live sync.")
+            state.castingTo != null -> return failure("Auto sync isn't available while casting")
         }
-        val url = state.currentUrl
-        val audioTrack = engine.audioTracks().firstOrNull { it.selected }?.key?.substringAfter(':')
-            ?.takeIf { engine.drawsSubtitles }
+        if (!automatic) automaticSyncKey = subtitleSyncKey(choice)
+        val tracks = engine.audioTracks()
+        val selected = tracks.indexOfFirst { it.selected }
+        // mpv IDs are already demuxer audio IDs; Media3 reports groups, so use audio order.
+        val audioTrack = if (engine.drawsSubtitles) tracks.getOrNull(selected)?.key?.substringAfter(':')
+            else selected.takeIf { it >= 0 }?.let { (it + 1).toString() }
+        val audioLanguage = tracks.getOrNull(selected)?.language?.let { raw ->
+            app.harbor.android.data.Languages.all.firstOrNull { app.harbor.android.data.AudioChoices.sameLanguage(raw, it.code) }?.code
+        }.orEmpty().substringBefore('-')
+        val attempt = playbackAttempt
+        val generation = ++syncGeneration
+        val baseDelay = state.subDelayMs
+        val baseScale = state.subTimeScale
+        val useSpeech = state.settings.subtitleAutoSyncAsr
+        val forceSpeech = !automatic && lastSyncFailed && useSpeech && app.harbor.android.data.WhisperModel.state.value.installed
+        state.autoSyncOffer = null; state.autoSyncError = null
         state.autoSync = "Listening to the audio…"
+        syncingAutomatically = automatic
         autoSyncJob = lifecycleScope.launch {
-            val outcome = runCatching {
-                AudioSync.run(url, headers, audioTrack, state.durationMs, file!!.lines, cacheDir) { done, of ->
-                    state.autoSync = if (done < of) "Listening to the audio… ${done + 1} of $of" else "Matching the lines…"
+            try {
+                val certificates = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { MpvEngine.caBundle(this@PlayerActivity) }
+                val r = AudioSync.run(state.currentUrl, headers, audioTrack, state.durationMs, file!!.lines, cacheDir,
+                    onStep = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Listening to the audio… ${done + 1} of $of" else "Matching the lines…" },
+                    useSpeech = useSpeech, forceSpeech = forceSpeech, audioLanguage = audioLanguage, caFile = certificates,
+                    onSpeech = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Recognizing speech… ${done + 1} of $of" else "Matching the words…" },
+                    ensureSpeechResources = {
+                        val manager = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                        val memory = android.app.ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }
+                        if (memory.availMem < 384L * 1024 * 1024) throw AudioSync.Failure("Not enough free memory for speech recognition. Close other apps or try live sync.")
+                    })
+                if (generation != syncGeneration || attempt != playbackAttempt || state.subChoice != choice ||
+                    state.subDelayMs != baseDelay || state.subTimeScale != baseScale) return@launch
+                lastSyncFailed = false
+                state.autoSyncOffer = AutoSyncOffer(r, baseDelay, baseScale)
+                if (state.settings.autoSyncApplyCorrections && (!r.method.startsWith("speech") || r.confidence >= 0.8f)) applyAutoSync()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: UnsatisfiedLinkError) { if (generation == syncGeneration) failure("The audio sync engine couldn't load. Try live sync.") }
+            catch (e: Exception) {
+                if (generation == syncGeneration) {
+                    lastSyncFailed = true
+                    failure(e.message ?: "Auto sync didn't find a reliable match. Try live sync.")
                 }
-            }
-            state.autoSync = null
-            if (state.subChoice != choice) return@launch
-            outcome.onSuccess { r ->
-                if (kotlin.math.abs(r.timeScale - state.subTimeScale) > 1e-6) setSubTimeScale(r.timeScale)
-                val delay = applySubDelay(r.offsetMs)
-                val drift = if (kotlin.math.abs(r.timeScale - 1.0) > 1e-4) " · frame rate fixed" else ""
-                hint("Synced by audio  |  " + (if (delay > 0) "+" else "") + "%.1fs".format(Locale.US, delay / 1000f) + drift)
-            }.onFailure { e ->
-                if (e is kotlinx.coroutines.CancellationException) return@onFailure
-                hint(e.message ?: "Auto sync didn't work")
+            } finally {
+                if (generation == syncGeneration) { state.autoSync = null; syncingAutomatically = false }
             }
         }
     }
 
+    override fun applyAutoSync() {
+        val offer = state.autoSyncOffer ?: return
+        if (offer.applied) return
+        state.subTimeScale = offer.result.timeScale
+        engine.setSubSpeed(1.0 / offer.result.timeScale)
+        applySubDelay(offer.result.offsetMs)
+        appliedAutoSync = appliedAutoSync?.copy(result = offer.result) ?: offer
+        state.autoSyncOffer = offer.copy(applied = true)
+    }
+
+    override fun undoAutoSync() {
+        val offer = state.autoSyncOffer ?: return
+        if (offer.applied) {
+            state.subTimeScale = offer.previousScale
+            engine.setSubSpeed(1.0 / offer.previousScale)
+            applySubDelay(offer.previousDelay)
+            val original = appliedAutoSync
+            appliedAutoSync = if (original == null ||
+                (original.previousDelay == offer.previousDelay && original.previousScale == offer.previousScale)) null
+            else original.copy(result = offer.result.copy(offsetMs = offer.previousDelay, timeScale = offer.previousScale))
+        }
+        state.autoSyncOffer = null
+    }
+
+    override fun dismissAutoSync() { state.autoSyncOffer = null; state.autoSyncError = null }
+
     override fun cancelAutoSync() {
-        AudioSync.cancel()
+        ++syncGeneration
+        if (autoSyncJob?.isActive == true) AudioSync.cancel()
         autoSyncJob?.cancel()
         state.autoSync = null
+        state.autoSyncOffer = null
+        state.autoSyncError = null
+        syncingAutomatically = false
     }
 
     /** Lines from the video grow as the engine reads (Media3) or shows (mpv) them. */
@@ -1220,6 +1419,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun setSubTimeScale(scale: Double) {
+        appliedAutoSync = null
+        cancelAutoSync()
         state.subTimeScale = scale
         engine.setSubSpeed(1.0 / scale)
     }
@@ -1239,12 +1440,59 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (segment.kind == SkipSegment.Kind.Outro && state.next != null) playNext() else seekNow(segment.endMs)
     }
 
+    private fun prepareNextDownload() {
+        val next = state.next ?: return
+        if (!state.settings.autoDownloadNext || !state.hasPlayed || state.currentUrl.startsWith("file:") && meta == null) return
+        val key = "${state.videoId}|${next.id}"
+        if (!state.settings.allowFutureEpisodes && app.harbor.android.data.ReleaseCountdowns.upcoming(next.released)) return
+        val now = System.currentTimeMillis()
+        if (predownloadFor == key && now - predownloadAt < 60_000) return
+        predownloadFor = key
+        predownloadAt = now
+        val expectedVideo = state.videoId
+        val scope = app.harbor.android.data.AudioChoices.scope(repository)
+        val ref = currentRef()
+        val show = metaId
+        val kind = type
+        val title = state.title
+        val poster = meta?.poster
+        lifecycleScope.launch {
+            runCatching {
+                if (kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.states(this@PlayerActivity) }.any { it.item.videoId == next.id && !it.failed }) return@launch
+                val ranked = Playback.preferSource(Playback.ranked(repository.addons.value, kind, next.id, repository.debrid.value, state.settings), ref, repository.debrid.value != null)
+                val ready = Playback.best(ranked, repository.debrid.value) ?: return@launch
+                if (!state.settings.autoDownloadNext || state.videoId != expectedVideo || app.harbor.android.data.AudioChoices.scope(repository) != scope) return@launch
+                if (app.harbor.android.data.Downloads.canSave(app.harbor.android.data.Stream(url = ready.url)))
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.enqueue(this@PlayerActivity, ready.url, show, kind, next.id,
+                        "$title · ${episodeCode(next)}", poster, ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) }
+            }
+        }
+    }
+
+    override fun downloadEpisode(video: Video) {
+        lifecycleScope.launch {
+            state.hint = "Finding a download for ${episodeCode(video)}…"
+            val item = app.harbor.android.data.SavedDownload(0, metaId, type, video.id, "${state.title} · ${episodeCode(video)}", meta?.poster, "", addonId = currentAddonId, sourceName = currentStreamKey)
+            runCatching {
+                val ranked = Playback.preferSource(rankedHere(video.id), currentRef(), repository.debrid.value != null)
+                val ready = Playback.best(ranked, repository.debrid.value) ?: error("No source found")
+                require(app.harbor.android.data.Downloads.canSave(app.harbor.android.data.Stream(url = ready.url))) { "This source is a live playlist and cannot be downloaded." }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.enqueue(this@PlayerActivity, ready.url, item.metaId, item.type, item.videoId, item.title, item.poster,
+                    ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) }
+            }.onSuccess { state.hint = "Episode added to Downloads" }.onFailure { state.hint = it.message ?: "Couldn't start download" }
+        }
+    }
+
     override fun playNext() {
         state.next?.let { playEpisode(it) }
     }
 
     override fun playEpisode(video: Video) {
         if (state.nextLoading) return
+        if (!state.settings.allowFutureEpisodes && app.harbor.android.data.ReleaseCountdowns.upcoming(video.released)) {
+            state.hint = "This episode is listed as upcoming. Enable Try future-dated episodes to look for a source."
+            return
+        }
         state.nextLoading = true
         state.panel = null
         lifecycleScope.launch {
@@ -1254,11 +1502,17 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val keep = settings.keepSourceNextEpisode && currentAddonId != null
             // A failed lookup (no network, say) mustn't leave Next locked for the rest of the video.
             val ready = try {
+                val local = if (settings.preferOfflineDownloads) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.localReady(this@PlayerActivity, video.id) } else null
                 val prefer = if (keep) null else repository.preferredSource(metaId)
+                if (local != null) {
+                    saveResume()
+                    switchTo(video.id, local, startAt = null)
+                    return@launch
+                }
                 var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
                 // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
                 if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
-                Playback.best(ranked, debrid)
+                local ?: Playback.best(ranked, debrid)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1299,7 +1553,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         currentSource = AdSkip.sourceKey(ready.stream)
         showSource()
         if (videoId != state.videoId) stalledKeys.clear()
-        begin(videoId, ready.url, startAt)
+        begin(videoId, ready.url, startAt, preferLocal = videoId != state.videoId)
     }
 
     private suspend fun rankedHere(videoId: String): List<RankedStream> {
@@ -1441,11 +1695,14 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (endPreparing != videoId && endScreenEligible()) {
             endPreparing = videoId
             lifecycleScope.launch {
-                val list = Recommendations.moreLikeThis(meta, type, repository.tmdbKey.value)
+                val candidates = Recommendations.moreLikeThis(meta, type, repository.tmdbKey.value)
+                val watched = if (state.settings.hideWatchedRecommendations)
+                    Recommendations.watched(candidates, app.harbor.android.ui.HarborDisplay.watchedIds, repository.tmdbKey.value) else emptySet()
+                val list = candidates.filterNot { it.id in watched }
                 Recommendations.warm(this@PlayerActivity, listOf(Recommendations.art(meta.background), Recommendations.art(meta.poster)) +
                     list.map { Recommendations.art(it.background ?: it.poster) })
                 if (state.videoId != videoId) return@launch
-                state.endItems = list
+                state.endItems = if (state.settings.hideWatchedRecommendations) list.filterNot { it.id in app.harbor.android.ui.HarborDisplay.watchedIds } else list
                 state.endFocused = 0
                 endPreparedFor = videoId
             }
@@ -1529,10 +1786,15 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun retry() {
+        offlineRecovery = false
+        playbackAttempt++
+        fallbackPending = false
+        triedMpv = engine is MpvEngine
         val position = engine.positionMs.takeIf { it > 0 }
             ?: if (state.settings.resumePlayback) repository.resumeFor(state.videoId, metaId) else 0L
         state.error = null
         state.buffering = true
+        loadStartMs = position
         engine.load(state.currentUrl, headers, position)
     }
 
@@ -1592,6 +1854,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun onStop() {
         super.onStop()
+        if (!isInPictureInPictureMode && !isChangingConfigurations) cancelAutoSync()
         saveResume()
         if (!isInPictureInPictureMode && state.castingTo == null) engine.pause()
     }

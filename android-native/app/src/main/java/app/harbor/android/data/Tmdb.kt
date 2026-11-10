@@ -382,22 +382,36 @@ object Tmdb {
 
     /** The IMDb id for a "tmdb:" title, which stream addons and Cinemeta use. */
     /** The title's YouTube trailer key, by TMDB id or IMDb id. */
-    suspend fun trailerKey(key: String, meta: Meta): String? {
+    suspend fun trailerKey(key: String, meta: Meta): String? = trailerVideos(key, meta).firstOrNull { it.type == "Trailer" }?.youtubeId
+        ?: trailerVideos(key, meta).firstOrNull()?.youtubeId
+
+    suspend fun trailerVideos(key: String, meta: Meta, season: Int? = null): List<TrailerVideo> {
         val path = tmdbPath(meta) ?: meta.id.takeIf { it.startsWith("tt") }?.let { imdb ->
             val found = get(key, "/find/$imdb", mapOf("external_source" to "imdb_id"))
             val movie = (found["movie_results"] as? JsonArray)?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
             val tv = (found["tv_results"] as? JsonArray)?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
             movie?.let { "/movie/$it" } ?: tv?.let { "/tv/$it" }
-        } ?: return null
-        val videos = (get(key, "$path/videos", mapOf("include_video_language" to "en,null"))["results"] as? JsonArray).orEmpty().map { it.jsonObject }
-        return (videos.firstOrNull { it.string("site") == "YouTube" && it.string("type") == "Trailer" && it["official"]?.jsonPrimitive?.contentOrNull == "true" }
-            ?: videos.firstOrNull { it.string("site") == "YouTube" && it.string("type") == "Trailer" }
-            ?: videos.firstOrNull { it.string("site") == "YouTube" && it.string("type") == "Teaser" })?.string("key")
+        } ?: return emptyList()
+        val videoPath = if (season != null && path.startsWith("/tv/")) "$path/season/$season/videos" else "$path/videos"
+        val videos = (get(key, videoPath, mapOf("include_video_language" to "en,null"))["results"] as? JsonArray).orEmpty().map { it.jsonObject }
+        return videos.filter { it.string("site") == "YouTube" }.mapNotNull { v ->
+            val id = v.string("key")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{11}")) } ?: return@mapNotNull null
+            TrailerVideo(id, v.string("name") ?: meta.name, v.string("type") ?: "Trailer", season, v["official"]?.jsonPrimitive?.contentOrNull == "true")
+        }.sortedWith(compareByDescending<TrailerVideo> { it.type == "Trailer" }.thenByDescending { it.official })
     }
 
     suspend fun imdbId(key: String, meta: Meta): String? {
         val path = tmdbPath(meta) ?: return null
         return get(key, "$path/external_ids").string("imdb_id")?.takeIf { it.startsWith("tt") }
+    }
+
+    /** Keep the language code, including when the title was opened under its TMDB ID. */
+    suspend fun originalAudioLanguage(key: String, meta: Meta): String? {
+        tmdbPath(meta)?.let { return get(key, it).string("original_language") }
+        val imdb = meta.id.substringBefore(':').takeIf { it.matches(Regex("tt\\d+")) } ?: return null
+        val found = get(key, "/find/$imdb", mapOf("external_source" to "imdb_id"))
+        val results = found[if (meta.type == "movie") "movie_results" else "tv_results"] as? JsonArray
+        return results?.firstOrNull().objectOrNull?.string("original_language")
     }
 
     /**

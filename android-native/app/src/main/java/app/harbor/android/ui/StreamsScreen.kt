@@ -218,6 +218,10 @@ fun StreamsScreen(
     }
 
     LaunchedEffect(addons, type, videoId, debrid, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage, settings.animePreferImdbStreams) {
+        if (!autoPlayed && settings.preferOfflineDownloads) {
+            val local = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.localReady(downloadContext, videoId) }
+            if (local != null) { autoPlayed = true; loading = false; onPlay(local); return@LaunchedEffect }
+        }
         if (addons.isEmpty()) return@LaunchedEffect
         if (refreshKey > 0) ranked = null
         loading = true
@@ -419,8 +423,14 @@ fun StreamsScreen(
                         (remembered.second == null || Playback.streamKey(item.stream) == remembered.second) && item === shown.first()
                     SourceCard(item, wide, last, settings, item.stream.playable(debrid != null), onDownload = {
                         val ctx = downloadContext
-                        app.harbor.android.data.Downloads.enqueue(ctx, item.stream.url!!, metaId, type, videoId, title, null)
-                        android.widget.Toast.makeText(ctx, "Downloading. It's in Downloads.", android.widget.Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val result = runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                app.harbor.android.data.Downloads.enqueue(ctx, item.stream.url!!, metaId, type, videoId, title, null,
+                                    item.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), item.addon.manifest.id, Playback.streamKey(item.stream))
+                            } }
+                            result.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it }
+                            android.widget.Toast.makeText(ctx, if (result.isSuccess) "Downloading. It's in Downloads." else "Couldn't start download. Check storage and try again.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
                     }) { play(item) }
                 }
             }

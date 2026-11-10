@@ -50,3 +50,7 @@
 -dontwarn dev.whyoleg.cryptography.**
 -dontwarn io.ktor.**
 -dontwarn org.jspecify.annotations.**
+
+# Subtitle sync entry points are looked up by their JNI names.
+-keep class app.harbor.android.player.AudioSync { native <methods>; }
+-keep class app.harbor.android.player.WhisperNative { native <methods>; }

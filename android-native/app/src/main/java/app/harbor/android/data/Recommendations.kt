@@ -7,6 +7,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -16,6 +18,34 @@ import kotlinx.serialization.json.jsonObject
 object Recommendations {
     private const val MAX_ITEMS = 18
     private val cache = mutableMapOf<String, List<Meta>>()
+    private val aliases = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+    private val aliasSlots = Semaphore(4)
+
+    /** Match catalog IDs to watched-library IDs without changing which title a card opens. */
+    suspend fun watched(items: List<Meta>, watched: Set<String>, tmdbKey: String?): Set<String> = coroutineScope {
+        if (watched.isEmpty()) return@coroutineScope emptySet()
+        items.distinctBy { it.id }.map { meta -> async {
+            if (meta.id in watched) return@async meta.id
+            val ids = aliases[meta.id] ?: aliasSlots.withPermit {
+                val found = runCatching {
+                    when (meta.id.substringBefore(':')) {
+                        "tmdb" -> if (tmdbKey != null && watched.any { it.startsWith("tt") })
+                            Tmdb.imdbId(tmdbKey, meta)?.let { setOf(it) } else null
+                        "kitsu", "mal", "anilist" -> AnimeInfo.ids(meta.id)?.let { ids ->
+                            listOfNotNull(ids.kitsu?.let { "kitsu:$it" }, ids.mal?.let { "mal:$it" }, ids.anilist?.let { "anilist:$it" }, ids.imdb).toSet()
+                        }
+                        else -> emptySet()
+                    }
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+                if (found != null) {
+                    if (aliases.size > 512) aliases.clear()
+                    aliases[meta.id] = found
+                }
+                found.orEmpty()
+            }
+            meta.id.takeIf { ids.any(watched::contains) }
+        } }.awaitAll().filterNotNull().toSet()
+    }
 
     suspend fun moreLikeThis(meta: Meta, type: String, tmdbKey: String?): List<Meta> {
         cache[meta.id]?.let { return it }

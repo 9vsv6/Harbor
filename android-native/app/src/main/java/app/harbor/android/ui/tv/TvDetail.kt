@@ -241,8 +241,12 @@ fun TvEpisodes(
     backdrop: String?,
     rating: (app.harbor.android.data.Video) -> String?,
     onPlay: (app.harbor.android.data.Video) -> Unit,
+    reviewMeta: Meta? = null,
 ) {
     var picker by remember { mutableStateOf(false) }
+    var reviewVideo by remember { mutableStateOf<app.harbor.android.data.Video?>(null) }
+    val repository = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.harbor.android.HarborApp).repository
+    reviewVideo?.let { video -> reviewMeta?.let { meta -> app.harbor.android.ui.EpisodeReviewsDialog(repository, meta, video) { reviewVideo = null } } }
     Column(verticalArrangement = Arrangement.spacedBy(u(10f))) {
         TvSectionTitle("Episodes")
         if (season != null) {
@@ -270,7 +274,12 @@ fun TvEpisodes(
                 contentPadding = PaddingValues(horizontal = TvInsets.Gutter, vertical = u(8f)),
                 horizontalArrangement = Arrangement.spacedBy(u(10f)),
             ) {
-                items(episodes, key = { it.id }) { ep -> EpisodeCard(ep, backdrop, rating(ep)) { onPlay(ep) } }
+                items(episodes, key = { it.id }) { ep ->
+                    Column {
+                        EpisodeCard(ep, backdrop, rating(ep)) { if (app.harbor.android.ui.HarborDisplay.settings.allowFutureEpisodes || !app.harbor.android.data.ReleaseCountdowns.upcoming(ep.released)) onPlay(ep) }
+                        if (reviewMeta != null) androidx.compose.material3.TextButton(onClick = { reviewVideo = ep }) { Text("Episode reviews") }
+                    }
+                }
             }
         }
     }
@@ -285,9 +294,11 @@ private fun EpisodeCard(ep: app.harbor.android.data.Video, backdrop: String?, ra
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     val shape = RoundedCornerShape(u(8f))
+    val upcoming = app.harbor.android.data.ReleaseCountdowns.upcoming(ep.released)
+    val available = !upcoming || HarborDisplay.settings.allowFutureEpisodes
     Column(
         Modifier.width(u(168f)).bpFocus(focused, u(8f)).clip(shape).background(Panel)
-            .clickable(interactionSource = source, indication = null, onClick = onClick),
+            .clickable(enabled = available, interactionSource = source, indication = null, onClick = onClick),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(HarborColors.Elevated)) {
             (ep.thumbnail ?: backdrop)?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
@@ -312,6 +323,7 @@ private fun EpisodeCard(ep: app.harbor.android.data.Video, backdrop: String?, ra
             Text("EPISODE ${ep.episode ?: ""}", color = HarborColors.InkSubtle, fontSize = s(6f), fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp, maxLines = 1)
             Text(ep.label, color = HarborColors.Ink, fontSize = s(9.5f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, style = ContentText)
             shortDate(ep.released)?.let { Text(it, color = HarborColors.InkSubtle, fontSize = s(7f), fontWeight = FontWeight.Medium, maxLines = 1) }
+            if (upcoming) Text(if (available) "Upcoming · Try source" else "Upcoming", color = HarborColors.InkMuted, fontSize = s(7f))
             Text(
                 ep.overview.orEmpty(), color = HarborColors.InkMuted, fontSize = s(7f), lineHeight = s(10f), maxLines = 2, minLines = 2,
                 overflow = TextOverflow.Ellipsis, style = ContentText,

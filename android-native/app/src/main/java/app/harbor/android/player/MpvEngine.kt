@@ -92,7 +92,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 "on" -> "mediacodec"
                 else -> "mediacodec,mediacodec-copy"
             })
-            opt("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
+            // Let the TV try every codec its hardware exposes, including older formats such
+            // as VC-1 that a fixed allowlist would unnecessarily send to the CPU.
+            opt("hwdec-codecs", if (Perf.isTv) "all" else "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
             when (s.mpvQuality) {
                 "performance" -> {
                     opt("scale", "bilinear")
@@ -208,7 +210,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
          * mpv's TLS needs a CA file: written once from the phone's own trusted certificates, plus
          * ISRG Root X2, which Android before 14 lacks (see network_security_config.xml).
          */
-        private fun caBundle(context: Context): File? = runCatching {
+        internal fun caBundle(context: Context): File? = runCatching {
             val file = File(context.filesDir, "cacert-2.pem")
             if (file.exists() && System.currentTimeMillis() - file.lastModified() < 7L * 86_400_000) return file
             val store = KeyStore.getInstance("AndroidCAStore").apply { load(null) }
@@ -618,7 +620,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         if (styleFontUploaded) arabicFont = false
         mpv.setPropertyString("sub-font", if (arabicFont) ARABIC_FONT else styleFont)
         assFontOnly = style.assOverride == "font"
-        runCatching { mpv.setPropertyString("sub-ass-override", if (assFontOnly) "yes" else style.assOverride) }
+        runCatching { mpv.setPropertyString("sub-ass-override", if (style.assStripStyles && style.assOverride == "force") "strip" else if (assFontOnly) "yes" else style.assOverride) }
         applyAssFont()
         when (prefs.subBackground) {
             "box" -> {

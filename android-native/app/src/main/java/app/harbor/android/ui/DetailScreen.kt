@@ -318,6 +318,7 @@ private fun DetailBody(
     /** The title, logo, genres and story are waiting for your language (see holdText). */
     holdText: Boolean = false,
 ) {
+    var trailersOpen by remember(meta.id) { mutableStateOf(false) }
     val videos = meta.videos.orEmpty()
     val isSeries = meta.type != "movie" && videos.isNotEmpty()
     // Season 0 holds specials; start on the first real season.
@@ -341,6 +342,12 @@ private fun DetailBody(
     // Harbor's episode ratings: OMDb's real IMDb scores with a key, else TMDB's; one call per season.
     val omdbKey by repository.omdbKey.collectAsState()
     val tmdbKey by repository.tmdbKey.collectAsState()
+    var hiddenRecommendations by remember(meta.id) { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(details?.recommendations, details?.similar, HarborDisplay.settings.hideWatchedRecommendations, HarborDisplay.watchedIds, tmdbKey) {
+        hiddenRecommendations = if (HarborDisplay.settings.hideWatchedRecommendations)
+            app.harbor.android.data.Recommendations.watched(details?.let { it.recommendations + it.similar }.orEmpty(), HarborDisplay.watchedIds, tmdbKey)
+        else emptySet()
+    }
     val ratings = remember(meta.id) { androidx.compose.runtime.mutableStateMapOf<Int, Map<Int, String>>() }
     LaunchedEffect(meta.id, season, omdbKey, tmdbKey, details?.tmdbId) {
         val s = season ?: return@LaunchedEffect
@@ -364,6 +371,7 @@ private fun DetailBody(
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     // Letterboxd's reviews come with the Letterboxd tracker, as Harbor's: only once it's connected.
     val letterboxdOn = HarborDisplay.settings.letterboxd.let { lb -> lb.enabled && (if (lb.mode == "full") trackers.letterboxd != null else lb.username.isNotBlank()) } && HarborDisplay.settings.showLetterboxdDetail
+    if (trailersOpen) TrailersDialog(repository, meta, season) { trailersOpen = false }
     var comments by remember(meta.id) { mutableStateOf<List<app.harbor.android.data.TraktComment>>(emptyList()) }
     var letterboxd by remember(meta.id) { mutableStateOf<app.harbor.android.data.LetterboxdFilm?>(null) }
     val imdbId = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
@@ -449,7 +457,7 @@ private fun DetailBody(
                     ) {
                         TvHeroActions(
                             repository, meta, details, isSeries, playLabel, 0f, play,
-                            trailer = (meta.trailerYouTube ?: details?.trailerYouTube)?.let { yt -> { uri.openUri("https://www.youtube.com/watch?v=$yt") } },
+                            trailer = { trailersOpen = true },
                             download = { onStreams(meta.id, meta.name) },
                             playFocus = tvPlay,
                         )
@@ -467,6 +475,7 @@ private fun DetailBody(
                     backdrop = details?.backdrop ?: meta.background,
                     rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
+                    reviewMeta = meta,
                 )
             }
             if (!tv) (details?.overview ?: meta.description)?.takeIf { !holdText }?.let { synopsis ->
@@ -540,8 +549,8 @@ private fun DetailBody(
             val cast = details?.cast?.takeIf { it.isNotEmpty() } ?: meta.castNames.map { CastMember(it, null, null) }
             if (cast.isNotEmpty()) item(key = "cast") { if (tv) app.harbor.android.ui.tv.TvCastRow(cast) else CastRail(cast, details?.castCount?.takeIf { it > 0 } ?: cast.size, side, wide) }
             anime?.characters?.takeIf { it.isNotEmpty() }?.let { item(key = "characters") { AnimeCharactersRail(it, side, wide) } }
-            details?.recommendations?.takeIf { it.isNotEmpty() }?.let { item(key = "more") { if (tv) app.harbor.android.ui.tv.TvPosterRow("More Like This", it, onOpen) else Rail("More Like This", it, onOpen) } }
-            details?.similar?.takeIf { it.isNotEmpty() }?.let { item(key = "also") { if (tv) app.harbor.android.ui.tv.TvPosterRow("You Might Also Like", it, onOpen) else Rail("You Might Also Like", it, onOpen) } }
+            details?.recommendations?.filterNot { HarborDisplay.settings.hideWatchedRecommendations && (it.id in HarborDisplay.watchedIds || it.id in hiddenRecommendations) }?.takeIf { it.isNotEmpty() }?.let { item(key = "more") { if (tv) app.harbor.android.ui.tv.TvPosterRow("More Like This", it, onOpen) else Rail("More Like This", it, onOpen) } }
+            details?.similar?.filterNot { HarborDisplay.settings.hideWatchedRecommendations && (it.id in HarborDisplay.watchedIds || it.id in hiddenRecommendations) }?.takeIf { it.isNotEmpty() }?.let { item(key = "also") { if (tv) app.harbor.android.ui.tv.TvPosterRow("You Might Also Like", it, onOpen) else Rail("You Might Also Like", it, onOpen) } }
             anime?.related?.takeIf { it.isNotEmpty() }?.let { nodes ->
                 item(key = "related") {
                     AnimeRelatedRail(nodes, relatedKitsu, side) { node, kitsu ->
@@ -603,6 +612,8 @@ private fun Hero(
     download: () -> Unit,
 ) {
     val uri = LocalUriHandler.current
+    var trailersOpen by remember(meta.id) { mutableStateOf(false) }
+    if (trailersOpen) TrailersDialog(repository, meta, next?.season) { trailersOpen = false }
     Box(Modifier.fillMaxWidth().height(height)) {
         AsyncImage(
             model = details?.backdrop ?: meta.background ?: meta.poster,
@@ -673,7 +684,7 @@ private fun Hero(
                     else -> "Play"
                 },
                 play = play,
-                trailer = (meta.trailerYouTube ?: details?.trailerYouTube)?.let { yt -> { uri.openUri("https://www.youtube.com/watch?v=$yt") } },
+                trailer = { trailersOpen = true },
                 download = download,
             )
         }
