@@ -329,6 +329,18 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         if (state.tvCovered) TvPlayerConnecting(state, actions)
 
         Hint(state)
+        if (state.tv && !state.tvCovered) state.seekPreviewMs?.let { ms ->
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+                val gutter = app.harbor.android.ui.tv.TvInsets.Gutter
+                val cardWidth = 240.dp
+                val fraction = if (state.durationMs > 0) (ms.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f
+                val x = (gutter + (maxWidth - gutter * 2) * fraction - cardWidth / 2).coerceIn(gutter, (maxWidth - gutter - cardWidth).coerceAtLeast(gutter))
+                SeekPreviewCard(
+                    state.seekPreview, ms,
+                    Modifier.align(Alignment.BottomStart).offset(x = x, y = if (state.controlsVisible) (-200).dp else (-90).dp), cardWidth,
+                )
+            }
+        }
         ContentAdvisoryLayer(state, actions)
         if (!state.stillWatching && !state.tvCovered) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
         if (!state.tvCovered) ResumePill(state, actions, Modifier.align(Alignment.BottomStart))

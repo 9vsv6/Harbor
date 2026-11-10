@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -379,6 +380,12 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.align(Alignment.TopCenter).padding(bottom = 30.dp),
             )
+            // Harbor PC's seek preview: the frame at the dragged spot, above the bar, following the finger.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
+                val cardWidth = 168.dp
+                val x = (maxWidth * dragValue - cardWidth / 2).coerceIn(0.dp, (maxWidth - cardWidth).coerceAtLeast(0.dp))
+                SeekPreviewCard(state.seekPreview, (dragValue * duration).toLong(), Modifier.align(Alignment.BottomStart).offset(x = x, y = (-80).dp), cardWidth)
+            }
         }
     }
 }

@@ -428,6 +428,29 @@ object Tmdb {
      * search for the same words, asked in each language, matched to them by type, title and year.
      * Titles TMDB doesn't find keep the addon's title and poster.
      */
+    /**
+     * TMDB's best match for a search (Harbor PC's Top Match): its first movie or show, under the IMDb id
+     * the addons use, so it lines up with their results. Null when TMDB has nothing usable.
+     */
+    suspend fun topMatch(key: String, query: String): Meta? {
+        val o = get(key, "/search/multi", mapOf("query" to query, "include_adult" to "false"))
+        val hit = (o["results"] as? JsonArray).orEmpty().map { it.jsonObject }
+            .firstOrNull { it.string("media_type") == "movie" || it.string("media_type") == "tv" } ?: return null
+        val kind = hit.string("media_type")!!
+        val id = hit["id"]?.jsonPrimitive?.intOrNull ?: return null
+        val imdb = get(key, "/$kind/$id/external_ids").string("imdb_id")?.takeIf { it.startsWith("tt") } ?: return null
+        val date = hit.string("release_date") ?: hit.string("first_air_date")
+        return Meta(
+            id = imdb,
+            type = if (kind == "movie") "movie" else "series",
+            name = hit.string("title") ?: hit.string("name") ?: return null,
+            poster = hit.string("poster_path")?.let { "$IMAGES/w342$it" },
+            background = hit.string("backdrop_path")?.let { "$IMAGES/w1280$it" },
+            description = hit.string("overview"),
+            releaseInfo = date?.take(4)?.takeIf { it.length == 4 },
+        )
+    }
+
     suspend fun localizeSearch(key: String, query: String, metas: List<Meta>): List<Meta> {
         val langs = listOfNotNull(titleLang, posterLang).filter { base(it) != base(language) }.distinctBy { base(it) }
         if (langs.isEmpty() || metas.isEmpty()) return metas

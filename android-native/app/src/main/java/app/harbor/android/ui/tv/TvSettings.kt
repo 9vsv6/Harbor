@@ -359,6 +359,9 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         Control.Options("futureEpisodes", "Try future-dated episodes", onOff(s.allowFutureEpisodes), OnOff),
         Control.Options("titleArtwork", "Use title artwork in player", onOff(s.playerTitleArtwork), OnOff),
         Control.Options("hideWatchedEnd", "Hide watched recommendations", onOff(s.hideWatchedRecommendations), OnOff),
+        Control.Options("airingEnd", "More Like This on still-airing series", onOff(s.moreLikeThisOnAiringSeries), OnOff),
+        Control.Options("seekPreviews", "Thumbnail preview while seeking", onOff(s.seekPreviews), OnOff),
+        Control.Options("topMatch", "Use TMDB for Top Match in search", onOff(s.searchTmdbTopMatch), OnOff),
         Control.Options("resume", "Resume where you left off", onOff(s.resumePlayback), OnOff),
         Control.Options("resumeNotice", "Show resume notice and Start over", onOff(s.resumeNotice), OnOff),
         Control.Options("seekBack", "Skip back", s.seekBackSec.toString(), secondsOptions(listOf(5, 10, 15, 30), s.seekBackSec)),
@@ -447,6 +450,9 @@ private fun commit(repository: Repository, id: String, value: String) {
         "futureEpisodes" -> repository.updateSettings { it.copy(allowFutureEpisodes = value == "on") }
         "titleArtwork" -> repository.updateSettings { it.copy(playerTitleArtwork = value == "on") }
         "hideWatchedEnd" -> repository.updateSettings { it.copy(hideWatchedRecommendations = value == "on") }
+        "airingEnd" -> repository.updateSettings { it.copy(moreLikeThisOnAiringSeries = value == "on") }
+        "seekPreviews" -> repository.updateSettings { it.copy(seekPreviews = value == "on") }
+        "topMatch" -> repository.updateSettings { it.copy(searchTmdbTopMatch = value == "on") }
         "subtitleAutoSync" -> repository.updateSettings { it.copy(subtitleAutoSync = value == "on") }
         "autoSyncApply" -> repository.updateSettings { it.copy(autoSyncApplyCorrections = value == "on") }
         "autoSyncAsr" -> repository.updateSettings { it.copy(subtitleAutoSyncAsr = value == "on") }

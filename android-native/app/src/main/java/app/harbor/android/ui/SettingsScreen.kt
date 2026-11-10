@@ -988,6 +988,17 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         ToggleRow("Volume pop-up while watching", "Shows the volume and brightness level while you swipe the edges.", settings.volumePopup) { v -> set { it.copy(volumePopup = v) } }
         ToggleRow("Screen lock button", "Locks the controls so a pocket or a child can't tap them.", settings.screenLock) { v -> set { it.copy(screenLock = v) } }
         ToggleRow("Chapters button", "Adds the Chapters menu to the controls when a video has chapters.", settings.chapterMenu) { v -> set { it.copy(chapterMenu = v) } }
+        HarborHeading("Seek bar", null)
+        ToggleRow(
+            "Show thumbnail preview while seeking",
+            "Shows a frame above the seek bar as you drag it (or hold left and right on a TV). Works on direct streams, debrid links and downloads.",
+            settings.seekPreviews,
+        ) { v -> set { it.copy(seekPreviews = v) } }
+        if (settings.seekPreviews) KeyCard(
+            "Seekr · preview thumbnails",
+            "Optional. Paste your own free Seekr API key to show Seekr's preview thumbnails first, and read frames from the video when Seekr has no match. Leave it blank to use frames from the video only.",
+            "Seekr API key", settings.seekrApiKey.takeIf { it.isNotBlank() }, "Get a key at seekr.tv", "https://seekr.tv/join",
+        ) { key -> set { it.copy(seekrApiKey = key.orEmpty()) } }
         HarborHeading("While you watch", "Optional overlays that appear over the video.")
         ToggleRow("Content advisory on start", "When a movie or episode starts, briefly show its IMDb parental guide (violence, profanity, substances, frightening scenes and more) with severity. Fades on its own.", settings.contentAdvisoryToast) { v -> set { it.copy(contentAdvisoryToast = v) } }
         if (settings.contentAdvisoryToast) {
@@ -1057,6 +1068,11 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         HarborHeading("More like this at the end", "Show recommendations when a movie, series finale or anime film finishes. At the end the card fills the screen; before the end the film shrinks to a corner and keeps playing behind it.")
         PillChoice(listOf(-1 to "At the end", 0 to "Off", 30 to "30s", 60 to "1 min", 120 to "2 min", 180 to "3 min", 300 to "5 min"), settings.endScreenLeadSec) { v -> set { it.copy(endScreenLeadSec = v) } }
         ToggleRow("Hide watched recommendations", "Exclude watched movies and shows from More Like This.", settings.hideWatchedRecommendations) { on -> set { it.copy(hideWatchedRecommendations = on) } }
+        if (settings.endScreenLeadSec != 0) ToggleRow(
+            "On still-airing series",
+            "Show More Like This after the latest aired episode, even when future episodes are listed. It still won't appear before the latest aired episode.",
+            settings.moreLikeThisOnAiringSeries,
+        ) { on -> set { it.copy(moreLikeThisOnAiringSeries = on) } }
         if (settings.endScreenLeadSec != 0) {
             ToggleRow("Countdown", "Act automatically if nothing is chosen before time runs out.", settings.endScreenCountdownSec > 0) { v -> set { it.copy(endScreenCountdownSec = if (v) 15 else 0) } }
             if (settings.endScreenCountdownSec > 0) {
@@ -1615,6 +1631,12 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         val keys by repository.providerKeys.collectAsState()
         val uri = LocalUriHandler.current
         val scope = rememberCoroutineScope()
+        HarborHeading("Top Match", "The first result in Search.")
+        ToggleRow(
+            "Use TMDB for Top Match in search",
+            "Use your saved TMDB key to pick the Top Match. If there's no key, or this is off, Harbor uses your metadata addons' search results.",
+            settings.searchTmdbTopMatch,
+        ) { v -> set { it.copy(searchTmdbTopMatch = v) } }
         HarborHeading("AI Search", "Describe what you want to watch in your own words; a language model names the titles. Tap ✦ AI in Search.")
         RowText("AI search provider", null)
         PillChoice(listOf("openrouter" to "OpenRouter", "groq" to "Groq"), settings.aiProvider) { v ->

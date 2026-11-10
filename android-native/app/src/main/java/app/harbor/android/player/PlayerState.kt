@@ -118,6 +118,10 @@ class PlayerState {
     var videoId by mutableStateOf("")
     var sources by mutableStateOf<List<RankedStream>?>(null)
     var currentUrl by mutableStateOf("")
+    /** Where a held or repeated remote seek is heading: the TV shows its preview frame there. */
+    var seekPreviewMs by mutableStateOf<Long?>(null)
+    /** This video's seek-bar previews, when they're on. */
+    var seekPreview: SeekPreview? = null
     /** TV: the full-screen Connecting page (or its "didn't play" state) is up, instead of the player. */
     val tvCovered: Boolean get() = tv && (error != null || (durationMs == 0L && !hasPlayed && !ended))
     /** This video has started. A live stream never reports a length, so that alone can't mean "still connecting". */

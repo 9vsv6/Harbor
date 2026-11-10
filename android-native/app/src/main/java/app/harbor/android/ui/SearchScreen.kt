@@ -212,7 +212,12 @@ private fun searchRank(name: String, query: String): Int {
  */
 internal suspend fun searchCatalogs(repository: Repository, q: String): List<Meta> {
     val sources = repository.metaAddons()
+    val tmdbKey = repository.tmdbKey.value
     val found = coroutineScope {
+        // Harbor PC's Top Match: TMDB's best match for the words goes first, asked beside the addons.
+        val tmdbTop = if (tmdbKey != null && repository.settings.value.searchTmdbTopMatch) async {
+            kotlinx.coroutines.withTimeoutOrNull(4_000) { runCatching { app.harbor.android.data.Tmdb.topMatch(tmdbKey, q) }.getOrNull() }
+        } else null
         sources.flatMap { addon -> addon.manifest.catalogs.filter { it.supportsSearch }.map { addon to it } }
             .map { (addon, catalog) ->
                 async {
@@ -224,6 +229,12 @@ internal suspend fun searchCatalogs(repository: Repository, q: String): List<Met
             .let { lists -> (0 until (lists.maxOfOrNull { it.size } ?: 0)).flatMap { i -> lists.mapNotNull { it.getOrNull(i) } } }
             .distinctBy { it.id }
             .sortedBy { searchRank(it.name, q) }
+            .let { list ->
+                // TMDB's match leads (as the addons list it, when they have it); without one, the addons' order stands.
+                val top = tmdbTop?.await() ?: return@let list
+                val own = list.firstOrNull { it.id == top.id }
+                listOf(own ?: top) + (list - setOfNotNull(own))
+            }
     }
     val tmdb = repository.tmdbKey.value
     return if (tmdb != null && app.harbor.android.data.Tmdb.localizes) {

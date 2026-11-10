@@ -65,6 +65,9 @@ import java.util.Locale
 class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private lateinit var engine: Engine
     private lateinit var engineSetup: EngineSetup
+    /** Seek-bar previews for the playing video (Seekr, else frames from the video). */
+    private val previews by lazy { SeekPreview(lifecycleScope) }
+    private var seekrAskedFor = ""
     private lateinit var playerRoot: FrameLayout
     /** A TV moved from Media3 to mpv for a video Media3 couldn't play; that happens once. */
     private var triedMpv = false
@@ -270,6 +273,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.videoId = videoId
         val local = if (preferLocal && state.settings.preferOfflineDownloads) app.harbor.android.data.Downloads.local(this, videoId) else null
         state.currentUrl = local?.let { android.net.Uri.fromFile(it).toString() } ?: url
+        state.seekPreviewMs = null
+        state.seekPreview = if (state.settings.seekPreviews) previews else null
+        // Reading frames competes with playback on low-tier devices (most older TV boxes); Seekr's sprites are fine there.
+        previews.load(state.currentUrl, headers, allowLocal = state.settings.seekPreviews && app.harbor.android.perf.Perf.tier != app.harbor.android.perf.DeviceTier.LOW)
         onlineUrl = url.takeUnless { it.startsWith("file:") || it.startsWith("content:") } ?: onlineUrl.takeIf { sameVideo }
         offlineRecovery = false
         state.hasPlayed = false
@@ -377,6 +384,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             state.positionMs = shownPosition(position)
             state.durationMs = duration
             state.bufferedMs = engine.bufferedMs
+            if (duration > 0 && seekrAskedFor != state.videoId && state.settings.seekPreviews && state.settings.seekrApiKey.isNotBlank()) {
+                seekrAskedFor = state.videoId
+                previews.startSeekr(state.settings.seekrApiKey, metaId, type, state.videoId, duration)
+            }
             endScreenTick(position, duration)
             // The advisory shows once per video, as soon as playback is under way.
             if (position > 300 && advisoryShownFor != state.videoId && (state.advisory.isNotEmpty() || state.advisoryRating != null)) {
@@ -1047,6 +1058,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
+    private val hideSeekPreview = Runnable { state.seekPreviewMs = null }
+
     private fun coalescedSeekBy(deltaMs: Long) {
         val duration = engine.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
         // A new burst starts unless presses are still waiting to be sent.
@@ -1056,6 +1069,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         pendingSeekMs = target
         pendingSeekSentAt = 0L
         state.positionMs = target
+        // The preview stays a moment after the last press: a seek often lands before a frame is read.
+        state.seekPreviewMs = target
+        ticker.removeCallbacks(hideSeekPreview)
+        ticker.postDelayed(hideSeekPreview, 2_000)
         ticker.removeCallbacks(settleSeek)
         ticker.postDelayed(settleSeek, SEEK_SETTLE_MS)
         val moved = target - pendingSeekFrom
@@ -1067,6 +1084,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private fun seekNow(positionMs: Long) {
         ticker.removeCallbacks(settleSeek)
         pendingSeekMs = -1L
+        state.seekPreviewMs = null
         pendingSeekSentAt = 0L
         engine.seekTo(positionMs)
     }
@@ -1672,17 +1690,23 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var endFiredEnd = ""
     private var endEarlySince = 0L
 
-    /** Movies; series only on their last aired episode (a later season still to watch doesn't count). */
+    /**
+     * Movies; series only on their final listed episode, as Harbor PC (series-finale.ts). With
+     * "On still-airing series", also the latest aired episode while later ones are listed but not out.
+     */
     private fun endScreenEligible(): Boolean {
         if (type == "movie") return true
         val episodes = state.episodes
         val current = episodes.firstOrNull { it.id == state.videoId } ?: return false
         val now = System.currentTimeMillis()
-        return episodes.none { ep ->
+        val later = episodes.filter { ep ->
             (ep.season == 0) == (current.season == 0) && ep.id != current.id &&
-                compareValuesBy(ep, current, { it.season ?: 0 }, { it.episode ?: 0 }) > 0 &&
-                ep.released?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }?.let { it <= now } == true
+                compareValuesBy(ep, current, { it.season ?: 0 }, { it.episode ?: 0 }) > 0
         }
+        if (later.isEmpty()) return true
+        if (!state.settings.moreLikeThisOnAiringSeries) return false
+        // Every later episode still to come (a future date, or none yet): this is the latest aired one.
+        return later.none { ep -> ep.released?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }?.let { it <= now } == true }
     }
 
     private fun endScreenTick(position: Long, duration: Long) {
@@ -1955,10 +1979,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         castListeners()
         ticker.removeCallbacks(tick)
         ticker.removeCallbacks(settleSeek)
+        ticker.removeCallbacks(hideSeekPreview)
         stopScrobble()
         saveResume()
         engine.listener = null
         engine.release()
+        previews.release()
         super.onDestroy()
     }
 
