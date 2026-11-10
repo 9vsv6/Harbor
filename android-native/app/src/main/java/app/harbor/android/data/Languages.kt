@@ -36,7 +36,7 @@ object Languages {
 
     private val byCode = all.associateBy { it.code }
 
-    fun of(code: String): Lang = byCode[code.lowercase()] ?: byCode[code.lowercase().substringBefore('-')]
+    fun of(code: String): Lang = if (code == "original") Lang("original", "Original audio", "Original audio", "un") else byCode[code.lowercase()] ?: byCode[code.lowercase().substringBefore('-')]
         ?: Lang(code, java.util.Locale(code).displayLanguage.ifBlank { code }, java.util.Locale(code).getDisplayLanguage(java.util.Locale(code)).ifBlank { code }, "un")
 
     /** For lists stored by English name (stream languages): the code, or null. */

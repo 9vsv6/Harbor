@@ -47,26 +47,38 @@ import kotlinx.coroutines.delay
  * is on, cropped to fill. A speaker button toggles sound. Nothing shows if YouTube won't say.
  */
 @Composable
-fun BoxScope.HeroTrailer(meta: Meta, enabled: Boolean, startDelayMs: Long = 2_500, showMute: Boolean = true, youtubeId: String? = null, loop: Boolean = true, underStatusBar: Boolean = false, onPlaying: (Boolean) -> Unit = {}) {
+fun BoxScope.HeroTrailer(meta: Meta, enabled: Boolean, startDelayMs: Long = 2_500, showMute: Boolean = true, youtubeId: String? = null, loop: Boolean = true, underStatusBar: Boolean = false, crop: Boolean = true, onError: (String) -> Unit = {}, onPlaying: (Boolean) -> Unit = {}) {
     if (!enabled) return
     val context = LocalContext.current
     val repository = (context.applicationContext as HarborApp).repository
     val tmdbKey by repository.tmdbKey.collectAsState()
-    var url by remember(meta.id) { mutableStateOf<String?>(null) }
-    var playing by remember(meta.id) { mutableStateOf(false) }
+    var url by remember(meta.id, youtubeId) { mutableStateOf<app.harbor.android.data.TrailerStream?>(null) }
+    var attempt by remember(meta.id, youtubeId) { mutableStateOf(0) }
+    var resolvedId by remember(meta.id, youtubeId) { mutableStateOf<String?>(null) }
+    var playing by remember(meta.id, youtubeId) { mutableStateOf(false) }
     var muted by remember(meta.id) { mutableStateOf(!HarborDisplay.settings.trailerAudio) }
-    LaunchedEffect(meta.id, tmdbKey) {
-        delay(startDelayMs)
+    LaunchedEffect(meta.id, tmdbKey, youtubeId, attempt, HarborDisplay.settings.trailerQuality) {
+        delay(if (attempt == 0) startDelayMs else 500)
         onPlaying(true) // Hold the hero while the trailer loads.
-        val yt = youtubeId ?: Trailers.youtubeId(meta, tmdbKey, repository.metaAddons()) ?: run { onPlaying(false); return@LaunchedEffect }
+        val candidates = if (youtubeId != null) listOf(youtubeId) else Trailers.candidates(meta, tmdbKey, repository.metaAddons()).map { it.youtubeId }
+        val yt = candidates.getOrNull(attempt.coerceAtMost(candidates.lastIndex.coerceAtLeast(0))) ?: run { onPlaying(false); onError("No trailer is available."); return@LaunchedEffect }
         val height = when (HarborDisplay.settings.trailerQuality) { "360p" -> 360; "1080p" -> 1080; else -> 720 }
-        url = Trailers.stream(yt, height)
-        if (url == null) onPlaying(false)
+        resolvedId = yt
+        url = Trailers.playable(yt, height)
+        if (url == null) {
+            onPlaying(false)
+            if (attempt < 2) { Trailers.invalidate(yt, height); attempt++ }
+            else onError("Couldn't start this trailer. Try another trailer.")
+        }
     }
     val source = url ?: return
     val player = remember(source) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(source))
+            val http = androidx.media3.datasource.DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true).setUserAgent(app.harbor.android.data.Net.USER_AGENT)
+            val factory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(context, http))
+            fun media(uri: String, mime: String?) = factory.createMediaSource(MediaItem.Builder().setUri(uri).apply { if (mime != null) setMimeType(mime) }.build())
+            val video = media(source.video, source.videoMime)
+            setMediaSource(source.audio?.let { androidx.media3.exoplayer.source.MergingMediaSource(video, media(it, source.audioMime)) } ?: video)
             repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             volume = if (muted) 0f else 1f
             playWhenReady = true
@@ -76,6 +88,13 @@ fun BoxScope.HeroTrailer(meta: Meta, enabled: Boolean, startDelayMs: Long = 2_50
     var videoSize by remember(source) { mutableStateOf(VideoSize.UNKNOWN) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                playing = false; onPlaying(false)
+                if (attempt < 2) {
+                    resolvedId?.let { Trailers.invalidate(it, when (HarborDisplay.settings.trailerQuality) { "360p" -> 360; "1080p" -> 1080; else -> 720 }) }
+                    url = null; attempt++
+                } else { url = null; onError("Couldn't play this trailer. Try another trailer.") }
+            }
             override fun onRenderedFirstFrame() { playing = true; onPlaying(true) }
             // Once through, the backdrop comes back and the hero can move on.
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) { playing = false; onPlaying(false) } }
@@ -86,23 +105,28 @@ fun BoxScope.HeroTrailer(meta: Meta, enabled: Boolean, startDelayMs: Long = 2_50
     }
     LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
     val alpha by animateFloatAsState(if (playing) 1f else 0f, tween(900), label = "trailer")
+    // Read during composition so the video-size callback schedules a new transform.
+    val transformSize = videoSize
     // Cropped to fill, as the backdrop under it: scale the texture past the box on one side.
     AndroidView(
         factory = { TextureView(it).also { view -> player.setVideoTextureView(view) } },
-        update = { view ->
-            val w = view.width.toFloat().takeIf { it > 0 } ?: return@AndroidView
-            val h = view.height.toFloat().takeIf { it > 0 } ?: return@AndroidView
-            if (videoSize.width > 0 && videoSize.height > 0) {
-                val videoRatio = videoSize.width.toFloat() / videoSize.height
+        update = { view -> view.post {
+            val w = view.width.toFloat().takeIf { it > 0 } ?: return@post
+            val h = view.height.toFloat().takeIf { it > 0 } ?: return@post
+            if (transformSize.width > 0 && transformSize.height > 0) {
+                val videoRatio = transformSize.width.toFloat() * transformSize.pixelWidthHeightRatio / transformSize.height
                 val boxRatio = w / h
                 val matrix = android.graphics.Matrix()
                 // A little extra: trailers often carry black bars inside the picture.
                 val zoom = 1.18f
-                if (videoRatio > boxRatio) matrix.setScale(videoRatio / boxRatio * zoom, zoom, w / 2, h / 2)
+                if (!crop) {
+                    if (videoRatio > boxRatio) matrix.setScale(1f, boxRatio / videoRatio, w / 2, h / 2)
+                    else matrix.setScale(videoRatio / boxRatio, 1f, w / 2, h / 2)
+                } else if (videoRatio > boxRatio) matrix.setScale(videoRatio / boxRatio * zoom, zoom, w / 2, h / 2)
                 else matrix.setScale(zoom, boxRatio / videoRatio * zoom, w / 2, h / 2)
                 view.setTransform(matrix)
             }
-        },
+        } },
         modifier = Modifier.matchParentSize().alpha(alpha),
     )
     if (showMute && playing) {

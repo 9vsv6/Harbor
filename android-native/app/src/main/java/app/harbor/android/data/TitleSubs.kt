@@ -22,7 +22,19 @@ object TitleSubs {
         profile = id ?: MAIN_PROFILE
     }
 
-    private fun key(metaId: String) = "$profile|${metaId.substringBefore(':')}"
+    private fun key(metaId: String) = storageKey(profile, metaId)
+
+    /** Preserve addon namespaces: kitsu:1 and kitsu:2 are different shows. */
+    internal fun storageKey(profile: String, metaId: String): String {
+        val parts = metaId.split(':')
+        val title = when {
+            Regex("^tt[0-9]+$").matches(parts.first()) -> parts.first()
+            parts.first() in setOf("kitsu", "mal", "anilist", "anidb") && parts.size >= 2 -> parts.take(2).joinToString(":")
+            parts.first() == "tmdb" && parts.size >= 3 && parts[1] in setOf("movie", "series", "tv") -> parts.take(3).joinToString(":")
+            else -> metaId
+        }
+        return "$profile|$title"
+    }
 
     fun get(metaId: String): Pick? {
         if (metaId.isEmpty()) return null

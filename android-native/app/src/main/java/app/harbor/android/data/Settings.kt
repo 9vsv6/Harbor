@@ -83,6 +83,21 @@ data class AppSettings(
     // ---- Playback: player ----
     /** "mpv" (Harbor's player) or "media3" (Android's own). */
     val engine: String = "mpv",
+    val rememberAudioTracks: Boolean = true,
+    val preferOfflineDownloads: Boolean = true,
+    val autoDownloadNext: Boolean = false,
+    val playerTitleArtwork: Boolean = true,
+    val hideWatchedRecommendations: Boolean = false,
+    val allowFutureEpisodes: Boolean = true,
+    /** Harbor PC's "On still-airing series": More Like This after the latest aired episode, even with later ones listed. */
+    val moreLikeThisOnAiringSeries: Boolean = false,
+    /** Harbor PC's "Use TMDB for Top Match in search". */
+    val searchTmdbTopMatch: Boolean = true,
+    /** Thumbnails above the seek bar while you scrub (Harbor PC's seek preview). */
+    val seekPreviews: Boolean = true,
+    /** Your own Seekr key: its preview sprites come before frames read from the video. */
+    val seekrApiKey: String = "",
+    val assStripStyles: Boolean = false,
     /** Start where you left off; off starts every video from the beginning. */
     val resumePlayback: Boolean = true,
     /** Show "Resumed at 12:34 · Start over" when resuming. */
@@ -158,6 +173,9 @@ data class AppSettings(
     val subtitlesOffByDefault: Boolean = false,
     /** Harbor's default is off; inside-the-video subtitles are in sync with the file, so Harbor prefers them. */
     val preferEmbeddedSubs: Boolean = false,
+    val subtitleAutoSync: Boolean = false,
+    val subtitleAutoSyncAsr: Boolean = true,
+    val autoSyncApplyCorrections: Boolean = false,
     val hideSdh: Boolean = false,
     /** A second subtitle shown at the same time (mpv); empty is off. */
     val secondarySubLanguage: String = "",

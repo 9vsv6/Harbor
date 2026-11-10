@@ -44,6 +44,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import app.harbor.android.i18n.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -468,6 +469,7 @@ fun ContinueWatchingRow(items: List<CwItem>, onOpen: (CwItem) -> Unit, onDismiss
 
 @Composable
 private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
+    val artwork = rememberContinueWatchingArtwork(item.meta)
     val progress = item.fraction ?: if (item.durationMs > 0) (item.positionMs.toFloat() / item.durationMs).coerceIn(0f, 1f) else 0f
     val episode = if (item.season != null && item.episode != null) {
         if (item.meta.id.startsWith("kitsu:")) "Ep ${item.episode}" else "S${item.season} · E${item.episode}"
@@ -483,11 +485,11 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
                 .border(1.dp, HarborColors.EdgeSoft, CwShape).clickable(onClick = onOpen),
         ) {
             val context = androidx.compose.ui.platform.LocalContext.current
-            val art = item.meta.background ?: item.meta.poster
-            AsyncImage(remember(art) { heroRequest(context, art) }, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            val art = artwork.image
+            AsyncImage(remember(art) { heroRequest(context, art) }, null, contentScale = ContentScale.Crop, onError = { artwork.onError(it.result.request.data as? String) }, modifier = Modifier.fillMaxSize())
             // Low tier: the pill and logo carry their own contrast, so the full-card gradient is skipped.
             if (Perf.gradientScrims) Box(Modifier.fillMaxSize().background(CwScrim))
-            item.meta.logoUrl?.let { logo ->
+            artwork.meta.logoUrl?.let { logo ->
                 var failed by remember(logo) { mutableStateOf(false) }
                 if (!failed) {
                     AsyncImage(
@@ -568,7 +570,8 @@ private fun CardBadges(meta: Meta, modifier: Modifier) {
     }
     var dub by remember(meta.id) { mutableStateOf(false) }
     if (display.showDubBadge && meta.id.substringBefore(':') in AnimeIdPrefixes) {
-        LaunchedEffect(meta.id) { dub = runCatching { app.harbor.android.data.AnimeInfo.hasDub(meta.id, lookup = false) }.getOrDefault(false) }
+        val dubVersion by app.harbor.android.data.DubSchedule.version.collectAsState()
+        LaunchedEffect(meta.id, dubVersion) { dub = runCatching { app.harbor.android.data.AnimeInfo.hasDub(meta.id, lookup = false) }.getOrDefault(false) }
     }
     // Parsed once per title, not on every recomposition of every tile.
     val rerun = remember(meta.releaseDate) {

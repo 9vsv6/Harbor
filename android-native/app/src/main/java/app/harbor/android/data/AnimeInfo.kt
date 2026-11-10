@@ -87,9 +87,9 @@ object AnimeInfo {
         val source = when (metaId.substringBefore(':')) { "kitsu" -> "kitsu"; "mal" -> "myanimelist"; "anilist" -> "anilist"; else -> return null }
         val id = metaId.substringAfter(':').substringBefore(':').toIntOrNull() ?: return null
         val key = "$source:$id"
-        if (key in idCache) return idCache[key]
+        idCache[key]?.let { return it }
         val ids = runCatching { Net.json.parseToJsonElement(Net.get("$IDS?source=$source&id=$id")).jsonObject }.getOrNull()?.toIds()
-        idCache[key] = ids
+        if (ids != null) idCache[key] = ids
         return ids
     }
 
@@ -202,31 +202,10 @@ object AnimeInfo {
 
     // ---- Dubs: AniSchedule's list of anime with an English dub airing ----
 
-    private val dubLock = Mutex()
-    private var dubMal: Set<Int>? = null
-    private var dubAnilist: Set<Int>? = null
+    suspend fun loadDubs() { DubSchedule.load() }
 
-    suspend fun loadDubs() = dubLock.withLock {
-        if (dubMal != null) return@withLock
-        val list = runCatching { Net.json.parseToJsonElement(Net.get(DUBS)) as? JsonArray }.getOrNull() ?: return@withLock
-        val media = list.mapNotNull { (it as? JsonObject)?.get("media")?.let { m -> (m as? JsonObject)?.get("media") as? JsonObject } }
-        dubMal = media.mapNotNull { it["idMal"]?.jsonPrimitive?.intOrNull }.toSet()
-        dubAnilist = media.mapNotNull { it["id"]?.jsonPrimitive?.intOrNull }.toSet()
-    }
+    suspend fun hasDub(metaId: String, lookup: Boolean = true): Boolean = DubSchedule.hasDub(metaId)
 
-    /** Whether the title has an English dub; ids resolved through relations.yuna.moe for Kitsu ids. */
-    suspend fun hasDub(metaId: String, lookup: Boolean = true): Boolean {
-        loadDubs()
-        val mal = dubMal ?: return false
-        val prefix = metaId.substringBefore(':')
-        val num = metaId.substringAfter(':').substringBefore(':').toIntOrNull() ?: return false
-        return when (prefix) {
-            "mal" -> num in mal
-            "anilist" -> num in dubAnilist.orEmpty()
-            "kitsu" -> (Jikan.malFor(num)?.let { Ids(null, it, num, null) } ?: if (lookup) ids(metaId) else null)?.let { (it.mal != null && it.mal in mal) || (it.anilist != null && it.anilist in dubAnilist.orEmpty()) } ?: false
-            else -> false
-        }
-    }
 }
 
 private fun JsonArray?.list(): List<JsonObject> = this?.mapNotNull { it as? JsonObject }.orEmpty()

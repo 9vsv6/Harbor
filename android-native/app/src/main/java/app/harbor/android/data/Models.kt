@@ -99,6 +99,7 @@ data class Meta(
     val released: String? = null,
     /** Harbor's "In cinema" badge: a movie TMDB lists as now playing. */
     val inTheaters: Boolean = false,
+    val originalLanguage: String? = null,
     /** Full release date ("2026-10-02"), for Harbor's re-run check. */
     val releaseDate: String? = null,
 ) {

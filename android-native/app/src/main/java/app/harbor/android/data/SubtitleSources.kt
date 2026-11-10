@@ -17,7 +17,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.util.Locale
-import java.util.zip.ZipInputStream
+import app.harbor.android.data.Net.await
+import java.io.IOException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 
 /**
  * Harbor's own subtitle sources (src/lib/subtitles: SubDL, Subsource, Wyzie, OpenSubtitles),
@@ -111,10 +114,15 @@ object SubtitleSources {
             rows.mapNotNull { it["attributes"] as? JsonObject }.filter { code(it.string("language")) == lang }.take(PER_LANGUAGE).mapNotNull { attrs ->
                 val fileId = ((attrs["files"] as? JsonArray)?.firstOrNull() as? JsonObject)?.get("file_id")?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                 val target = File(dir, "opensubtitles-$fileId.srt")
-                if (!target.exists()) {
+                if (!target.isFile || target.length() == 0L) {
                     val body = buildJsonObject { put("file_id", fileId) }.toString().toRequestBody("application/json".toMediaType())
                     val link = Net.json.parseToJsonElement(Net.call(headers(Request.Builder().url("$base/download").post(body)).build())).jsonObject.string("link") ?: return@mapNotNull null
-                    withContext(Dispatchers.IO) { target.writeBytes(Net.client.newCall(Request.Builder().url(link).build()).execute().use { it.body?.bytes() ?: ByteArray(0) }) }
+                    withContext(Dispatchers.IO) {
+                        val bytes = fetchSubtitle(Request.Builder().url(link).build()) ?: return@withContext
+                        coroutineContext.ensureActive()
+                        saveSubtitle(target, bytes)
+                    }
+                    if (!target.isFile || target.length() == 0L) return@mapNotNull null
                 }
                 Subtitle("OpenSubtitles · " + (attrs.string("release") ?: lang), release = attrs.string("release"), from = "OpenSubtitles", url = target.toURI().toString(), lang = lang)
             }
@@ -135,22 +143,30 @@ object SubtitleSources {
 
     /** Downloads a zip and keeps its subtitle (the one for this episode, if it holds several). */
     private suspend fun unzip(dir: File, name: String, request: Request, q: Query): String? = withContext(Dispatchers.IO) {
-        dir.listFiles()?.firstOrNull { it.name.startsWith("$name.") }?.let { return@withContext it.toURI().toString() }
-        val bytes = Net.client.newCall(request).execute().use { if (it.isSuccessful) it.body?.bytes() else null } ?: return@withContext null
-        val entries = mutableListOf<Pair<String, ByteArray>>()
-        ZipInputStream(bytes.inputStream()).use { zip ->
-            generateSequence { zip.nextEntry }.forEach { e ->
-                val ext = e.name.substringAfterLast('.', "").lowercase()
-                if (!e.isDirectory && ext in setOf("srt", "ass", "ssa", "vtt")) entries += e.name to zip.readBytes()
-            }
-        }
-        // Not a zip: the subtitle itself.
-        if (entries.isEmpty() && bytes.isNotEmpty() && bytes[0] != 'P'.code.toByte()) entries += "$name.srt" to bytes
-        val tag = episodeTag(q)
-        val (entry, data) = entries.firstOrNull { q.episode != null && it.first.contains(tag, true) } ?: entries.firstOrNull() ?: return@withContext null
-        val file = File(dir, "$name." + entry.substringAfterLast('.', "srt").lowercase())
-        file.writeBytes(data)
+        val cacheName = SubtitleArchive.cacheName(name, q.season, q.episode)
+        dir.listFiles()?.firstOrNull { it.name.startsWith("$cacheName.") && it.isFile && it.length() > 0 }
+            ?.let { return@withContext it.toURI().toString() }
+        val bytes = fetchSubtitle(request) ?: return@withContext null
+        coroutineContext.ensureActive()
+        val selected = SubtitleArchive.pick(bytes, q.season, q.episode) ?: return@withContext null
+        val file = File(dir, "$cacheName." + selected.name.substringAfterLast('.', "srt").lowercase())
+        coroutineContext.ensureActive()
+        saveSubtitle(file, selected.bytes)
         file.toURI().toString()
+    }
+    private suspend fun fetchSubtitle(request: Request): ByteArray? = Net.client.newCall(request).await { response ->
+        if (!response.isSuccessful) return@await null
+        val body = response.body ?: return@await null
+        if (body.contentLength() > SubtitleArchive.MAX_BYTES) throw IOException("Subtitle file is too large")
+        body.byteStream().use { SubtitleArchive.readLimited(it) }.takeIf { it.isNotEmpty() }
+    }
+
+    private fun saveSubtitle(target: File, bytes: ByteArray) {
+        val temp = File.createTempFile("subtitle-", ".part", target.parentFile)
+        try {
+            temp.writeBytes(bytes)
+            if (!temp.renameTo(target)) throw IOException("Couldn't save subtitle")
+        } finally { temp.delete() }
     }
 }
 

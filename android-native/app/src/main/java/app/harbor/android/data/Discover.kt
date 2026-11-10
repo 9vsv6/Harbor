@@ -10,10 +10,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -451,31 +451,17 @@ object Discover {
 
     /** Anime, Dub (fetchAnimeDubCalendar): this month's English dub episodes from AniSchedule's feed. */
     suspend fun animeDubCalendar(month: YearMonth): List<CalendarItem> {
-        val feed = runCatching { Net.json.parseToJsonElement(Net.get("https://raw.githubusercontent.com/RockinChaos/AniSchedule/master/raw/dub-schedule.json")).jsonArray }
-            .getOrNull().orEmpty().mapNotNull { it as? JsonObject }
-        data class Dub(val entry: JsonObject, val media: JsonObject, val date: LocalDate, val time: String?, val at: Long?, val episode: Int)
-        val rows = feed.mapNotNull { e ->
-            val m = (e["media"] as? JsonObject)?.get("media") as? JsonObject ?: return@mapNotNull null
-            if (m["isAdult"]?.jsonPrimitive?.content == "true" || m.string("format") == "MOVIE") return@mapNotNull null
-            val episode = e["episodeNumber"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-            val (date, time, at) = whenOf(e.string("episodeDate")) ?: return@mapNotNull null
-            if (YearMonth.from(date) != month) return@mapNotNull null
-            Dub(e, m, date, time, at, episode)
-        }
+        val feed = DubSchedule.load()
+        val rows = DubSchedule.calendarRows(feed, month, java.time.ZoneId.systemDefault())
         val kitsu = AnimeInfo.kitsuFor(rows.mapNotNull { it.media["id"]?.jsonPrimitive?.intOrNull }.distinct())
         return rows.mapNotNull { d ->
-            val k = d.media["id"]?.jsonPrimitive?.intOrNull?.let { kitsu[it] } ?: return@mapNotNull null
-            val title = (d.media["title"] as? JsonObject)?.let { it.string("english") ?: it.string("romaji") } ?: d.entry.string("english") ?: d.entry.string("romaji") ?: return@mapNotNull null
+            val ani = d.media["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val id = kitsu[ani]?.let { "kitsu:$it" } ?: d.media["idMal"]?.jsonPrimitive?.intOrNull?.let { "mal:$it" } ?: "anilist:$ani"
+            val title = (d.media["title"] as? JsonObject)?.let { it.string("english") ?: it.string("romaji") } ?: return@mapNotNull null
             val cover = d.media["coverImage"] as? JsonObject
-            CalendarItem(
-                d.date,
-                Meta(id = "kitsu:$k", type = "series", name = title, poster = cover?.string("extraLarge") ?: cover?.string("medium"), background = d.media.string("bannerImage")),
-                episodeLabel(1, d.episode, null),
-                "anime",
-                "kitsu:$k:${d.episode}",
-                d.time,
-                d.at,
-            )
+            CalendarItem(d.date, Meta(id = id, type = "series", name = title, poster = cover?.string("extraLarge") ?: cover?.string("medium"), background = d.media.string("bannerImage")),
+                "Episode ${d.episode}", "anime", "$id:${d.episode}", d.time, d.at)
         }.distinctBy { it.videoId }
+
     }
 }

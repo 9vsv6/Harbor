@@ -3,6 +3,7 @@ package app.harbor.android.data
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -103,6 +104,22 @@ data class PlayerPrefs(
  */
 class Repository(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private class PendingProfileWrite(val apply: (androidx.datastore.preferences.core.MutablePreferences) -> Unit)
+    private val pendingProfileWrites = java.util.concurrent.ConcurrentHashMap<String, PendingProfileWrite>()
+    private val profileSwitchLock = kotlinx.coroutines.sync.Mutex()
+
+    /** Coalesce by the captured profile key, even when the active profile changes before disk IO. */
+    private fun queueProfileWrite(name: String, write: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
+        pendingProfileWrites[name] = PendingProfileWrite(write)
+        scope.launch {
+            var applied: PendingProfileWrite? = null
+            context.store.edit { prefs ->
+                pendingProfileWrites[name]?.let { current -> applied = current; current.apply(prefs) }
+            }
+            applied?.let { pendingProfileWrites.remove(name, it) }
+        }
+    }
+
 
     private val _account = MutableStateFlow<Account?>(null)
     val account: StateFlow<Account?> = _account.asStateFlow()
@@ -141,6 +158,17 @@ class Repository(private val context: Context) {
     /** Harbor's title-page actions: favourites, your own lists, ratings and "watched" marks. */
     private val _shelves = MutableStateFlow(Shelves())
     val shelves: StateFlow<Shelves> = _shelves.asStateFlow()
+
+    private val _setupStep = MutableStateFlow(SetupProgress.COMPLETE)
+    val setupStep: StateFlow<Int> = _setupStep.asStateFlow()
+    private val setupLock = kotlinx.coroutines.sync.Mutex()
+
+    /** Persist before leaving a step, so closing the app resumes the setup safely. */
+    suspend fun setSetupStep(step: Int) = setupLock.withLock {
+        val next = step.coerceIn(0, SetupProgress.COMPLETE)
+        context.store.edit { it[KEY_SETUP_STEP] = next }
+        _setupStep.value = next
+    }
 
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
@@ -245,7 +273,8 @@ class Repository(private val context: Context) {
     fun updateTrackers(change: (TrackerSettings) -> TrackerSettings) {
         val next = change(_trackers.value)
         _trackers.value = next
-        scope.launch { context.store.edit { it[keyTrackers] = Net.json.encodeToString(TrackerSettings.serializer(), next) } }
+        val key = keyTrackers
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(TrackerSettings.serializer(), next) }
         if (next.trakt?.accessToken == null) _traktCw.value = emptyList()
     }
 
@@ -290,14 +319,22 @@ class Repository(private val context: Context) {
 
     /** Trakt's paused titles join Continue watching; its token is refreshed when due. */
     suspend fun refreshTrackers() {
-        _trackers.value.mal?.takeIf { it.accessToken != null }?.let { mal ->
+        val profile = keyTrackers
+        val initial = _trackers.value
+        initial.mal?.takeIf { it.accessToken != null }?.let { mal ->
             val fresh = runCatching { Mal.fresh(mal) }.getOrDefault(mal)
+            if (profile != keyTrackers || _trackers.value.mal != mal) return
             if (fresh != mal) updateTrackers { it.copy(mal = fresh) }
         }
-        val trakt = _trackers.value.trakt?.takeIf { it.accessToken != null } ?: return
+        val trakt = initial.trakt?.takeIf { it.accessToken != null } ?: return
+        if (profile != keyTrackers || _trackers.value.trakt != trakt) return
         val fresh = runCatching { Trakt.fresh(trakt) }.getOrDefault(trakt)
+        if (profile != keyTrackers || _trackers.value.trakt != trakt) return
         if (fresh != trakt) updateTrackers { it.copy(trakt = fresh) }
-        _traktCw.value = if (_settings.value.traktInContinueWatching) runCatching { Trakt.playback(fresh) }.getOrDefault(emptyList()) else emptyList()
+        val playback = if (_settings.value.traktInContinueWatching) runCatching { Trakt.playback(fresh) }.getOrDefault(emptyList()) else emptyList()
+        if (profile == keyTrackers && _trackers.value.trakt == fresh) {
+            _traktCw.value = if (_settings.value.traktInContinueWatching) playback else emptyList()
+        }
     }
 
     /** "AniList · Episode 5 synced", for the player's sync indicator (sync-indicator-setting.tsx). */
@@ -332,6 +369,7 @@ class Repository(private val context: Context) {
 
     /** AniList and MyAnimeList progress for anime (Kitsu ids), once an episode is mostly watched. */
     fun markAnimeWatched(kitsuId: String, episode: Int) {
+        val profile = keyTrackers
         val trackers = _trackers.value
         val settings = _settings.value
         // "Rewatched on AniList", as Harbor's sync toast words a counted rewatch.
@@ -348,7 +386,7 @@ class Repository(private val context: Context) {
             val guard = rewatchGuard("mal")
             scope.launch {
                 val fresh = runCatching { Mal.fresh(auth) }.getOrDefault(auth)
-                if (fresh != auth) updateTrackers { it.copy(mal = fresh) }
+                if (fresh != auth && profile == keyTrackers && _trackers.value.mal == auth) updateTrackers { it.copy(mal = fresh) }
                 emit("MyAnimeList", runCatching { Mal.markWatched(fresh, "kitsu:$kitsuId", episode, settings.malCountRewatches, guard) }.getOrNull())
             }
         }
@@ -365,12 +403,13 @@ class Repository(private val context: Context) {
         context.store.edit { block(it) }
     }
 
-    suspend fun switchProfile(id: String) {
-        val profile = _profiles.value.firstOrNull { it.id == id } ?: return
+    suspend fun switchProfile(id: String) = profileSwitchLock.withLock {
+        val profile = _profiles.value.firstOrNull { it.id == id } ?: return@withLock
+        val prefs = context.store.edit { it[KEY_ACTIVE_PROFILE] = id }
+        // Publish the identity only once its local preferences are loaded.
         profileId = id
+        loadProfile(prefs)
         _activeProfile.value = profile
-        context.store.edit { it[KEY_ACTIVE_PROFILE] = id }
-        loadProfile(context.store.data.first())
         _profileChosen.value = true
     }
 
@@ -404,6 +443,7 @@ class Repository(private val context: Context) {
         if (profileId == id) switchProfile(MAIN_PROFILE)
         val next = _profiles.value.filterNot { it.id == id }
         _profiles.value = next
+        pendingProfileWrites.keys.filter { it.endsWith("@$id") }.forEach { pendingProfileWrites.remove(it) }
         context.store.edit { prefs ->
             prefs[KEY_PROFILES] = Net.json.encodeToString(profileList, next)
             prefs.asMap().keys.filter { it.name.endsWith("@$id") }.forEach { prefs.remove(it) }
@@ -562,7 +602,7 @@ class Repository(private val context: Context) {
         // These writes run on several threads and can land out of order: each saves what's current, so
         // the last to land is never an older value. (After a profile switch, what this change produced.)
         val key = keySettings
-        scope.launch { context.store.edit { it[key] = Net.json.encodeToString(AppSettings.serializer(), if (key == keySettings) _settings.value else next) } }
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(AppSettings.serializer(), next) }
     }
 
     private val _rpdbKey = MutableStateFlow<String?>(null)
@@ -621,20 +661,23 @@ class Repository(private val context: Context) {
         if (_lastStreams.value[metaId] != "$addonId|$streamName") return
         val next = _lastStreams.value - metaId
         _lastStreams.value = next
-        scope.launch { context.store.edit { it[keyLastStreams] = Net.json.encodeToString(stringMap, next) } }
+        val key = keyLastStreams
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }
     }
 
     fun rememberStream(metaId: String, addonId: String, streamName: String) {
         if (!_settings.value.rememberLastStream) return
         val next = (_lastStreams.value + (metaId to "$addonId|$streamName")).entries.toList().takeLast(500).associate { it.key to it.value }
         _lastStreams.value = next
-        scope.launch { context.store.edit { it[keyLastStreams] = Net.json.encodeToString(stringMap, next) } }
+        val key = keyLastStreams
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }
     }
 
     /** Forgets this device's watch positions for the profile (Settings → System). */
     fun clearResumeHistory() {
         _resume.value = emptyMap()
-        scope.launch { context.store.edit { it.remove(keyResume) } }
+        val key = keyResume
+        queueProfileWrite(key.name) { it.remove(key) }
     }
 
     /** Cinemeta and Kitsu, from the network or, offline, as they were last time. */
@@ -746,14 +789,15 @@ class Repository(private val context: Context) {
 
     fun setAutoPlay(enabled: Boolean) {
         _autoPlay.value = enabled
-        scope.launch { context.store.edit { it[keyAutoPlay] = enabled } }
+        val key = keyAutoPlay
+        queueProfileWrite(key.name) { it[key] = enabled }
     }
 
     fun updatePlayerPrefs(change: (PlayerPrefs) -> PlayerPrefs) {
         val next = change(_playerPrefs.value)
         _playerPrefs.value = next
         val key = keyPlayer
-        scope.launch { context.store.edit { it[key] = Net.json.encodeToString(PlayerPrefs.serializer(), if (key == keyPlayer) _playerPrefs.value else next) } }
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(PlayerPrefs.serializer(), next) }
     }
 
     // ---- My List (Harbor's watchlist), kept on this device ----
@@ -765,7 +809,8 @@ class Repository(private val context: Context) {
     private fun editShelves(change: (Shelves) -> Shelves) {
         val next = change(_shelves.value)
         _shelves.value = next
-        scope.launch { context.store.edit { it[keyShelves] = Net.json.encodeToString(Shelves.serializer(), next) } }
+        val key = keyShelves
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(Shelves.serializer(), next) }
     }
 
     private fun slim(meta: Meta) = meta.copy(videos = null, description = null, cast = null, director = null, writer = null, trailers = null)
@@ -823,7 +868,8 @@ class Repository(private val context: Context) {
         val next = if (current.any { it.id == meta.id }) current.filterNot { it.id == meta.id }
         else listOf(meta.copy(videos = null, description = null)) + current
         _myList.value = next
-        scope.launch { context.store.edit { it[keyMyList] = Net.json.encodeToString(metaListSerializer, next) } }
+        val key = keyMyList
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(metaListSerializer, next) }
     }
 
     // ---- Resume points and Continue watching ----
@@ -858,14 +904,23 @@ class Repository(private val context: Context) {
         _resume.value = next
         accounts.playbackSaved(videoId, positionMs, durationMs, meta, video)
         // Watching it again brings a dismissed card back.
-        meta?.let { m -> _dismissed.value = _dismissed.value.filterNot { it.startsWith(m.id + "@") }.toSet() }
-        scope.launch { context.store.edit { it[keyResume] = Net.json.encodeToString(resumeSerializer, next) } }
+        meta?.let { m ->
+            val dismissed = _dismissed.value.filterNot { it.startsWith(m.id + "@") }.toSet()
+            if (dismissed != _dismissed.value) {
+                _dismissed.value = dismissed
+                val dismissedKey = keyDismissed
+                queueProfileWrite(dismissedKey.name) { it[dismissedKey] = Net.json.encodeToString(stringSet, dismissed) }
+            }
+        }
+        val key = keyResume
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(resumeSerializer, next) }
     }
 
     fun dismissContinueWatching(item: CwItem) {
         val next = _dismissed.value + "${item.meta.id}@${item.videoId}"
         _dismissed.value = next
-        scope.launch { context.store.edit { it[keyDismissed] = Net.json.encodeToString(stringSet, next) } }
+        val key = keyDismissed
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringSet, next) }
     }
 
     // Last, so every property above exists before the background load reads it.
@@ -936,6 +991,7 @@ class Repository(private val context: Context) {
                 runCatching { java.io.File(dir, name).writeBytes(bytes) }
             }
         }
+        pendingProfileWrites.clear()
         context.store.edit { prefs ->
             prefs.clear()
             for ((name, element) in entries) {
@@ -954,6 +1010,9 @@ class Repository(private val context: Context) {
     private suspend fun loadAll() {
         run {
             val prefs = context.store.data.first()
+            val setup = SetupProgress.restore(prefs[KEY_SETUP_STEP], prefs.asMap().isNotEmpty())
+            context.store.edit { it[KEY_SETUP_STEP] = setup }
+            _setupStep.value = setup
             val authKey = prefs[KEY_AUTH]
             if (authKey != null) _account.value = Account(authKey, prefs[KEY_EMAIL] ?: "")
             val saved = prefs[KEY_DEBRID_KEYS]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() }.orEmpty()
@@ -977,13 +1036,15 @@ class Repository(private val context: Context) {
             // with one profile it goes straight in (Switch profile still opens the picker to add one).
             _profileChosen.value = profiles.size < 2 || !_settings.value.askProfileOnLaunch
             scope.launch { loadBuiltins() }
-            refresh()
+            // Local preferences are ready even when a metadata/account server is offline.
             _ready.value = true
+            scope.launch { runCatching { refresh() } }
             watchConnection()
         }
     }
 
     private companion object {
+        val KEY_SETUP_STEP = intPreferencesKey("setupStep")
         val KEY_AUTH: Preferences.Key<String> = stringPreferencesKey("authKey")
         val KEY_EMAIL: Preferences.Key<String> = stringPreferencesKey("email")
         val KEY_DEBRID_SERVICE: Preferences.Key<String> = stringPreferencesKey("debridService")

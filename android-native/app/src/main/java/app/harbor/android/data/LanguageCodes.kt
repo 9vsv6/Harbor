@@ -8,7 +8,7 @@ import java.util.Locale
  */
 object LanguageCodes {
     private val byName: Map<String, String> by lazy {
-        Locale.getISOLanguages().associateBy { Locale(it).getDisplayLanguage(Locale.ENGLISH).lowercase() } +
+        Locale.getISOLanguages().associateBy { Locale(it).getDisplayLanguage(Locale.ENGLISH).lowercase(Locale.ROOT) } +
             mapOf("brazilian" to "pt", "portuguese (brazil)" to "pt", "chinese (simplified)" to "zh", "chinese (traditional)" to "zh", "farsi" to "fa", "persian" to "fa")
     }
 
@@ -16,9 +16,9 @@ object LanguageCodes {
     fun code(value: String): String {
         val v = value.trim()
         if (v.isEmpty()) return v
-        val lower = v.lowercase()
+        val lower = v.lowercase(Locale.ROOT)
         if (lower.length <= 3 && lower.all { it in 'a'..'z' }) return lower
-        if (Regex("^[a-z]{2,3}[-_][a-z0-9]{2,4}$").matches(lower)) return v
+        if (Regex("^[a-z]{2,3}[-_][a-z0-9]{2,4}$").matches(lower)) return lower.replace('_', '-')
         return byName[lower] ?: byName[lower.substringBefore(" (").trim()] ?: v
     }
 

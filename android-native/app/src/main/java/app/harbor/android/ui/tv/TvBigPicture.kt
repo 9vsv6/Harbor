@@ -621,14 +621,15 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
         else -> null
     }
     // The card's art: the title's backdrop once the details know it.
-    var art by remember(item.meta.id) { mutableStateOf(item.meta.background ?: TvEnrich.cached(item.meta.id)?.background ?: item.meta.poster) }
+    val artwork = app.harbor.android.ui.rememberContinueWatchingArtwork(item.meta)
+    val art = artwork.image
     TvTileBox(u(221f), 16f / 9f, u(4f), requester, onFocused, onClick = { TvReturnFocus.mark(item.meta.id); onClick() }) {
         val request = remember(art) { art?.let { ImageRequest.Builder(context).data(it).size(640, 360).precision(Precision.INEXACT).build() } }
-        if (request != null) AsyncImage(request, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        if (request != null) AsyncImage(request, null, contentScale = ContentScale.Crop, onError = { artwork.onError(it.result.request.data as? String) }, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.4f to Color.Transparent, 1f to Void.copy(alpha = 0.92f))))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(u(9f)), verticalArrangement = Arrangement.spacedBy(u(4f))) {
-            var badLogo by remember(item.meta.id) { mutableStateOf(false) }
-            val logo = item.meta.logoUrl
+            val logo = artwork.meta.logoUrl
+            var badLogo by remember(logo) { mutableStateOf(false) }
             if (logo != null && !badLogo) {
                 val tone = app.harbor.android.ui.rememberToneLogo(logo)
                 AsyncImage(
@@ -653,9 +654,6 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
                 Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(HarborColors.Accent))
             }
         }
-    }
-    LaunchedEffect(item.meta.id) {
-        if (item.meta.background == null) TvEnrich.cached(item.meta.id)?.background?.let { art = it }
     }
     if (restore) LaunchedEffect(item.meta.id) { if (TvReturnFocus.consume(item.meta.id)) runCatching { requester.requestFocus() } }
 }

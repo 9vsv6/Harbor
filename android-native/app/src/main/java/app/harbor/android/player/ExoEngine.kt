@@ -38,6 +38,7 @@ import java.util.Locale
 @OptIn(UnstableApi::class)
 class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override val name = "Media3"
+    private val tv = app.harbor.android.perf.Perf.isTv
     private val cueStore = CueStore()
     private val audioDelay = AudioDelay()
     private val bitmaps = java.util.WeakHashMap<android.graphics.Bitmap, androidx.compose.ui.graphics.ImageBitmap>()
@@ -69,10 +70,12 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
             .build()
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                checkFirstFrame()
                 listener?.onPlayingChanged(isPlaying)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                checkFirstFrame()
                 listener?.onBufferingChanged(playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE)
                 if (playbackState == Player.STATE_ENDED) listener?.onEnded()
             }
@@ -95,6 +98,12 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                 listener?.onVideoSizeChanged()
             }
 
+            override fun onRenderedFirstFrame() {
+                renderedFirstFrame = true
+                waitingForFrame = false
+                main.removeCallbacks(firstFrameTimeout)
+            }
+
             override fun onTracksChanged(tracks: Tracks) {
                 listener?.onTracksChanged()
                 // With no decoder for the video track Media3 plays audio over black; say why instead.
@@ -106,6 +115,15 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                     cantPlay = true
                     listener?.onError("This device can't decode ${describeVideo(video.first().getTrackFormat(0))} video.")
                 }
+                // An unsupported audio track need not be fatal to Media3: it can silently play
+                // just the picture. Try mpv when none of the file's audio tracks can be decoded.
+                val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                if (tv && !toldUnsupported && audio.isNotEmpty() && audio.none { g -> (0 until g.length).any { g.isTrackSupported(it, true) } }) {
+                    toldUnsupported = true
+                    cantPlay = true
+                    listener?.onError("This device can't decode this file's audio.")
+                }
+                checkFirstFrame()
             }
         })
     }
@@ -118,10 +136,38 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
         private set
 
     private val main = Handler(Looper.getMainLooper())
+    private var renderedFirstFrame = false
+    private var waitingForFrame = false
+    private val firstFrameTimeout = Runnable {
+        waitingForFrame = false
+        if (needsFirstFrame()) {
+            cantPlay = true
+            listener?.onError("The video decoder didn't produce a picture.")
+        }
+    }
+
+    // Some TV decoders accept a format and advance the audio clock but never render video.
+    // Only time READY playback with a selected video: a slow server or a pause isn't a decoder failure.
+    private fun needsFirstFrame() = tv && !renderedFirstFrame && !cantPlay && player.isPlaying && playerView.isShown &&
+        player.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
+
+    private fun checkFirstFrame() {
+        if (!needsFirstFrame()) {
+            main.removeCallbacks(firstFrameTimeout)
+            waitingForFrame = false
+        } else if (!waitingForFrame) {
+            waitingForFrame = true
+            main.postDelayed(firstFrameTimeout, 12_000)
+        }
+    }
+
     /** Bumped by each load and by release, so a slow stream-type check can't start an old video. */
     private var loadAttempt = 0
 
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
+        main.removeCallbacks(firstFrameTimeout)
+        waitingForFrame = false
+        renderedFirstFrame = false
         toldUnsupported = false
         cantPlay = false
         // Data sources read the factory's properties when they open, so this covers the new item.
@@ -146,9 +192,17 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     }
 
     private fun start(item: MediaItem, startMs: Long) {
-        player.setMediaItem(item, startMs)
-        player.prepare()
-        player.play()
+        renderedFirstFrame = false
+        try {
+            player.setMediaItem(item, startMs)
+            player.prepare()
+            player.play()
+        } catch (error: IllegalStateException) {
+            // A stream type without an installed Media3 source module throws here, before
+            // onPlayerError can run. Let the normal engine fallback handle it instead of crashing.
+            cantPlay = true
+            listener?.onError("Media3 couldn't open this stream format.")
+        }
     }
 
     override fun play() = player.play()
@@ -243,6 +297,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
 
     override fun release() {
         loadAttempt++
+        main.removeCallbacks(firstFrameTimeout)
         // The view lets go first, so nothing in it touches the released player during teardown.
         playerView.player = null
         player.release()

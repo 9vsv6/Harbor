@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -161,15 +162,8 @@ internal fun HarborControls(
             ) { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Back", tint = Color.White, modifier = Modifier.size(34.dp)) }
             Column(Modifier.weight(1f).padding(start = 6.dp, top = 6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        state.title,
-                        color = Color.White,
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                    PlayerTitle(state, Modifier.weight(1f, fill = false))
+
                     state.quality?.takeIf { state.settings.qualityInPlayer }?.let { quality ->
                         Box(Modifier.padding(start = 10.dp, end = 6.dp).size(width = 2.dp, height = 13.dp).background(HarborColors.Accent))
                         Text(quality, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -386,6 +380,12 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.align(Alignment.TopCenter).padding(bottom = 30.dp),
             )
+            // Harbor PC's seek preview: the frame at the dragged spot, above the bar, following the finger.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
+                val cardWidth = 168.dp
+                val x = (maxWidth * dragValue - cardWidth / 2).coerceIn(0.dp, (maxWidth - cardWidth).coerceAtLeast(0.dp))
+                SeekPreviewCard(state.seekPreview, (dragValue * duration).toLong(), Modifier.align(Alignment.BottomStart).offset(x = x, y = (-80).dp), cardWidth)
+            }
         }
     }
 }
@@ -1141,7 +1141,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             if (offset != 0L || state.subTimeScale != 1.0) Box(Modifier.size(6.dp).clip(CircleShape).background(HarborColors.Accent))
         }
         androidx.compose.material3.DropdownMenu(open, onDismissRequest = { open = false }, containerColor = PopRaised, modifier = Modifier.width(240.dp)) {
-            // Auto sync by audio is hidden for now (its code stays: startAutoSync).
+            SyncItem("Auto sync", "Audio") { open = false; actions.startAutoSync() }
             SyncItem("Live sync", "Guided") { open = false; actions.startLiveSync() }
             SyncItem("Manual offset", if (offset != 0L) "%+.1f".format(Locale.US, offset / 1000f) else null) {
                 open = false

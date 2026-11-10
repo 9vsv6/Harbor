@@ -19,6 +19,9 @@ data class SavedDownload(
     val poster: String? = null,
     val file: String,
     val addedAt: Long = System.currentTimeMillis(),
+    val addonId: String? = null,
+    val sourceName: String? = null,
+    val playbackFailed: Boolean = false,
 )
 
 data class DownloadState(val item: SavedDownload, val status: Int, val done: Long, val total: Long) {
@@ -54,7 +57,10 @@ object Downloads {
         return !path.endsWith(".m3u8") && !path.endsWith(".mpd")
     }
 
-    fun enqueue(context: Context, url: String, metaId: String, type: String, videoId: String, title: String, poster: String?): Long {
+    @Synchronized
+    fun enqueue(context: Context, url: String, metaId: String, type: String, videoId: String, title: String, poster: String?, headers: Map<String, String> = emptyMap(), addonId: String? = null, sourceName: String? = null): Long {
+        require(Uri.parse(url).scheme in setOf("http", "https")) { "Only HTTP files can be downloaded." }
+        states(context).firstOrNull { it.item.videoId == videoId && !it.failed }?.let { return it.item.downloadId }
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         val ext = url.substringBefore('?').substringAfterLast('.', "mkv").takeIf { it.length in 2..4 } ?: "mkv"
         val name = title.replace(Regex("""[\\/:*?"<>|]"""), " ").replace(Regex("\\s+"), " ").trim().take(90) + "." + ext
@@ -71,8 +77,9 @@ object Downloads {
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationUri(Uri.fromFile(target))
             .setAllowedOverMetered(true)
+        headers.forEach { (name, value) -> request.addRequestHeader(name, value) }
         val id = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        synchronized(this) { store(context, saved(context) + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath)) }
+        synchronized(this) { store(context, saved(context) + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath, addonId = addonId, sourceName = sourceName)) }
         return id
     }
 
@@ -91,9 +98,9 @@ object Downloads {
         }
         return items.map { item ->
             val (status, done, total) = byId[item.downloadId]
-                ?: if (File(item.file).exists()) Triple(DownloadManager.STATUS_SUCCESSFUL, File(item.file).length(), File(item.file).length())
-                else Triple(DownloadManager.STATUS_FAILED, 0L, 0L)
-            DownloadState(item, status, done, total)
+                ?: Triple(DownloadManager.STATUS_FAILED, 0L, 0L)
+            val missing = status == DownloadManager.STATUS_SUCCESSFUL && completedFile(status, File(item.file)) == null
+            DownloadState(item, if (item.playbackFailed || missing) DownloadManager.STATUS_FAILED else status, done, total)
         }.sortedByDescending { it.item.addedAt }
     }
 
@@ -106,5 +113,31 @@ object Downloads {
 
     /** A finished download of this video, to play instead of streaming. */
     fun local(context: Context, videoId: String): File? =
-        saved(context).firstOrNull { it.videoId == videoId }?.let { File(it.file) }?.takeIf { it.exists() && it.length() > 0 }
+        states(context).firstOrNull { it.item.videoId == videoId && it.finished }?.let { completedFile(it.status, File(it.item.file)) }
+
+    internal fun completedFile(status: Int, file: File): File? = file.takeIf {
+        status == DownloadManager.STATUS_SUCCESSFUL && it.isFile && it.length() > 0
+    }
+
+    fun markUnplayable(context: Context, videoId: String) = synchronized(this) {
+        store(context, saved(context).map { if (it.videoId == videoId) it.copy(playbackFailed = true) else it })
+    }
+
+    fun localReady(context: Context, videoId: String): Ready? {
+        val file = local(context, videoId) ?: return null
+        val item = saved(context).firstOrNull { it.videoId == videoId && it.file == file.absolutePath } ?: return null
+        return Ready(Stream(url = Uri.fromFile(file).toString(), name = item.sourceName ?: "Saved download"), Uri.fromFile(file).toString(), item.addonId)
+    }
+
+    /** Resolve a fresh link for retry; signed transport URLs and headers are never persisted. */
+    suspend fun retry(context: Context, repository: Repository, item: SavedDownload): Long {
+        val ranked = Playback.ranked(repository.addons.value, item.type, item.videoId, repository.debrid.value, repository.settings.value,
+            prefer = item.addonId?.let { it to item.sourceName })
+        val ready = Playback.best(ranked, repository.debrid.value) ?: error("No source is available for ${item.title}.")
+        require(canSave(Stream(url = ready.url))) { "This source cannot be saved as a file." }
+        val replacement = enqueue(context, ready.url, item.metaId, item.type, item.videoId, item.title, item.poster,
+            ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream))
+        if (replacement != item.downloadId) remove(context, item)
+        return replacement
+    }
 }

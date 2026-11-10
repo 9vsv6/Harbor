@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -104,6 +105,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -190,7 +192,7 @@ private enum class Section(
     WhatYouSee("Discovery languages", "Home rows by language, your region, and stream languages.", R.drawable.set_eye, "home catalogs languages region favour stream ranking only show streams", setOf("Discovery languages")),
     SubtitleLanguages("Subtitle languages", "Which subtitles turn on, dual subtitles and choosing a track.", R.drawable.set_subtitle_languages, "subtitles languages dual second forced embedded sdh start off choose upgrade indicator", setOf("Subtitle languages")),
     SubtitleSources("Subtitle sources", "SubDL, Subsource, Wyzie, OpenSubtitles and your addons.", R.drawable.set_download, "subdl subsource wyzie opensubtitles api key addons sources", setOf("Subtitle sources")),
-    SubtitleTiming("Subtitle timing", "The sync indicator and nudging subtitle timing.", R.drawable.set_timer, "sync timing delay offset indicator", setOf("Subtitle timing")),
+    SubtitleTiming("Subtitle timing", "Automatic sync, speech model and manual timing.", R.drawable.set_timer, "sync timing delay offset indicator auto sync whisper speech model", setOf("Subtitle timing")),
     SubtitleLook("Subtitle style", "Background, outline, colours, font, position and size.", R.drawable.set_subtitle_style, "subtitle style size colour color bold position ass font outline background opacity pip", setOf("Subtitle style")),
     Services("Streaming services", "Your addons and debrid service.", R.drawable.set_tv, "addons debrid real-debrid torbox services", setOf("Services")),
     SourcePreferences("Source preferences", "The safety filter, P2P and how long to wait for addons.", R.drawable.set_source_preferences, "safety cam filter torrents p2p timeout wait imdb anime streams stream id kitsu mal anime mapping", setOf("Filters")),
@@ -678,7 +680,11 @@ private fun SectionBody(
             Section.Metadata -> ProvidersSection(repository)
             Section.Storage -> StorageSection(repository, set)
             Section.Backup -> BackupSection(repository)
-            Section.About -> AboutSection()
+            Section.About -> {
+                AboutSection()
+                val scope = rememberCoroutineScope()
+                HGhostButton(onClick = { scope.launch { repository.setSetupStep(0) } }) { Text("Run setup again") }
+            }
         }
     }
 }
@@ -920,6 +926,9 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         HarborHeading("Resume", "Where a video starts when you've watched part of it.")
         ToggleRow("Resume where you left off", "Off starts every video from the beginning.", settings.resumePlayback) { v -> set { it.copy(resumePlayback = v) } }
         ToggleRow("Ask to resume or start over", "Shows \"Resumed at\" with a Start over button when a video picks up where you left it.", settings.resumeNotice) { v -> set { it.copy(resumeNotice = v) } }
+        ToggleRow("Prefer completed downloads", "Use a saved file before looking for online sources, including queue and next-episode playback.", settings.preferOfflineDownloads) { on -> set { it.copy(preferOfflineDownloads = on) } }
+        ToggleRow("Automatically download the next episode", "While watching, prepare the next episode using your current source preferences. Uses storage and your connection.", settings.autoDownloadNext) { on -> set { it.copy(autoDownloadNext = on) } }
+        ToggleRow("Try future-dated episodes", "Look for a source even when the listed release date is in the future. The countdown remains visible.", settings.allowFutureEpisodes) { on -> set { it.copy(allowFutureEpisodes = on) } }
         HarborHeading("Sources", "Which source plays, and what happens when it struggles.")
         ToggleRow("Remember last stream", "Marks the source you picked and plays it first next time.", settings.rememberLastStream) { v -> set { it.copy(rememberLastStream = v) } }
         ToggleRow("Keep same source on next episode", "Stay on one source for a season: the next episode prefers the addon this one came from.", settings.keepSourceNextEpisode) { v -> set { it.copy(keepSourceNextEpisode = v) } }
@@ -931,6 +940,7 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
     }
     // ---- Engine ----
     Part("Engine") {
+        ToggleRow("Use title artwork in the player", "Show the movie or show logo when available.", settings.playerTitleArtwork) { on -> set { it.copy(playerTitleArtwork = on) } }
         HarborHeading("Player engine", "What plays the video.")
         CheckList(
             listOf(
@@ -978,6 +988,17 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         ToggleRow("Volume pop-up while watching", "Shows the volume and brightness level while you swipe the edges.", settings.volumePopup) { v -> set { it.copy(volumePopup = v) } }
         ToggleRow("Screen lock button", "Locks the controls so a pocket or a child can't tap them.", settings.screenLock) { v -> set { it.copy(screenLock = v) } }
         ToggleRow("Chapters button", "Adds the Chapters menu to the controls when a video has chapters.", settings.chapterMenu) { v -> set { it.copy(chapterMenu = v) } }
+        HarborHeading("Seek bar", null)
+        ToggleRow(
+            "Show thumbnail preview while seeking",
+            "Shows a frame above the seek bar as you drag it (or hold left and right on a TV). Works on direct streams, debrid links and downloads.",
+            settings.seekPreviews,
+        ) { v -> set { it.copy(seekPreviews = v) } }
+        if (settings.seekPreviews) KeyCard(
+            "Seekr · preview thumbnails",
+            "Optional. Paste your own free Seekr API key to show Seekr's preview thumbnails first, and read frames from the video when Seekr has no match. Leave it blank to use frames from the video only.",
+            "Seekr API key", settings.seekrApiKey.takeIf { it.isNotBlank() }, "Get a key at seekr.tv", "https://seekr.tv/join",
+        ) { key -> set { it.copy(seekrApiKey = key.orEmpty()) } }
         HarborHeading("While you watch", "Optional overlays that appear over the video.")
         ToggleRow("Content advisory on start", "When a movie or episode starts, briefly show its IMDb parental guide (violence, profanity, substances, frightening scenes and more) with severity. Fades on its own.", settings.contentAdvisoryToast) { v -> set { it.copy(contentAdvisoryToast = v) } }
         if (settings.contentAdvisoryToast) {
@@ -1046,6 +1067,12 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         PillChoice(listOf(0 to "Never", 2 to "2", 3 to "3", 5 to "5"), prefs.stillWatchingAfter) { n -> repository.updatePlayerPrefs { it.copy(stillWatchingAfter = n) } }
         HarborHeading("More like this at the end", "Show recommendations when a movie, series finale or anime film finishes. At the end the card fills the screen; before the end the film shrinks to a corner and keeps playing behind it.")
         PillChoice(listOf(-1 to "At the end", 0 to "Off", 30 to "30s", 60 to "1 min", 120 to "2 min", 180 to "3 min", 300 to "5 min"), settings.endScreenLeadSec) { v -> set { it.copy(endScreenLeadSec = v) } }
+        ToggleRow("Hide watched recommendations", "Exclude watched movies and shows from More Like This.", settings.hideWatchedRecommendations) { on -> set { it.copy(hideWatchedRecommendations = on) } }
+        if (settings.endScreenLeadSec != 0) ToggleRow(
+            "On still-airing series",
+            "Show More Like This after the latest aired episode, even when future episodes are listed. It still won't appear before the latest aired episode.",
+            settings.moreLikeThisOnAiringSeries,
+        ) { on -> set { it.copy(moreLikeThisOnAiringSeries = on) } }
         if (settings.endScreenLeadSec != 0) {
             ToggleRow("Countdown", "Act automatically if nothing is chosen before time runs out.", settings.endScreenCountdownSec > 0) { v -> set { it.copy(endScreenCountdownSec = if (v) 15 else 0) } }
             if (settings.endScreenCountdownSec > 0) {
@@ -1224,6 +1251,10 @@ private fun LanguageSection(repository: Repository, settings: AppSettings, set: 
     // ---- Audio languages ----
     Part("Audio languages") {
         HarborHeading("Audio languages", "When a release ships multiple audio tracks, Harbor selects the first match from this list.")
+        ToggleRow("Prefer original audio first", "Follow the title's original language; anime falls back to Japanese when metadata is missing.", settings.audioLanguages.firstOrNull() == "original") { on ->
+            set { it.copy(audioLanguages = if (on) listOf("original") + it.audioLanguages.filterNot { code -> code == "original" } else it.audioLanguages.filterNot { code -> code == "original" }) }
+        }
+        ToggleRow("Remember audio track for each title", "Your manual choice takes priority when you return, within this account and profile.", settings.rememberAudioTracks) { on -> set { it.copy(rememberAudioTracks = on) } }
         LanguageOrder(settings.audioLanguages) { v -> set { it.copy(audioLanguages = v) } }
         HarborHeading("Skip these tracks", "Applies to both audio and subtitle tracks. You can still pick a skipped track by hand in the player.")
         IconHeading(Icons.Outlined.Block, "Never auto-select tracks containing", "Tracks whose name contains one of these words are skipped.")
@@ -1331,12 +1362,7 @@ private fun SubtitlesSection(repository: Repository, settings: AppSettings, set:
     Part("Subtitle timing") {
         HarborHeading("Subtitle timing", "Nudge a subtitle earlier or later from the player's subtitle menu (Sync Offset).")
         ToggleRow("Show subtitle sync indicator", "Puts the current offset on screen while you nudge subtitle timing, so you can see how far you have shifted them.", settings.subSyncIndicator) { v -> set { it.copy(subSyncIndicator = v) } }
-        Text(
-            "Harbor's audio-based auto-sync and its community corrections run on the desktop; they aren't in the Android app.",
-            color = HarborColors.InkSubtle,
-            fontSize = 14.sp,
-            modifier = Modifier.padding(top = 6.dp),
-        )
+        SubtitleAutoSyncSettings(repository)
     }
     // ---- Subtitle style ----
     Part("Subtitle style") {
@@ -1389,15 +1415,18 @@ private fun SubtitlesSection(repository: Repository, settings: AppSettings, set:
         ) { v -> set { it.copy(subFont = v) } }
         FontUploadButton { path -> set { it.copy(customFonts = (it.customFonts + path).distinct(), subFont = "file:$path") } }
         SettingsLabel("Styled (ASS) subtitles")
-        CheckList(
-            listOf(
-                Triple("no", "Keep original", "Styled (ASS) subs keep their own font, colour and size. Truest to the release, but the size can vary a lot between files."),
-                Triple("scale", "Normalize embedded subtitle size", "Keep their style, at your size."),
-                Triple("font", "Change font only", "Keep their colours, sizes and sign placement; only the font becomes yours."),
-                Triple("force", "Use my style", "Draw styled subtitles in your style, like any other."),
-            ),
-            settings.assOverride,
-        ) { v -> set { it.copy(assOverride = v) } }
+        CheckList(listOf(
+            Triple("keep", "Keep the file's look", "Preserve styled subtitles as authored."),
+            Triple("force", "Use my style", "Apply your subtitle appearance (mpv).")),
+            if (settings.assOverride == "force") "force" else "keep",
+        ) { v -> set { it.copy(assOverride = if (v == "force") "force" else "no") } }
+        if (settings.assOverride != "force") ToggleRow("Match my size", "Keep the file's style at your preferred size.", settings.assOverride == "scale") { on -> set { it.copy(assOverride = if (on) "scale" else "no") } }
+        var advancedAss by remember { mutableStateOf(settings.assOverride == "font" || settings.assStripStyles) }
+        HGhostButton(onClick = { advancedAss = !advancedAss }) { Text(if (advancedAss) "Hide advanced subtitle options" else "Advanced subtitle options") }
+        if (advancedAss) {
+            if (settings.assOverride != "force") ToggleRow("Change font only", "Keep the original colours, size and placement (mpv).", settings.assOverride == "font") { on -> set { it.copy(assOverride = if (on) "font" else "no") } }
+            if (settings.assOverride == "force") ToggleRow("Remove hardcoded styling", "Also strips inline formatting. Can change signs and karaoke (mpv).", settings.assStripStyles) { on -> set { it.copy(assStripStyles = on) } }
+        }
         SettingsLabel("Sync indicator")
         ToggleRow("Subtitle sync indicator", "Puts the current offset on screen while you nudge subtitle timing.", settings.subSyncIndicator) { v -> set { it.copy(subSyncIndicator = v) } }
         SettingsLabel("Position")
@@ -1602,6 +1631,12 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         val keys by repository.providerKeys.collectAsState()
         val uri = LocalUriHandler.current
         val scope = rememberCoroutineScope()
+        HarborHeading("Top Match", "The first result in Search.")
+        ToggleRow(
+            "Use TMDB for Top Match in search",
+            "Use your saved TMDB key to pick the Top Match. If there's no key, or this is off, Harbor uses your metadata addons' search results.",
+            settings.searchTmdbTopMatch,
+        ) { v -> set { it.copy(searchTmdbTopMatch = v) } }
         HarborHeading("AI Search", "Describe what you want to watch in your own words; a language model names the titles. Tap ✦ AI in Search.")
         RowText("AI search provider", null)
         PillChoice(listOf("openrouter" to "OpenRouter", "groq" to "Groq"), settings.aiProvider) { v ->
@@ -2078,5 +2113,32 @@ private fun FontUploadButton(onAdded: (String) -> Unit) {
     HGhostButton(onClick = { picker.launch(arrayOf("font/ttf", "font/otf", "application/x-font-ttf", "application/x-font-otf", "application/octet-stream", "*/*")) }) {
         Icon(Icons.Rounded.Add, null, modifier = Modifier.size(18.dp))
         Text("Upload a font")
+    }
+}
+
+/** The existing account/source forms, shared with the first-launch walkthrough. */
+@Composable
+internal fun SetupSettingsPage(repository: Repository, page: String, onBack: () -> Unit) {
+    var current by rememberSaveable(page) { mutableStateOf(if (page == "account") "Provider" else "Services") }
+    var addons by rememberSaveable { mutableStateOf(false) }
+    val backFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(addons) { if (!addons) runCatching { backFocus.requestFocus() } }
+    androidx.activity.compose.BackHandler { if (addons) addons = false else onBack() }
+    if (addons) {
+        AddonsScreen(repository, onBack = { addons = false })
+        return
+    }
+    Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding().navigationBarsPadding()) {
+        HGhostButton(onClick = onBack, modifier = Modifier.padding(16.dp).focusRequester(backFocus)) { Text("Back to setup") }
+        val section = Section.entries.firstOrNull { it.name == current } ?: Section.Provider
+        androidx.compose.runtime.CompositionLocalProvider(LocalOpenSection provides { next: Section -> current = next.name }) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                SectionPage(section, repository) { addons = true }
+                if (page == "account" && section == Section.Provider) {
+                    HGhostButton(onClick = { current = if (repository.accounts.nuvioActive) "Nuvio" else "Stremio" }) { Text("Sign in") }
+                    HGhostButton(onClick = { current = "HarborAccount" }) { Text("Harbor account") }
+                }
+            }
+        }
     }
 }

@@ -50,6 +50,8 @@ enum class Fit(val label: String, val mode: Int, val aspect: String? = null) {
     Scope("2.39:1", AspectRatioFrameLayout.RESIZE_MODE_FIT, "2.39:1"),
 }
 
+data class AutoSyncOffer(val result: AudioSync.Result, val previousDelay: Long, val previousScale: Double, val applied: Boolean = false)
+
 /** Everything the player overlay draws; the activity updates it from ExoPlayer. */
 class PlayerState {
     var title by mutableStateOf("")
@@ -116,6 +118,10 @@ class PlayerState {
     var videoId by mutableStateOf("")
     var sources by mutableStateOf<List<RankedStream>?>(null)
     var currentUrl by mutableStateOf("")
+    /** Where a held or repeated remote seek is heading: the TV shows its preview frame there. */
+    var seekPreviewMs by mutableStateOf<Long?>(null)
+    /** This video's seek-bar previews, when they're on. */
+    var seekPreview: SeekPreview? = null
     /** TV: the full-screen Connecting page (or its "didn't play" state) is up, instead of the player. */
     val tvCovered: Boolean get() = tv && (error != null || (durationMs == 0L && !hasPlayed && !ended))
     /** This video has started. A live stream never reports a length, so that alone can't mean "still connecting". */
@@ -157,4 +163,6 @@ class PlayerState {
     var hintIcon by mutableIntStateOf(0)
     /** Auto sync by audio while it runs: what it's doing ("Listening… 2 of 3"). */
     var autoSync by mutableStateOf<String?>(null)
+    var autoSyncOffer by mutableStateOf<AutoSyncOffer?>(null)
+    var autoSyncError by mutableStateOf<String?>(null)
 }

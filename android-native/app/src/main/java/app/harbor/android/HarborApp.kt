@@ -30,6 +30,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         // Before anything reads the device profile (Coil's loader is built on the first image).
         app.harbor.android.perf.Perf.init(this)
         repository = Repository(this)
+        app.harbor.android.data.WhisperModel.init(this)
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
         app.harbor.android.data.Awards.init(this)

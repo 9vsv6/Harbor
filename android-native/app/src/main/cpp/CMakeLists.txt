@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.22)
+project(harbor_whisper LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# Unoptimized matrix kernels make a debug model test take minutes per audio window.
+add_compile_options("$<$<CONFIG:Debug>:-O3>")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_IS_DEV OFF CACHE BOOL "" FORCE)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(GGML_CPU_ARM_ARCH "armv8-a" CACHE STRING "" FORCE)
+elseif(ANDROID_ABI STREQUAL "x86_64")
+    # Android's x86_64 ABI guarantees SSE4.2, rather than the build host's AVX features.
+    set(GGML_AVX OFF CACHE BOOL "" FORCE)
+    set(GGML_AVX2 OFF CACHE BOOL "" FORCE)
+    set(GGML_F16C OFF CACHE BOOL "" FORCE)
+    set(GGML_FMA OFF CACHE BOOL "" FORCE)
+endif()
+include(FetchContent)
+# Pinned and verified; no model weights are included in the APK.
+FetchContent_Declare(whisper
+    URL https://codeload.github.com/ggml-org/whisper.cpp/zip/refs/tags/v1.9.5
+    URL_HASH SHA256=7a7a73071939f16bc028ad2f713f16f26e37afb6cc155d0f19e3d65705d2b1d9)
+FetchContent_MakeAvailable(whisper)
+add_library(harbor_whisper SHARED whisper_jni.cpp)
+target_link_libraries(harbor_whisper PRIVATE whisper android log)
+target_link_options(harbor_whisper PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--exclude-libs,ALL")

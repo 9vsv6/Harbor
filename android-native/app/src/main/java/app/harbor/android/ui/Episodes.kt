@@ -35,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.RateReview
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -255,6 +256,8 @@ private fun EpisodePreviewFor(query: EpisodeQuery, repository: Repository, meta:
     val scope = rememberCoroutineScope()
     val shelves by repository.shelves.collectAsState()
     val watched = v.id in shelves.watched
+    var reviews by remember(v.id) { mutableStateOf(false) }
+    if (reviews) EpisodeReviewsDialog(repository, meta, v) { reviews = false }
     EpisodePreview(
         meta, v, watched, rating,
         onDismiss = { query.preview = null },
@@ -267,6 +270,7 @@ private fun EpisodePreviewFor(query: EpisodeQuery, repository: Repository, meta:
         onWatched = { repository.setWatched(listOf(v.id), !watched); query.preview = null },
         queued = app.harbor.android.data.PlayQueue.contains(meta, v.season, v.episode),
         onQueue = { app.harbor.android.data.PlayQueue.toggle(meta, v); query.preview = null },
+        onReviews = { reviews = true },
     )
 }
 
@@ -278,7 +282,8 @@ private suspend fun downloadSeason(context: android.content.Context, repository:
     for (v in episodes) {
         val ranked = runCatching { Playback.ranked(repository.addons.value, meta.type, v.id, debrid, settings, prefer = repository.preferredSource(meta.id)) }.getOrDefault(emptyList())
         val ready = Playback.best(ranked, debrid) ?: continue
-        runCatching { Downloads.enqueue(context, ready.url, meta.id, meta.type, v.id, "${meta.name} S${v.season}E${v.episode}", meta.poster) }.onSuccess { queued++ }
+        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Downloads.enqueue(context, ready.url, meta.id, meta.type, v.id, "${meta.name} S${v.season}E${v.episode}", meta.poster,
+            ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) } }.onSuccess { queued++ }
     }
     Toast.makeText(context, if (queued == 0) "No downloadable sources found" else "$queued of ${episodes.size} episodes downloading", Toast.LENGTH_LONG).show()
 }
@@ -487,15 +492,17 @@ private fun EpisodePreview(
     onWatched: () -> Unit,
     queued: Boolean = false,
     onQueue: (() -> Unit)? = null,
+    onReviews: (() -> Unit)? = null,
 ) {
     val display = HarborDisplay.settings
     val upcoming = app.harbor.android.data.ReleaseCountdowns.upcoming(v.released)
+    val playable = !upcoming || display.allowFutureEpisodes
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
             Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(HarborColors.Elevated)
                 .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(16.dp)),
         ) {
-            Box(Modifier.fillMaxWidth().clickable(onClick = onPlay)) {
+            Box(Modifier.fillMaxWidth().clickable(enabled = playable, onClick = onPlay)) {
                 Still(v, spoiler = false, watched = watched, rating = rating, modifier = Modifier.fillMaxWidth())
             }
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -519,7 +526,7 @@ private fun EpisodePreview(
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (upcoming) Color(0x0FFFFFFF) else HarborColors.Ink).clickable(onClick = onPlay),
+                            .background(if (!playable) Color(0x0FFFFFFF) else HarborColors.Ink).clickable(enabled = playable, onClick = onPlay),
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -532,8 +539,9 @@ private fun EpisodePreview(
                             },
                             null, tint = tint, modifier = Modifier.size(16.dp),
                         )
-                        Text(if (upcoming) "Upcoming" else if (watched) "Watch again" else "Play", color = tint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (upcoming && playable) "Try source" else if (upcoming) "Upcoming" else if (watched) "Watch again" else "Play", color = tint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
+                    onReviews?.let { PreviewAction(Icons.Rounded.RateReview, "Episode reviews", it) }
                     PreviewAction(Icons.Rounded.Download, "Download episode", onDownload)
                     PreviewAction(Icons.Rounded.DoneAll, if (watched) "Mark as unwatched" else "Mark as watched", onWatched, active = watched)
                     onQueue?.let { PreviewAction(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd, if (queued) "In your queue" else "Add to queue", it, active = queued) }
