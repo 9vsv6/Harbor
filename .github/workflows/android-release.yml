@@ -30,6 +30,8 @@ on:
 
 permissions:
   contents: write
+  # To start the version-badge workflow after publishing.
+  actions: write
 
 concurrency:
   group: android-release-${{ github.ref }}
@@ -147,3 +149,5 @@ jobs:
             if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --generate-notes; fi
             gh release create "$tag" dist/*.apk --target "$GITHUB_SHA" --title "Harbor $VERSION for Android" --latest "$@"
           fi
+          # A release made with this workflow's token doesn't trigger other workflows; start the badge update.
+          gh workflow run android-version-badge.yml --ref android || echo "::warning::Couldn't start the version badge update."

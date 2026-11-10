@@ -1,0 +1,48 @@
+name: Android version badge
+
+# Keeps the README's version badge on the latest Android release: it writes the version number
+# (android-v1.0.14 -> 1.0.14) to .github/badges/android-version.json, which the badge reads
+# through shields.io. Runs when a release is published by hand, when the Android release workflow
+# starts it after publishing (a release made by a workflow doesn't trigger others by itself), or
+# from the Actions tab.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-version-badge
+  cancel-in-progress: false
+
+jobs:
+  badge:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'android-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: android
+
+      - name: Write the latest version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          case "$tag" in
+            android-v*) ;;
+            *) echo "The latest release ($tag) isn't an Android one; the badge stays as it is."; exit 0 ;;
+          esac
+          version="${tag#android-v}"
+          printf '{"schemaVersion":1,"label":"version","message":"%s","color":"D9A441","labelColor":"1a1a1a"}\n' "$version" > .github/badges/android-version.json
+          if git diff --quiet; then
+            echo "The badge already shows $version."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Show Harbor $version in the README's version badge"
+          git push origin HEAD:android

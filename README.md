@@ -308,7 +308,7 @@ Harbor for Android includes GPL components (FFmpeg, Jellyfin's decoder, NewPipeE
 
 <!-- badges -->
 
-[badge-version]: https://img.shields.io/badge/version-1.0.12-D9A441?style=for-the-badge&labelColor=1a1a1a
+[badge-version]: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2F9vsv6%2FHarbor%2Fandroid%2F.github%2Fbadges%2Fandroid-version.json&style=for-the-badge
 [badge-license]: https://img.shields.io/badge/license-MIT-D9A441?style=for-the-badge&labelColor=1a1a1a
 [badge-kotlin]: https://img.shields.io/badge/Kotlin-2.2-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white&labelColor=1a1a1a
 [badge-compose]: https://img.shields.io/badge/Jetpack%20Compose-UI-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white&labelColor=1a1a1a
