@@ -71,4 +71,18 @@ class SubtitleFileTest {
             fail("Oversized subtitle was accepted")
         } catch (_: IOException) { }
     }
+
+    @Test
+    fun untaggedWindows1256ArabicIsDetected() {
+        val arabic = "1\n00:00:01,000 --> 00:00:02,000\nمرحبا بك في هذا العالم الجميل\n"
+        val bytes = arabic.toByteArray(java.nio.charset.Charset.forName("windows-1256"))
+        org.junit.Assert.assertEquals(arabic, SubtitleFile.decode(bytes, language = ""))
+    }
+
+    @Test
+    fun untaggedWesternTextStaysWestern() {
+        val french = "1\n00:00:01,000 --> 00:00:02,000\nÇa été très, très génial à Noël, déjà vu.\n"
+        val bytes = french.toByteArray(java.nio.charset.Charset.forName("windows-1252"))
+        org.junit.Assert.assertEquals(french, SubtitleFile.decode(bytes, language = ""))
+    }
 }

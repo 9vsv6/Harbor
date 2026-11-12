@@ -107,16 +107,30 @@ object AudioSync {
             val file = File.createTempFile("harbor-sync-", ".pcm", cacheDir)
             var decodedAny = false
             var failures = 0
+            // Speech recognition listens to the same stretches as the first pass: keep them rather
+            // than fetching them again (a second fetch could fail and leave Whisper half the audio).
+            val heardAudio = HashMap<Pair<Float, Float>, FloatArray>()
             suspend fun decode(start: Float, len: Float): FloatArray {
+                heardAudio[start to len]?.let { return it }
                 coroutineContext.ensureActive()
-                file.delete()
-                val error = withContext(Dispatchers.IO) { nativeDecode(url, headerField, audioTrack.orEmpty(), start, len, file.path, 75f, caFile?.path.orEmpty()) }
+                suspend fun fetch(): String? {
+                    file.delete()
+                    return withContext(Dispatchers.IO) { nativeDecode(url, headerField, audioTrack.orEmpty(), start, len, file.path, 75f, caFile?.path.orEmpty()) }
+                }
+                var error = fetch()
                 coroutineContext.ensureActive()
+                // The source has answered before: one dropped request shouldn't cost a whole stretch.
+                if (error != null && decodedAny && error != "cancelled" && error != "timed out") {
+                    error = fetch()
+                    coroutineContext.ensureActive()
+                }
                 if (error != null) {
                     if (++failures >= 2 && !decodedAny) throw Failure("Couldn't read a seekable audio sample. Try another source or live sync.")
                     return FloatArray(0)
                 }
-                return withContext(Dispatchers.IO) { readFloats(file) }.also { if (it.size >= 16_000 * 5) decodedAny = true }
+                return withContext(Dispatchers.IO) { readFloats(file) }.also {
+                    if (it.size >= 16_000 * 5) { decodedAny = true; heardAudio[start to len] = it }
+                }
             }
             try {
                 if (!forceSpeech) {
@@ -158,7 +172,9 @@ object AudioSync {
                     val heard = mutableListOf<Float>()
                     windows.forEachIndexed { i, (start, length) ->
                         onSpeech(i, windows.size)
-                        val pcm = decode(start, minOf(length, 30f))
+                        // The whole minute, not its first half: a translated subtitle can only be
+                        // matched by when people speak, and half the speech often wasn't enough.
+                        val pcm = decode(start, length)
                         if (pcm.size >= 16_000 * 5) {
                             withContext(Dispatchers.Default) { nativeSpeech(pcm, start) }.forEach { speech += it }
                             heard += start; heard += start + pcm.size / 16_000f

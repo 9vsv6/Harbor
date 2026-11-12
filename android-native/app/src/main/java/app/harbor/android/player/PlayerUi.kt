@@ -715,15 +715,17 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
         val index = shown.indexOfFirst { it.id == state.videoId }
         if (index > 0) listState.scrollToItem(index)
     }
+    // One under another: the popover puts this in a Box, where they would sit on top of each other.
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Pill(if (state.settings.autoDownloadNext) "Auto-download next: On" else "Auto-download next: Off", primary = state.settings.autoDownloadNext) {
         actions.updateSettings { it.copy(autoDownloadNext = !it.autoDownloadNext) }
     }
     if (seasons.size > 1) {
-        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(seasons) { s -> Pill(if (s == 0) "Specials" else "Season $s", primary = s == season) { season = s } }
         }
     }
-    LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(Modifier.weight(1f, fill = false), state = listState, contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(shown, key = { it.id }) { video ->
             val playing = video.id == state.videoId
             Row(
@@ -745,6 +747,7 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
                 Pill("Download", primary = false) { actions.downloadEpisode(video) }
             }
         }
+    }
     }
 }
 

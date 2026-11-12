@@ -721,28 +721,41 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             }
             is SubChoice.Addon -> {
                 state.subLoading = true
-                val added = engine.addExternalSubtitle(choice.subtitle.url, choice.subtitle.lang, languageName(choice.subtitle.lang)) { ok ->
-                    runOnUiThread {
-                        if (state.subChoice != choice) return@runOnUiThread
-                        state.subLoading = false
-                        if (!ok) {
-                            state.hint = "That subtitle didn't load"
-                            state.hintIcon = 0
-                            state.subChoice = SubChoice.Off
-                        }
-                    }
-                }
-                if (!added) {
+                if (!engine.drawsSubtitles) {
                     // Media3: Harbor loads and draws addon subtitles itself.
                     engine.selectText(null)
                     loadAddonSubtitle(choice)
                 } else {
-                    // mpv draws it; Harbor reads the same file for live sync's list of every line.
+                    // mpv draws it, from a UTF-8 copy Harbor decodes first. mpv guesses a file's text
+                    // encoding, and legacy files (Arabic in Windows-1256, Cyrillic, Greek…) came out as
+                    // "?" diamonds or "ÇáÔÞÑ". The same text gives live sync its list of every line.
                     subtitleJob?.cancel()
                     subtitleFile = null
                     subtitleJob = lifecycleScope.launch {
-                        val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang) }.getOrNull()
-                        if (state.subChoice == choice) subtitleFile = file?.takeUnless { it.isEmpty }
+                        val subtitle = choice.subtitle
+                        val (season, episode) = seasonEpisode()
+                        val fetched = runCatching { SubtitleFile.fetch(subtitle.url, subtitle.lang, season, episode) }.getOrNull()
+                        if (state.subChoice != choice) return@launch
+                        val text = fetched?.text
+                        subtitleFile = text?.let { runCatching { SubtitleFile.parse(it) }.getOrNull() }?.takeUnless { it.isEmpty }
+                        val source = when {
+                            // Text of any format: a UTF-8 copy mpv reads (rare formats converted to SRT).
+                            text != null -> runCatching { utf8SubtitleCopy(SubtitleFile.forMpv(text), subtitle.url) }.getOrNull()
+                            // Pictures (PGS) unpacked from a .gz or .zip: the file itself.
+                            fetched?.image != null && fetched.name != null -> runCatching { imageSubtitleCopy(fetched.image, fetched.name, subtitle.url) }.getOrNull()
+                            else -> null
+                        } ?: subtitle.url // Couldn't fetch it here, or a plain picture file: mpv opens the address itself.
+                        engine.addExternalSubtitle(source, subtitle.lang, languageName(subtitle.lang)) { ok ->
+                            runOnUiThread {
+                                if (state.subChoice != choice) return@runOnUiThread
+                                state.subLoading = false
+                                if (!ok) {
+                                    state.hint = "That subtitle didn't load"
+                                    state.hintIcon = 0
+                                    state.subChoice = SubChoice.Off
+                                }
+                            }
+                        }
                     }
                 }
                 if (remember) app.harbor.android.data.TitleSubs.setLang(metaId, choice.subtitle.lang)
@@ -750,6 +763,38 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
         state.subChoice = choice
         state.panel = null
+    }
+
+    /** This episode's season and number from the video id (tt…:1:2), for picking it from a season pack. */
+    private fun seasonEpisode(): Pair<Int?, Int?> {
+        val parts = state.videoId.split(':')
+        return parts.getOrNull(parts.size - 2)?.toIntOrNull()?.takeIf { parts.size >= 3 } to parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 }
+    }
+
+    /** A picture subtitle taken out of an archive, saved under its own extension for mpv. */
+    private suspend fun imageSubtitleCopy(bytes: ByteArray, name: String, url: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val dir = java.io.File(cacheDir, "subtitles-utf8").apply { mkdirs() }
+        val ext = name.substringAfterLast('.', "sup").lowercase().filter { it.isLetterOrDigit() }.take(5).ifEmpty { "sup" }
+        val digest = java.security.MessageDigest.getInstance("SHA-1").digest(url.toByteArray())
+        val file = java.io.File(dir, digest.joinToString("") { "%02x".format(it) } + "." + ext)
+        file.writeBytes(bytes)
+        file.absolutePath
+    }
+
+    /** The decoded subtitle as a UTF-8 file for mpv, named by its address; the newest 30 are kept. */
+    private suspend fun utf8SubtitleCopy(text: String, url: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val dir = java.io.File(cacheDir, "subtitles-utf8").apply { mkdirs() }
+        val head = text.trimStart('\uFEFF', ' ', '\n', '\r')
+        val ext = when {
+            text.contains("[Script Info]", ignoreCase = true) -> "ass"
+            head.startsWith("WEBVTT") -> "vtt"
+            else -> "srt"
+        }
+        val digest = java.security.MessageDigest.getInstance("SHA-1").digest(url.toByteArray())
+        val file = java.io.File(dir, digest.joinToString("") { "%02x".format(it) } + "." + ext)
+        file.writeText(text, Charsets.UTF_8)
+        dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(30)?.forEach { it.delete() }
+        file.absolutePath
     }
 
     private fun clearAddonSubtitle() {
@@ -764,7 +809,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         clearAddonSubtitle()
         state.subLoading = true
         subtitleJob = lifecycleScope.launch {
-            val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang) }.getOrNull()
+            val (season, episode) = seasonEpisode()
+            val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang, season, episode) }.getOrNull()
             // Another subtitle was chosen meanwhile (which cancels this load): leave it be.
             if (state.subChoice != choice) return@launch
             state.subLoading = false
