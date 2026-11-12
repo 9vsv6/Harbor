@@ -269,9 +269,10 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                     onDragEnd = {
                         // Under a second is a nudge (or the start of a pinch), not a seek.
                         if (axis == 1 && abs(seekDelta) >= 1_000 && state.durationMs > 0) actions.seekTo((seekFrom + seekDelta).coerceIn(0, state.durationMs))
+                        if (axis == 1) { state.gestureSeekMs = null; state.scrubbing = false }
                         axis = 0
                     },
-                    onDragCancel = { axis = 0 },
+                    onDragCancel = { if (axis == 1) { state.gestureSeekMs = null; state.scrubbing = false }; axis = 0 },
                 ) { change, drag ->
                     change.consume()
                     if (axis == 0) axis = if (abs(drag.x) > abs(drag.y)) 1 else 2
@@ -279,8 +280,17 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                         // A full swipe across the screen moves 90 seconds.
                         seekDelta += (drag.x / size.width * 90_000).toLong()
                         val target = (seekFrom + seekDelta).coerceIn(0, state.durationMs)
-                        state.hint = "${if (seekDelta >= 0) "+" else "-"}${clock(abs(seekDelta))}  ·  ${clock(target)}"
-                        state.hintIcon = 0
+                        if (state.tv) {
+                            state.hint = "${if (seekDelta >= 0) "+" else "-"}${clock(abs(seekDelta))}  ·  ${clock(target)}"
+                            state.hintIcon = 0
+                        } else {
+                            // As dragging the seek bar (Harbor PC's scrubber): the controls show, the
+                            // middle buttons step aside, and the bar shows the preview and time.
+                            state.controlsVisible = true
+                            touchedAt.longValue = System.currentTimeMillis()
+                            state.scrubbing = true
+                            state.gestureSeekMs = target
+                        }
                     } else {
                         val delta = -drag.y / size.height
                         if (left) {

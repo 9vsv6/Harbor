@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAddCheck
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Schedule
@@ -171,7 +172,11 @@ fun LazyListScope.episodesSection(
         }
         else -> items(shown, key = { "episode-" + it.id }) { v ->
             val watched by repository.shelves.collectAsState()
-            Box(Modifier.closeGap(listGap)) { EpisodeListRow(v, absolute[v.id], spoiler(v), v.id in watched.watched, side, wide, rating(v)) { onPlay(v) } }
+            var reviews by remember(v.id) { mutableStateOf(false) }
+            if (reviews) EpisodeReviewsDialog(repository, meta, v) { reviews = false }
+            Box(Modifier.closeGap(listGap)) {
+                EpisodeListRow(v, absolute[v.id], spoiler(v), v.id in watched.watched, side, wide, rating(v), onReviews = { reviews = true }) { onPlay(v) }
+            }
         }
     }
 }
@@ -426,7 +431,7 @@ private fun episodeTitle(v: Video): String =
 private fun episodeCode(v: Video): String = if (v.season != null && v.episode != null) "S${v.season} · E${v.episode}" else episodeTitle(v)
 
 @Composable
-private fun EpisodeListRow(v: Video, absolute: Int?, spoiler: Boolean, watched: Boolean, side: Dp, wide: Boolean, rating: String?, onClick: () -> Unit) {
+private fun EpisodeListRow(v: Video, absolute: Int?, spoiler: Boolean, watched: Boolean, side: Dp, wide: Boolean, rating: String?, onReviews: (() -> Unit)? = null, onClick: () -> Unit) {
     val display = HarborDisplay.settings
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = side, vertical = 12.dp),
@@ -444,6 +449,13 @@ private fun EpisodeListRow(v: Video, absolute: Int?, spoiler: Boolean, watched: 
             v.overview?.takeIf { display.showEpisodeDescription && it.isNotBlank() && !(spoiler && display.spoilerDescriptions) }?.let {
                 Text(it, fontSize = if (wide) 15.sp else 13.5.sp, lineHeight = if (wide) 22.sp else 19.sp, color = HarborColors.InkMuted, maxLines = if (wide) 2 else 3, overflow = TextOverflow.Ellipsis)
             }
+        }
+        // Harbor PC's episode reviews button, beside the episode (IMDb and Trakt reviews).
+        onReviews?.let {
+            Icon(
+                Icons.Outlined.ChatBubbleOutline, "Episode reviews", tint = HarborColors.InkSubtle,
+                modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = it).padding(10.dp),
+            )
         }
     }
 }

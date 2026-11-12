@@ -361,6 +361,28 @@ private fun DetailBody(
         }
         if (found.isNotEmpty()) ratings[s] = found
     }
+    // Harbor PC's episode stories in the description language (Settings → Details language), from TMDB.
+    val episodeText = remember(meta.id) { androidx.compose.runtime.mutableStateMapOf<String, Map<Int, Pair<String?, String?>>>() }
+    val textLanguage = Tmdb.descriptionLanguage
+    LaunchedEffect(meta.id, season, tmdbKey, details?.tmdbId, textLanguage) {
+        val s = season ?: return@LaunchedEffect
+        val key = tmdbKey ?: return@LaunchedEffect
+        val tv = details?.tmdbId?.takeIf { it > 0 } ?: return@LaunchedEffect
+        if (!isSeries || !HarborDisplay.settings.showEpisodeDescription || episodeText.containsKey("$textLanguage|$s")) return@LaunchedEffect
+        episodeText["$textLanguage|$s"] = runCatching { Tmdb.seasonEpisodeText(key, tv, s) }.getOrDefault(emptyMap())
+    }
+    val englishText = textLanguage.substringBefore('-').equals("en", ignoreCase = true)
+    val shownVideos = remember(videos, episodeText.toMap(), textLanguage) {
+        if (episodeText.isEmpty()) videos else videos.map { v ->
+            val (name, story) = episodeText["$textLanguage|${v.season}"]?.get(v.episode ?: -1) ?: return@map v
+            v.copy(
+                // In another language TMDB's story wins; in English the addon's stays when it has one.
+                overview = (if (englishText) v.overview?.takeIf { it.isNotBlank() && !app.harbor.android.data.EpisodeText.isPlaceholder(it) } else null) ?: story ?: v.overview,
+                // The name only replaces a placeholder ("Episode 4"), or when you chose a language.
+                title = if (app.harbor.android.data.EpisodeText.specificTitle(v.title ?: v.name, v.episode) == null || (!englishText && HarborDisplay.settings.metadataLanguage.isNotEmpty())) name ?: v.title else v.title,
+            )
+        }
+    }
     // Harbor's community sections: Trakt comments (opt-in) and Letterboxd for films.
     val trackers by repository.trackers.collectAsState()
     // Where an anime streams, from Kitsu (Harbor's streamers); TMDB's providers cover the rest.
@@ -534,7 +556,7 @@ private fun DetailBody(
             if (isSeries && seasons.isNotEmpty() && !tv) {
                 // Harbor's episode section: the season's tools, then each episode as a row of this list.
                 episodesSection(
-                    episodeQuery, repository, meta, videos, seasons, season,
+                    episodeQuery, repository, meta, shownVideos, seasons, season,
                     onSeason = { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() },
                     side = side,
                     wide = wide,

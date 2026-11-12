@@ -187,7 +187,7 @@ private enum class Section(
     Shaders("Anime Shaders", "Anime4K upscaling.", R.drawable.set_sparkles, "anime4k shaders upscale", setOf("Anime Shaders")),
     MoreShaders("More shaders", "FSRCNNX, FSR, NIS, RAVU and other picture shaders (mpv).", R.drawable.set_layers, "shaders fsrcnnx fsr nis sgsr ravu nnedi3 ssimsuperres krigbilateral sharpen cas upscale"),
     Motion("Motion smoothing", "Frame interpolation for smoother camera movement (mpv).", R.drawable.set_waves, "motion smoothing interpolation smooth frames refresh svp"),
-    AppLanguage("App language", "Metadata language, region and translation.", R.drawable.set_app_language, "display language metadata region translate titles overviews image languages logos", setOf("App language")),
+    AppLanguage("App language", "Metadata language, region and translation.", R.drawable.set_app_language, "display language metadata region translate titles overviews description descriptions synopsis episode image languages logos", setOf("App language")),
     AudioLanguage("Audio languages", "Which audio track plays, and the tracks never to pick.", R.drawable.set_audio_lines, "audio language dub commentary skip tracks", setOf("Audio languages")),
     WhatYouSee("Discovery languages", "Home rows by language, your region, and stream languages.", R.drawable.set_eye, "home catalogs languages region favour stream ranking only show streams", setOf("Discovery languages")),
     SubtitleLanguages("Subtitle languages", "Which subtitles turn on, dual subtitles and choosing a track.", R.drawable.set_subtitle_languages, "subtitles languages dual second forced embedded sdh start off choose upgrade indicator", setOf("Subtitle languages")),

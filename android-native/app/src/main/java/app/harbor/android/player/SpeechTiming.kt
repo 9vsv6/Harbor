@@ -16,4 +16,19 @@ internal object SpeechTiming {
         }
         return out.toFloatArray()
     }
+
+    /** Most lines leave a pause before the next one; some subtitles run every line into the next. */
+    fun gapless(cues: List<SubtitleFile.Cue>): Boolean =
+        cues.size >= 2 && cues.zipWithNext().count { (a, b) -> b.startMs - a.endMs < 100 } > (cues.size - 1) * 0.7
+
+    /**
+     * Each line cut to about how long it takes to say (from its letters, ~15 a second), so a
+     * subtitle whose lines run into each other still shows where the pauses are. Lines already
+     * shorter than that keep their length.
+     */
+    fun spoken(cues: List<SubtitleFile.Cue>): List<SubtitleFile.Cue> = cues.map { cue ->
+        val letters = cue.text.count(Char::isLetterOrDigit)
+        val say = (500L + letters * 65L).coerceAtLeast(700L)
+        if (cue.endMs - cue.startMs <= say) cue else cue.copy(endMs = cue.startMs + say)
+    }
 }

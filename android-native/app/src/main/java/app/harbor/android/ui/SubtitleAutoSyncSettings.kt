@@ -16,6 +16,10 @@ import app.harbor.android.i18n.Text
 @Composable
 fun SubtitleAutoSyncSettings(repository: Repository) {
     val settings by repository.settings.collectAsState()
+    ToggleRow("Auto sync (Experimental)", "Match downloaded subtitles to the film's audio from the player's Sync menu. Experimental: it can take a few minutes and doesn't work with every subtitle. Off by default.", settings.autoSyncExperimental) {
+        repository.updateSettings { s -> s.copy(autoSyncExperimental = it) }
+    }
+    if (!settings.autoSyncExperimental) return
     ToggleRow("Auto-sync subtitles", "Match downloaded text subtitles to the audio when they load. Embedded tracks keep their timing. Off by default.", settings.subtitleAutoSync) {
         repository.updateSettings { s -> s.copy(subtitleAutoSync = it) }
     }

@@ -396,11 +396,13 @@ private fun SyncLane(state: PlayerState, actions: PlayerActions) {
     LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = u(18f)), verticalArrangement = Arrangement.spacedBy(u(4f))) {
         item {
             Rail {
-                Label("Auto sync")
-                Chip(if (busy) "Cancel sync" else "Auto sync", Icons.Rounded.Timer, requester = first) {
+                // Auto sync is experimental: its chip shows once it's turned on in Settings.
+                val autoSync = state.settings.autoSyncExperimental || busy
+                Label(if (autoSync) "Auto sync" else "Sync")
+                if (autoSync) Chip(if (busy) "Cancel sync" else "Auto sync", Icons.Rounded.Timer, requester = first) {
                     if (busy) actions.cancelAutoSync() else if (!off) actions.startAutoSync()
                 }
-                Chip("Live sync", Icons.Rounded.Timer) {
+                Chip("Live sync", Icons.Rounded.Timer, requester = if (autoSync) null else first) {
                     if (off) return@Chip
                     state.panel = null
                     actions.startLiveSync()
@@ -626,7 +628,7 @@ internal fun TvAudioPanel(state: PlayerState, actions: PlayerActions) {
                     contentPadding = PaddingValues(horizontal = u(22f), vertical = u(10f)),
                     verticalArrangement = Arrangement.spacedBy(u(6f)),
                 ) {
-                    if (tracks.isEmpty()) item { Note("This file has one audio track.") }
+                    if (tracks.isEmpty()) item { Note("No audio track found yet.") }
                     items(tracks, key = { it.key }) { track ->
                         val lang = track.language
                         val detail = listOfNotNull(lang?.let(::languageName), track.detail).joinToString(" · ")

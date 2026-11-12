@@ -29,4 +29,23 @@ class SpeechTimingTest {
         assertEquals(1.0, result.timeScale, .00001)
         assertTrue(result.method.startsWith("speech"))
     }
+
+    @Test fun linesThatRunIntoEachOtherAreCutToTheirSpokenLength() {
+        val cues = listOf(
+            SubtitleFile.Cue(1_000, 6_000, "مرحبا"),
+            SubtitleFile.Cue(6_000, 9_000, "Hi"),
+            SubtitleFile.Cue(9_000, 20_000, "a much longer line that takes a while to say out loud"),
+        )
+        assertTrue(SpeechTiming.gapless(cues))
+        val spoken = SpeechTiming.spoken(cues)
+        assertEquals(1_000L + 500 + 5 * 65, spoken[0].endMs)
+        assertEquals(6_700L, spoken[1].endMs)
+        assertTrue(spoken[2].endMs in 11_000L..20_000L)
+        assertEquals(cues.map { it.startMs }, spoken.map { it.startMs })
+    }
+
+    @Test fun ordinarySubtitlesKeepTheirPauses() {
+        val cues = listOf(SubtitleFile.Cue(1_000, 2_000, "a"), SubtitleFile.Cue(3_000, 4_000, "b"), SubtitleFile.Cue(5_000, 6_000, "c"))
+        assertFalse(SpeechTiming.gapless(cues))
+    }
 }

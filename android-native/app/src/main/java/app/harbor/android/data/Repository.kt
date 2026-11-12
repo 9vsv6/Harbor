@@ -29,6 +29,7 @@ import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -457,6 +458,21 @@ class Repository(private val context: Context) {
     private val refreshLock = kotlinx.coroutines.sync.Mutex()
     /** Whose library [_library] holds, so a failed fetch keeps it only for the same account. */
     private var libraryAuth: String? = null
+    @Volatile private var libraryLoadedAt = 0L
+
+    /**
+     * Your Stremio library again (only it: no addons), when Harbor comes back to the front, so
+     * Continue watching shows where you got to on another device. At most every 30 seconds.
+     */
+    fun refreshLibraryIfStale() {
+        val account = _account.value.takeUnless { accounts.nuvioActive } ?: return
+        if (System.currentTimeMillis() - libraryLoadedAt < 30_000) return
+        libraryLoadedAt = System.currentTimeMillis()
+        scope.launch {
+            val library = runCatching { StremioApi.library(account.authKey) }.getOrNull() ?: return@launch
+            if (_account.value?.authKey == account.authKey) _library.value = library
+        }
+    }
 
     /** Reloads the addon collection and the library for the current account (one refresh at a time). */
     suspend fun refresh() = refreshLock.withLock { refreshNow() }
@@ -494,6 +510,7 @@ class Repository(private val context: Context) {
             else -> emptyList()
         }
         libraryAuth = account?.authKey
+        if (library != null) libraryLoadedAt = System.currentTimeMillis()
         if (remote != null) _addonsSyncedAt.value = System.currentTimeMillis()
     }
 
@@ -874,12 +891,36 @@ class Repository(private val context: Context) {
 
     // ---- Resume points and Continue watching ----
 
-    /** Where to resume `videoId`: this device's last position, else the Stremio library's. */
+    /**
+     * Where to resume `videoId`: the newer of this device's last position and the Stremio
+     * library's, as Harbor PC decides (lib/player/resume-start.ts). Watching on another device
+     * moves Stremio's place on, and that is where you carry on here.
+     */
     fun resumeFor(videoId: String, metaId: String): Long {
-        _resume.value[videoId]?.let { return it.positionMs }
-        val item = _library.value.firstOrNull { it.id == metaId } ?: return 0
-        val state = item.state ?: return 0
-        return if ((state.videoId ?: metaId) == videoId) state.timeOffset else 0
+        val local = _resume.value[videoId]
+        val item = _library.value.firstOrNull { it.id == metaId }
+        val remote = item?.state?.takeIf { (it.videoId ?: metaId) == videoId && it.timeOffset > 0 }
+        if (local == null || remote == null) return local?.positionMs ?: remote?.timeOffset ?: 0
+        return if (parseTime(remote.lastWatched ?: item.mtime) > local.updatedAt) remote.timeOffset else local.positionMs
+    }
+
+    /**
+     * Stremio's live place in `videoId`, read when playback starts, when it is newer than what
+     * this device knows (you watched on PC since the library was last loaded); else null.
+     */
+    suspend fun newerStremioResume(videoId: String, metaId: String): Long? {
+        val account = _account.value.takeUnless { accounts.nuvioActive } ?: return null
+        val id = metaId.substringBefore(':').takeIf { it.startsWith("tt") } ?: metaId.takeIf { it.startsWith("tmdb:") } ?: return null
+        val item = runCatching { StremioApi.libraryItem(account.authKey, id) }.getOrNull() ?: return null
+        val state = item["state"] as? JsonObject ?: return null
+        if ((state.string("video_id") ?: id) != videoId) return null
+        val offset = (state["timeOffset"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: return null
+        if (offset <= 0) return null
+        val at = parseTime(state.string("lastWatched") ?: item.string("_mtime"))
+        val local = _resume.value[videoId]
+        val cached = _library.value.firstOrNull { it.id == metaId }?.state?.takeIf { (it.videoId ?: metaId) == videoId }
+        val known = maxOf(local?.updatedAt ?: 0, cached?.let { parseTime(it.lastWatched) } ?: 0)
+        return offset.takeIf { at > known }
     }
 
     fun saveResume(videoId: String, positionMs: Long, durationMs: Long, meta: Meta? = null, video: Video? = null) {

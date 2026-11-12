@@ -324,6 +324,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         pendingSeekSentAt = 0L
         loadStartMs = resume
         engine.load(state.currentUrl, headers, resume)
+        if (startAt == null && settings.resumePlayback) carryOnFromStremio(videoId, resume)
         engine.setAudioDelay(state.audioDelayMs)
         describe()
         // Debug builds only: a subtitle URL from the launch, for testing subtitles without an addon.
@@ -641,7 +642,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun onTracksChanged() {
         val audio = engine.audioTracks()
         val text = engine.textTracks()
-        state.audioTracks = if (audio.size > 1) audio.map { TrackOption(it.key, it.label, it.detail, it.selected, it.language) } else emptyList()
+        // A single track is listed too, so you can see what's playing (TV shows its Audio button only for a choice).
+        state.audioTracks = audio.map { TrackOption(it.key, it.label, it.detail, it.selected, it.language) }
         // Addon subtitles mpv loaded show under "From your addons", not "In the video".
         state.embeddedSubs = text.filterNot { it.external }.map { TrackOption(it.key, it.label, it.detail, it.selected, it.language) }
         avoidCommentary(audio)
@@ -1162,9 +1164,36 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
-    override fun seekTo(positionMs: Long) = seekNow(positionMs.coerceAtLeast(0))
+    override fun seekTo(positionMs: Long) {
+        userSeekedAt = System.currentTimeMillis()
+        seekNow(positionMs.coerceAtLeast(0))
+    }
+
+    private var userSeekedAt = 0L
+
+    /**
+     * As Harbor PC does when a video opens: Stremio is asked for your live place in it, and when
+     * that's newer (you watched on another device since) playback moves there, unless you've
+     * already moved yourself.
+     */
+    private fun carryOnFromStremio(videoId: String, started: Long) {
+        val attempt = playbackAttempt
+        val openedAt = System.currentTimeMillis()
+        lifecycleScope.launch {
+            val remote = kotlinx.coroutines.withTimeoutOrNull(8_000) { repository.newerStremioResume(videoId, metaId) } ?: return@launch
+            if (kotlin.math.abs(remote - started) < 5_000) return@launch
+            // Wait for the file to open, then move only if nothing else has.
+            while (!state.hasPlayed && attempt == playbackAttempt) kotlinx.coroutines.delay(250)
+            if (attempt != playbackAttempt || state.videoId != videoId || userSeekedAt > openedAt) return@launch
+            val duration = engine.durationMs
+            if (duration > 0 && remote >= duration * 0.95) return@launch
+            seekNow(remote)
+            state.resumedFromMs = if (state.settings.resumeNotice && remote > 30_000) remote else 0
+        }
+    }
 
     override fun seekBy(deltaMs: Long) {
+        userSeekedAt = System.currentTimeMillis()
         // On a TV the transport buttons are pressed with the remote, often in quick runs: coalesce them too.
         if (state.tv) return coalescedSeekBy(deltaMs)
         val duration = engine.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
@@ -1306,7 +1335,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     private fun maybeAutomaticSubtitleSync() {
-        if (!state.settings.subtitleAutoSync) {
+        if (!state.settings.subtitleAutoSync || !state.settings.autoSyncExperimental) {
             automaticSyncKey = ""
             if (syncingAutomatically && autoSyncJob?.isActive == true) cancelAutoSync()
             return
@@ -1320,7 +1349,11 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         runAutoSync(automatic = true)
     }
 
-    override fun startAutoSync() = runAutoSync(automatic = false)
+    override fun startAutoSync() {
+        // Experimental: nothing runs until it's turned on in Settings → Subtitle timing.
+        if (!state.settings.autoSyncExperimental && applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        runAutoSync(automatic = false)
+    }
 
     private fun runAutoSync(automatic: Boolean) {
         if (!automatic) state.panel = null

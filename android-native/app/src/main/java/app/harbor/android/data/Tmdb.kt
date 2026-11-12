@@ -734,6 +734,26 @@ object Tmdb {
     }
 
     /** TMDB's episode scores for a season, by episode number (the fallback for episode ratings). */
+    /** The description language TMDB is asked in ("ar-SA", "en-US"); part of a cache key. */
+    val descriptionLanguage: String get() = descLang
+
+    /**
+     * A season's episode names and stories in the description language (Settings → Details
+     * language), as Harbor PC shows them under each episode. Placeholders ("Episode 4") and text
+     * in another script are left out, so the addon's own text stays.
+     */
+    suspend fun seasonEpisodeText(key: String, tvId: Int, season: Int): Map<Int, Pair<String?, String?>> {
+        val lang = descLang
+        val body = runCatching { get(key, "/tv/$tvId/season/$season", lang = lang) }.getOrNull() ?: return emptyMap()
+        return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e.jsonObject
+            val n = o["episode_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val name = EpisodeText.accept(o.string("name"), lang)
+            val story = EpisodeText.accept(o.string("overview"), lang)
+            if (name == null && story == null) null else n to (name to story)
+        }.toMap()
+    }
+
     suspend fun seasonRatings(key: String, tvId: Int, season: Int): Map<Int, String> {
         val body = runCatching { get(key, "/tv/$tvId/season/$season") }.getOrNull() ?: return emptyMap()
         return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->

@@ -97,6 +97,12 @@ class MainActivity : ComponentActivity() {
     /** When this window last got focus, on the clock key events use. */
     private var focusedAt = 0L
 
+    override fun onStart() {
+        super.onStart()
+        // Back from the player or another app: progress made elsewhere shows in Continue watching.
+        runCatching { (application as HarborApp).repository.refreshLibraryIfStale() }
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) focusedAt = android.os.SystemClock.uptimeMillis()

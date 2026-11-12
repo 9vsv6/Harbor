@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -188,8 +189,9 @@ internal fun HarborControls(
             }
         }
 
-        // Middle: rewind, play and forward, as Harbor's phone transport.
-        Row(
+        // Middle: rewind, play and forward, as Harbor's phone transport. Hidden while you drag the
+        // seek bar, as on PC, so the preview above it is clear.
+        if (!state.scrubbing) Row(
             Modifier.align(Alignment.Center),
             horizontalArrangement = Arrangement.spacedBy(44.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -323,14 +325,30 @@ private fun seekIcon(seconds: Int, forward: Boolean): ImageVector = if (forward)
 private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: () -> Unit, modifier: Modifier) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
+    // Harbor PC's seek bar: after a seek the bar holds the new spot until playback gets there
+    // (or 2.5 s pass), so it doesn't flick back to the old place first.
+    var pending by remember { mutableStateOf<Long?>(null) }
     val duration = state.durationMs.coerceAtLeast(1)
+    // The controls can hide mid-drag: the middle buttons come back with them.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { state.scrubbing = false } }
+    LaunchedEffect(pending) {
+        val target = pending ?: return@LaunchedEffect
+        val started = System.currentTimeMillis()
+        while (kotlin.math.abs(state.positionMs - target) >= 750 && System.currentTimeMillis() - started < 2_500) kotlinx.coroutines.delay(50)
+        pending = null
+    }
+    fun seek(fraction: Float) {
+        val ms = (fraction.coerceIn(0f, 1f) * duration).toLong()
+        pending = ms
+        actions.seekTo(ms)
+    }
     Box(modifier) {
         Canvas(
             Modifier.fillMaxWidth().height(34.dp)
                 .pointerInput(duration) {
                     detectTapGestures { offset ->
                         onTouch()
-                        actions.seekTo(((offset.x / size.width).coerceIn(0f, 1f) * duration).toLong())
+                        seek(offset.x / size.width)
                     }
                 }
                 .pointerInput(duration) {
@@ -338,13 +356,15 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                         onDragStart = { offset ->
                             onTouch()
                             dragging = true
+                            state.scrubbing = true
                             dragValue = (offset.x / size.width).coerceIn(0f, 1f)
                         },
                         onDragEnd = {
-                            actions.seekTo((dragValue * duration).toLong())
+                            seek(dragValue)
                             dragging = false
+                            state.scrubbing = false
                         },
-                        onDragCancel = { dragging = false },
+                        onDragCancel = { dragging = false; state.scrubbing = false },
                     ) { change, _ ->
                         change.consume()
                         onTouch()
@@ -353,14 +373,18 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                 },
         ) {
             // Read in the draw phase: a position tick invalidates the draw only, not the composition.
-            val value = (if (dragging) dragValue else state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
+            val gesture = state.gestureSeekMs
+            val value = (if (dragging) dragValue else if (gesture != null) gesture.toFloat() / duration else (pending ?: state.positionMs).toFloat() / duration).coerceIn(0f, 1f)
+            val dragging = dragging || gesture != null
             val buffered = (state.bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
             val y = size.height / 2
-            val stroke = (if (dragging) 7.dp else 4.dp).toPx()
+            // As on PC (seek-bar-visual.tsx): a 6 px track, 10 px while you drag it; white at 15%,
+            // the loaded part white at 35%, the played part in the accent.
+            val stroke = (if (dragging) 10.dp else 6.dp).toPx()
             drawLine(Color(0x26FFFFFF), Offset(0f, y), Offset(size.width, y), stroke, StrokeCap.Round)
-            drawLine(Color(0x4DFFFFFF), Offset(0f, y), Offset(size.width * buffered, y), stroke, StrokeCap.Round)
+            if (buffered > 0f) drawLine(Color(0x59FFFFFF), Offset(0f, y), Offset(size.width * buffered, y), stroke, StrokeCap.Round)
             drawLine(HarborColors.Accent, Offset(0f, y), Offset(size.width * value, y), stroke, StrokeCap.Round)
-            // Harbor's chapter marks: a 1 px white tick with a dark edge, 12 px tall.
+            // Chapter marks (off unless turned on in the Chapters menu): a 1 px white tick with a dark edge, 12 px tall.
             if (state.settings.seekBarChapters && state.durationMs > 0) {
                 val tick = 12.dp.toPx()
                 for (chapter in state.chapters) {
@@ -370,23 +394,80 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
                     drawRect(Color(0xE6FFFFFF), Offset(x, y - tick / 2), androidx.compose.ui.geometry.Size(1.dp.toPx(), tick))
                 }
             }
-            if (dragging) drawCircle(Color.White, 8.dp.toPx(), Offset(size.width * value, y))
-        }
-        if (dragging) {
-            Text(
-                clock((dragValue * duration).toLong()),
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.align(Alignment.TopCenter).padding(bottom = 30.dp),
-            )
-            // Harbor PC's seek preview: the frame at the dragged spot, above the bar, following the finger.
-            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
-                val cardWidth = 168.dp
-                val x = (maxWidth * dragValue - cardWidth / 2).coerceIn(0.dp, (maxWidth - cardWidth).coerceAtLeast(0.dp))
-                SeekPreviewCard(state.seekPreview, (dragValue * duration).toLong(), Modifier.align(Alignment.BottomStart).offset(x = x, y = (-80).dp), cardWidth)
+            if (dragging) {
+                // PC's dot while scrubbing: 16 + 6 px in the accent, a dark halo and a soft shadow.
+                val center = Offset(size.width * value, y)
+                val radius = 11.dp.toPx()
+                drawCircle(Color(0x73000000), radius + 3.dp.toPx(), center.copy(y = center.y + 2.dp.toPx()))
+                drawCircle(Color(0x80000000), radius + 2.dp.toPx(), center)
+                drawCircle(HarborColors.Accent, radius, center)
             }
         }
+        val gesture = state.gestureSeekMs
+        if (dragging || gesture != null) {
+            val dragValue = if (dragging) dragValue else (gesture!!.toFloat() / duration).coerceIn(0f, 1f)
+            val timeMs = (dragValue * duration).toLong()
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
+                val preview = state.seekPreview?.takeIf { it.available }
+                if (preview != null) {
+                    // PC's thumb preview (thumb-preview.tsx): a 192 x 108 card above the bar, a
+                    // spinner until the frame is read, and the time in a small label under it.
+                    val cardWidth = 192.dp
+                    val x = (maxWidth * dragValue - cardWidth / 2).coerceIn(0.dp, (maxWidth - cardWidth).coerceAtLeast(0.dp))
+                    Column(
+                        Modifier.align(Alignment.BottomStart).offset(x = x, y = (-36).dp).width(cardWidth)
+                            // Its own height, bottom on the bar: the box it sits in is only the bar's 34 dp.
+                            .wrapContentHeight(align = Alignment.Bottom, unbounded = true),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        PhonePreviewFrame(preview, timeMs, cardWidth)
+                        Text(
+                            clock(timeMs),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xD9000000)).padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                } else {
+                    // No frames for this source: as on PC, only the time, in a small label above the dot.
+                    val labelWidth = 72.dp
+                    val x = (maxWidth * dragValue - labelWidth / 2).coerceIn(0.dp, (maxWidth - labelWidth).coerceAtLeast(0.dp))
+                    Box(Modifier.align(Alignment.BottomStart).offset(x = x, y = (-34).dp).width(labelWidth).wrapContentHeight(align = Alignment.Bottom, unbounded = true), contentAlignment = Alignment.Center) {
+                        Text(
+                            clock(timeMs),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xE6000000))
+                                .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The card's frame: the picture once it's read, a spinner on dark glass until then (PC's ThumbPreview). */
+@Composable
+private fun PhonePreviewFrame(preview: SeekPreview, timeMs: Long, width: androidx.compose.ui.unit.Dp) {
+    var image by remember(preview) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    val key = preview.keyFor(timeMs)
+    LaunchedEffect(key) {
+        loading = true
+        preview.frameAt(timeMs)?.let { image = it }
+        loading = false
+    }
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        Modifier.width(width).aspectRatio(16f / 9f).clip(shape).background(Color(0xD9000000)).border(1.dp, Color(0x1AFFFFFF), shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        image?.let { androidx.compose.foundation.Image(it, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        if (loading && image == null) androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp), color = Color(0xB3FFFFFF), strokeWidth = 2.dp)
     }
 }
 
@@ -625,7 +706,7 @@ private fun ColumnScope.AudioPopover(state: PlayerState, actions: PlayerActions)
             }
         }
         LazyColumn(Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (tracks.isEmpty()) item { MenuNote("This video has one audio track.") }
+            if (tracks.isEmpty()) item { MenuNote("No audio track found yet.") }
             else if (shown.isEmpty()) item { MenuNote("No audio track in that language.") }
             items(shown, key = { it.key }) { track ->
                 TrackRow(
@@ -1141,7 +1222,7 @@ private fun SyncMenu(state: PlayerState, actions: PlayerActions) {
             if (offset != 0L || state.subTimeScale != 1.0) Box(Modifier.size(6.dp).clip(CircleShape).background(HarborColors.Accent))
         }
         androidx.compose.material3.DropdownMenu(open, onDismissRequest = { open = false }, containerColor = PopRaised, modifier = Modifier.width(240.dp)) {
-            SyncItem("Auto sync", "Audio") { open = false; actions.startAutoSync() }
+            if (state.settings.autoSyncExperimental) SyncItem("Auto sync", "Experimental") { open = false; actions.startAutoSync() }
             SyncItem("Live sync", "Guided") { open = false; actions.startLiveSync() }
             SyncItem("Manual offset", if (offset != 0L) "%+.1f".format(Locale.US, offset / 1000f) else null) {
                 open = false

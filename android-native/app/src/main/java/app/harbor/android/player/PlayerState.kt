@@ -75,6 +75,10 @@ class PlayerState {
     var panel by mutableStateOf<Panel?>(null)
     /** Harbor's subtitle sync: the manual offset bar, the live sync panel, and a frame-rate fix. */
     var syncBarOpen by mutableStateOf(false)
+    /** The seek bar is being dragged (phones and tablets): the middle buttons step aside for the preview. */
+    var scrubbing by mutableStateOf(false)
+    /** Where a sideways swipe on the video will seek to: the seek bar shows it as a drag would. */
+    var gestureSeekMs by mutableStateOf<Long?>(null)
     var liveSync by mutableStateOf<LiveSync?>(null)
     var subTimeScale by mutableStateOf(1.0)
     /** X-Ray's cast, crew and facts for what's playing; null until loaded. */

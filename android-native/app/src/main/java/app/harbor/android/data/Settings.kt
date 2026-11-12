@@ -132,7 +132,7 @@ data class AppSettings(
     /** The Chapters control in the player (hidden by default, as in Harbor's player layout). */
     val chapterMenu: Boolean = false,
     /** Chapter marks on the seek bar (the Chapters menu's toggle). */
-    val seekBarChapters: Boolean = true,
+    val seekBarChapters: Boolean = false,
     /** Harbor's content advisory: the IMDb parental guide, briefly, when a title starts. */
     val contentAdvisoryToast: Boolean = false,
     /** "colored" or "monochrome". */
@@ -173,6 +173,8 @@ data class AppSettings(
     val subtitlesOffByDefault: Boolean = false,
     /** Harbor's default is off; inside-the-video subtitles are in sync with the file, so Harbor prefers them. */
     val preferEmbeddedSubs: Boolean = false,
+    /** Auto sync by audio (and its speech model) at all: experimental, so off until you turn it on. */
+    val autoSyncExperimental: Boolean = false,
     val subtitleAutoSync: Boolean = false,
     val subtitleAutoSyncAsr: Boolean = true,
     val autoSyncApplyCorrections: Boolean = false,

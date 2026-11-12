@@ -104,6 +104,9 @@ object AudioSync {
                 else headers + ("User-Agent" to app.harbor.android.data.Net.USER_AGENT)
             val headerField = decodeHeaders.entries.joinToString(",") { (k, v) -> "$k: ${v.replace(",", "\\,")}" }
             val windows = pickWindows(cues, total)
+            // Lines that run into each other hide the pauses that timing is matched by.
+            val timingCues = if (SpeechTiming.gapless(cues)) SpeechTiming.spoken(cues) else cues
+            val cueArray = timingCues.flatMap { listOf(it.startMs / 1000f, it.endMs / 1000f) }.toFloatArray()
             val file = File.createTempFile("harbor-sync-", ".pcm", cacheDir)
             var decodedAny = false
             var failures = 0
@@ -134,8 +137,7 @@ object AudioSync {
             }
             try {
                 if (!forceSpeech) {
-                    val gapless = cues.zipWithNext().count { (a, b) -> b.startMs - a.endMs < 100 }
-                    if (gapless <= cues.size * 0.7) {
+                    run {
                         val speech = ArrayList<Float>()
                         val heard = ArrayList<Float>()
                         windows.forEachIndexed { i, (start, len) ->
@@ -148,7 +150,6 @@ object AudioSync {
                         }
                         onStep(windows.size, windows.size)
                         if (heard.isNotEmpty() && speech.size >= 8) {
-                            val cueArray = cues.flatMap { listOf(it.startMs / 1000f, it.endMs / 1000f) }.toFloatArray()
                             val out = withContext(Dispatchers.Default) { nativeSolve(speech.toFloatArray(), heard.toFloatArray(), cueArray, total) }
                             if (out.size >= 3 && out.take(3).all { it.isFinite() } && out[1] in 0.94f..1.06f && kotlin.math.abs(out[0]) <= 180f)
                                 return Result((out[0] * 1000).toLong(), 1.0 / out[1], out[2])
@@ -159,8 +160,9 @@ object AudioSync {
                 if (!useSpeech) throw Failure("Couldn't find a reliable audio match. Try live sync, or enable speech recognition in Subtitle timing.")
                 if (!withContext(Dispatchers.IO) { WhisperNative.available }) throw Failure("Speech recognition isn't available on this device. Try live sync.")
                 ensureSpeechResources()
-                val model = app.harbor.android.data.WhisperModel.acquire()
-                    ?: throw Failure("Couldn't find a reliable audio match. Download Whisper Tiny in Settings → Subtitle timing, then try again.")
+                val model = app.harbor.android.data.WhisperModel.acquire() ?: throw Failure(
+                    if (app.harbor.android.data.WhisperModel.state.value.inUse) "Speech recognition is still finishing the last sync. Try again in a moment."
+                    else "Couldn't find a reliable audio match. Download Whisper Tiny on this device in Settings → Subtitle timing, then try again.")
                 var handle = 0L
                 try {
                     onSpeech(0, windows.size)
@@ -186,7 +188,6 @@ object AudioSync {
                         }
                     }
                     onSpeech(windows.size, windows.size)
-                    val cueArray = cues.flatMap { listOf(it.startMs / 1000f, it.endMs / 1000f) }.toFloatArray()
                     suspend fun timing(spans: List<Float>): Result? {
                         if (spans.size < 8 || heard.size < 4) return null
                         val out = withContext(Dispatchers.Default) { nativeSolve(spans.toFloatArray(), heard.toFloatArray(), cueArray, total) }

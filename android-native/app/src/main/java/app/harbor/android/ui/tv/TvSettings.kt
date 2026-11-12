@@ -180,7 +180,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
                 Cat.Subtitles -> listOfNotNull(subLangs.firstOrNull()?.let(::langName) ?: "Off", "${subPx}px").joinToString(" / ")
                 Cat.SubtitleStyle -> "${subPx}px / ${settings.subFont.takeUnless { it.startsWith("file:") } ?: "Custom font"}"
-                Cat.SubtitleTiming -> if (settings.subtitleAutoSync) "Auto-sync on" else "Manual / auto sync"
+                Cat.SubtitleTiming -> if (!settings.autoSyncExperimental) "Manual timing" else if (settings.subtitleAutoSync) "Auto-sync on" else "Manual / auto sync"
                 Cat.Playback -> if (autoPlay) "Instant play" else "Pick a source"
                 Cat.Sources -> if (settings.streamFilter.active) "Filters on" else "All resolutions and codecs"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
@@ -194,7 +194,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val update = app.harbor.android.data.AppUpdate.status
         val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
         val controls = remember(active, settings, prefs, autoPlay, connected, update, speechModel) {
-            controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.SubtitleTiming) listOf(
+            controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.SubtitleTiming && settings.autoSyncExperimental) listOf(
                 Control.Push("whisper", "Whisper Tiny speech model", when {
                     speechModel.downloading -> "Downloading… ${(speechModel.received * 100 / app.harbor.android.data.WhisperModel.BYTES)}%"
                     speechModel.installed -> "Installed locally · 74.1 MB"
@@ -343,12 +343,15 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
             add(Control.Options("assFont", "Advanced: change font only (mpv)", onOff(s.assOverride == "font"), OnOff))
         } else add(Control.Options("assStrip", "Advanced: strip inline styling, signs and karaoke (mpv)", onOff(s.assStripStyles), OnOff))
     }
-    Cat.SubtitleTiming -> listOf(
-        Control.Options("subtitleAutoSync", "Auto-sync subtitles", onOff(s.subtitleAutoSync), OnOff),
-        Control.Options("autoSyncApply", "Apply corrections automatically", onOff(s.autoSyncApplyCorrections), OnOff),
-        Control.Options("autoSyncAsr", "Smart resync with speech recognition", onOff(s.subtitleAutoSyncAsr), OnOff),
-        Control.Options("syncIndicator", "Show sync indicator", onOff(s.subSyncIndicator), OnOff),
-    )
+    Cat.SubtitleTiming -> buildList {
+        add(Control.Options("autoSyncExperimental", "Auto sync (Experimental)", onOff(s.autoSyncExperimental), OnOff))
+        if (s.autoSyncExperimental) {
+            add(Control.Options("subtitleAutoSync", "Auto-sync subtitles", onOff(s.subtitleAutoSync), OnOff))
+            add(Control.Options("autoSyncApply", "Apply corrections automatically", onOff(s.autoSyncApplyCorrections), OnOff))
+            add(Control.Options("autoSyncAsr", "Smart resync with speech recognition", onOff(s.subtitleAutoSyncAsr), OnOff))
+        }
+        add(Control.Options("syncIndicator", "Show sync indicator", onOff(s.subSyncIndicator), OnOff))
+    }
     Cat.Playback -> listOf(
         Control.Options("skipIntro", "Skip intros", onOff(p.autoSkipIntro), OnOff),
         Control.Options("autoNext", "Auto-play next episode", onOff(s.autoPlayNextEpisode), OnOff),
@@ -453,6 +456,7 @@ private fun commit(repository: Repository, id: String, value: String) {
         "airingEnd" -> repository.updateSettings { it.copy(moreLikeThisOnAiringSeries = value == "on") }
         "seekPreviews" -> repository.updateSettings { it.copy(seekPreviews = value == "on") }
         "topMatch" -> repository.updateSettings { it.copy(searchTmdbTopMatch = value == "on") }
+        "autoSyncExperimental" -> repository.updateSettings { it.copy(autoSyncExperimental = value == "on") }
         "subtitleAutoSync" -> repository.updateSettings { it.copy(subtitleAutoSync = value == "on") }
         "autoSyncApply" -> repository.updateSettings { it.copy(autoSyncApplyCorrections = value == "on") }
         "autoSyncAsr" -> repository.updateSettings { it.copy(subtitleAutoSyncAsr = value == "on") }
@@ -724,7 +728,7 @@ private fun SettingsPane(
                         },
                         "Poster language" to when (s.imageLanguage) { "" -> "Same as the device"; "null" -> "No text"; else -> langName(s.imageLanguage) },
                     )
-                    Cat.SubtitleTiming -> listOf("Auto-sync subtitles" to if (s.subtitleAutoSync) "On" else "Off",
+                    Cat.SubtitleTiming -> if (!s.autoSyncExperimental) listOf("Auto sync (Experimental)" to "Off") else listOf("Auto-sync subtitles" to if (s.subtitleAutoSync) "On" else "Off",
                         "Speech recognition" to if (s.subtitleAutoSyncAsr) "On (model required)" else "Off",
                         "Corrections" to if (s.autoSyncApplyCorrections) "Apply automatically" else "Review first")
                     Cat.Playback -> listOf(

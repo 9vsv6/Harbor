@@ -127,3 +127,5 @@ gemini.key
 
 # Rotated dev-server logs: *.log covers dev.log but not its .prev rotation.
 dev.log*
+# Android release notes, read by .github/workflows/android-release.yml for the release page.
+!android-native/release-notes/*.md
