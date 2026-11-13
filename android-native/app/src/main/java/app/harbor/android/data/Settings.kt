@@ -196,6 +196,8 @@ data class AppSettings(
     // ---- Sources ----
     /** "harbor" (ranked best first) or "addon" (each addon's own order, addons in your order). */
     val streamSort: String = "addon",
+    /** TV: sources this TV can play smoothly (its screen, its connection) first, else quality order only. */
+    val smoothSourcesFirst: Boolean = true,
     val streamFilter: StreamFilter = StreamFilter(),
     /** "off", "balanced" (hide CAM and fakes) or "strict" (also tiny files). */
     val safetyFilter: String = "balanced",

@@ -31,6 +31,29 @@ private val barRoutes = setOf(Tab.Home.route, Tab.Search.route, Tab.MyStuff.rout
 /** The title page: Big Picture keeps its bar over it, with the backdrop running full-bleed underneath. */
 private const val DETAIL_ROUTE = "detail/{type}/{id}"
 
+/** One page's margins under the TV chrome, by its route (see TvShell). */
+@Composable
+internal fun TvPage(route: String?, content: @Composable () -> Unit) {
+    if (!Perf.isTv) { content(); return }
+    val showBar = route in barRoutes
+    val side = showBar && app.harbor.android.ui.HarborDisplay.settings.tvNavSide == "left"
+    val fullBleed = route == Tab.Home.route || route == DETAIL_ROUTE || route?.startsWith("streams/") == true
+    Box(
+        Modifier.fillMaxSize().then(
+            when {
+                // The side bar takes the left edge; pages start to its right and run to the top.
+                side && fullBleed -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX)
+                side -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX + 8.dp, end = TvInsets.SafeX, bottom = TvInsets.SafeY, top = TvInsets.SafeY)
+                fullBleed -> Modifier
+                else -> Modifier.padding(
+                    start = TvInsets.SafeX, end = TvInsets.SafeX, bottom = TvInsets.SafeY,
+                    top = if (showBar) TvInsets.BarHeight else TvInsets.SafeY,
+                )
+            },
+        ),
+    ) { content() }
+}
+
 /**
  * The TV chrome: Big Picture's top bar over the page. Home runs full-bleed under the bar (its hero
  * owns the 56 dp gutter); every other page sits inside the 5% title-safe area, below the bar when
@@ -63,20 +86,10 @@ internal fun TvShell(
     BackHandler(enabled = home && !barFocused) { state.focusActive() }
 
     Box(Modifier.fillMaxSize()) {
+        // Each page takes its own margins (TvPage): a page on its way out keeps its layout, rather than
+        // being drawn for a frame in the next page's (Discover filling the screen on the way to Home).
         Box(
             Modifier.fillMaxSize()
-                .then(
-                    when {
-                        // The side bar takes the left edge; pages start to its right and run to the top.
-                        side && fullBleed -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX)
-                        side -> Modifier.padding(start = TvSideWidth + TvInsets.SafeX + 8.dp, end = TvInsets.SafeX, bottom = TvInsets.SafeY, top = TvInsets.SafeY)
-                        fullBleed -> Modifier
-                        else -> Modifier.padding(
-                            start = TvInsets.SafeX, end = TvInsets.SafeX, bottom = TvInsets.SafeY,
-                            top = if (showBar) TvInsets.BarHeight else TvInsets.SafeY,
-                        )
-                    },
-                )
                 .focusRequester(contentFocus)
                 .focusGroup(),
         ) {
@@ -94,7 +107,8 @@ internal fun TvShell(
             // Home's backdrop runs under the bar: one Canvas-to-clear fill keeps the tabs legible.
             // Always drawn (one flat gradient is cheap, and without it the hero's meta row collides
             // with the icons at 3 m even on the low-end profile).
-            if (fullBleed) {
+            // Big Picture's home paints this fade inside its backdrop's layer (TvAmbient): one pass fewer.
+            if (fullBleed && !home) {
                 // Big Picture's TOP_FADE: the backdrop still shows through under the bar. The title
                 // page scrolls its text up under the bar, so there the bar's band is near solid.
                 val detail = route == DETAIL_ROUTE

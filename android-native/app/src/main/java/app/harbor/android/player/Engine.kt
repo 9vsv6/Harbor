@@ -53,6 +53,8 @@ interface Engine {
     /** 0 while unknown. */
     val durationMs: Long
     val bufferedMs: Long
+    /** Whether the engine is fetching video right now (so what arrives meanwhile is the connection's speed). */
+    val loading: Boolean get() = false
     fun seekTo(positionMs: Long)
     fun setSpeed(speed: Float)
     fun setFit(fit: Fit)

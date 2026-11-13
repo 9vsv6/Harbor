@@ -6,7 +6,11 @@ object WhisperNative {
     val available by lazy { runCatching { System.loadLibrary("harbor_whisper") }.isSuccess.also { loaded = it } }
     fun requestCancel() { if (loaded) cancel() }
     @JvmStatic external fun open(model: String): Long
-    @JvmStatic external fun transcribe(handle: Long, pcm: FloatArray, language: String): ByteArray
+    @JvmStatic external fun transcribe(handle: Long, pcm: FloatArray, language: String, threads: Int): ByteArray
+
+    /** Two on TVs and low-end phones (playback stays smooth); up to four where cores are free. */
+    val threads: Int get() = if (app.harbor.android.perf.Perf.isTv || app.harbor.android.perf.Perf.tier == app.harbor.android.perf.DeviceTier.LOW) 2
+        else (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
     @JvmStatic external fun close(handle: Long)
     @JvmStatic external fun cancel()
 

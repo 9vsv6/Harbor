@@ -201,7 +201,8 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     val display = HarborDisplay.settings
     LaunchedEffect(display.hideAnime) { if (display.hideAnime && view == BrowseView.Anime) onView(BrowseView.Home) }
 
-    Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
+    // A TV paints the page colour inside Big Picture's backdrop layer; the window's is the same colour.
+    Box(Modifier.fillMaxSize().then(if (Perf.isTv) Modifier else Modifier.background(HarborColors.Canvas))) {
         // TV: remember which title left Home, so Back from Detail puts focus on its tile again.
         val browse = remember(nav) {
             object : BrowseNav by nav {
@@ -263,7 +264,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
             }
         } else null
         if (tvRows != null) CompositionLocalProvider(LocalHomeFocusRestore provides true) {
-            app.harbor.android.ui.tv.TvBigPictureHome(tvRows, tmdbKey, { repository.metaAddons() }, browse::openMeta, nav::resume)
+            app.harbor.android.ui.tv.TvBigPictureHome(tvRows, tmdbKey, { repository.metaAddons() }, browse::openMeta, nav::resume, viewKey = view)
         } else CompositionLocalProvider(LocalHomeFocusRestore provides Perf.isTv) {
             LazyColumn(
                 state = listState,

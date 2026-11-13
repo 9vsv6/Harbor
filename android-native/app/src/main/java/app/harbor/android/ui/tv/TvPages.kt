@@ -176,9 +176,14 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
         results = emptyList()
         try {
             val found = runCatching { app.harbor.android.ui.searchCatalogs(repository, q) }
+            // A newer search replaced this one: it mustn't report "failed" over the new one.
+            (found.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
             searchFailed = found.isFailure
             results = found.getOrDefault(emptyList())
-        } finally { loading = false }
+        } finally {
+            // Cancelled by a newer search: that one owns the spinner now.
+            if (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive != false) loading = false
+        }
     }
     // While typing: text-only suggestions, your recent searches first, then title names (one light
     // Cinemeta lookup once you pause, no posters).

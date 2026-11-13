@@ -94,7 +94,7 @@ import kotlinx.coroutines.launch
 // Harbor PC's Big Picture settings (bp-settings.tsx, bp-settings-catalog.ts, bp-settings-parts.tsx,
 // bp-settings-pane.tsx) and its Accounts and TMDB page with phone setup (bp-connect.tsx).
 
-private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), SubtitleStyle("Subtitle appearance"), SubtitleTiming("Subtitle timing"), Playback("Playback"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
+private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
 
 private class Opt(val value: String, val label: String)
 
@@ -138,6 +138,7 @@ private fun <T> toggle(values: Set<T>, value: T) = if (value in values) values -
  * opens every setting.
  */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> Unit) {
     val settings by repository.settings.collectAsState()
     val prefs by repository.playerPrefs.collectAsState()
@@ -174,13 +175,12 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         BackHandler(enabled = depth == 2) { depth = 1 }
         val subLangs = (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct()
         val subPx = nearest(SubSizes, (prefs.subScale * 46f))
-        val summary: (Cat) -> String = { c ->
+        // Worked out once per change of settings, not again for every row on every focus move.
+        val summaries = remember(settings, prefs, autoPlay, connected) { Cat.entries.associateWith { c ->
             when (c) {
                 Cat.Picture -> overscanLabel(settings.tvOverscan)
                 Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
                 Cat.Subtitles -> listOfNotNull(subLangs.firstOrNull()?.let(::langName) ?: "Off", "${subPx}px").joinToString(" / ")
-                Cat.SubtitleStyle -> "${subPx}px / ${settings.subFont.takeUnless { it.startsWith("file:") } ?: "Custom font"}"
-                Cat.SubtitleTiming -> if (!settings.autoSyncExperimental) "Manual timing" else if (settings.subtitleAutoSync) "Auto-sync on" else "Manual / auto sync"
                 Cat.Playback -> if (autoPlay) "Instant play" else "Pick a source"
                 Cat.Sources -> if (settings.streamFilter.active) "Filters on" else "All resolutions and codecs"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
@@ -188,13 +188,15 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.Setup -> connected.joinToString(", ").ifEmpty { "Nothing connected" }
                 Cat.More -> "Every setting"
             }
-        }
+        } }
+        val summary: (Cat) -> String = { summaries.getValue(it) }
         val context = androidx.compose.ui.platform.LocalContext.current
         val scope = androidx.compose.runtime.rememberCoroutineScope()
         val update = app.harbor.android.data.AppUpdate.status
         val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
-        val controls = remember(active, settings, prefs, autoPlay, connected, update, speechModel) {
-            controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.SubtitleTiming && settings.autoSyncExperimental) listOf(
+        // Only once a category is open: on the list, every focus move would build options nobody sees.
+        val controls = if (depth != 2) emptyList() else remember(active, settings, prefs, autoPlay, connected, update, speechModel) {
+            controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.Subtitles && settings.autoSyncExperimental) listOf(
                 Control.Push("whisper", "Whisper Tiny speech model", when {
                     speechModel.downloading -> "Downloading… ${(speechModel.received * 100 / app.harbor.android.data.WhisperModel.BYTES)}%"
                     speechModel.installed -> "Installed locally · 74.1 MB"
@@ -204,12 +206,19 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             ) else emptyList()
         }
         val firstFocus = remember { FocusRequester() }
+        var paneReady by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { withFrameNanos { }; withFrameNanos { }; paneReady = true }
         val categoriesScroll = rememberLazyListState()
         val optionsScroll = rememberLazyListState()
         Row(Modifier.fillMaxSize().padding(top = u(8f)), horizontalArrangement = Arrangement.spacedBy(u(20f))) {
             // Inside a category the options run to the edge of the screen. Only Picture keeps the
             // side frame, since that frame is the setting.
             val wide = depth == 2 && active != Cat.Picture
+            // A row comes into view with room above it: its title, and the row before, stay on screen,
+            // so Up always has somewhere to go (flush to the edge, the titles hid and Up seemed to skip).
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val margin = with(density) { u(70f).toPx() }
+            CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides remember(margin) { tvPageScroll(margin, margin) }) {
             LazyColumn((if (wide) Modifier.weight(1f) else Modifier.width(u(258f))).fillMaxHeight(), state = if (depth == 1) categoriesScroll else optionsScroll, verticalArrangement = Arrangement.spacedBy(u(5f)), contentPadding = PaddingValues(bottom = u(40f))) {
                 if (depth == 1) {
                     itemsIndexed(Cat.entries) { i, c ->
@@ -225,9 +234,12 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                         }
                     }
                 } else {
-                    if (active == Cat.Subtitles || active == Cat.SubtitleStyle) item(key = "sample") { SubtitleSample(prefs, settings) }
+                    if (active == Cat.Subtitles) item(key = "sample") { SubtitleSample(prefs, settings) }
                     itemsIndexed(controls, key = { _, it -> it.id }) { i, control ->
                         val f = if (i == 0) firstFocus else null
+                        // Back at the first setting, the page shows its top again (the preview, the first title)
+                        // instead of the next Up leaving for the top bar with the top still hidden.
+                        Box(if (i == 0) Modifier.onFocusChanged { if (it.hasFocus) scope.launch { optionsScroll.animateScrollToItem(0) } } else Modifier) {
                         when (control) {
                             is Control.Options -> OptionRow(control, f) { commit(repository, control.id, it) }
                             is Control.Multi -> MultiRow(control, f) { commit(repository, control.id, it) }
@@ -251,10 +263,17 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                                 }
                             }
                         }
+                        }
                     }
                 }
             }
-            if (!wide) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f))
+            }
+            // The side pane (a picture, a subtitle sample) arrives a frame after the list, so a TV box
+            // shows the menu at once instead of building the whole page in one long frame.
+            if (!wide) {
+                if (paneReady) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f))
+                else Spacer(Modifier.weight(1f))
+            }
         }
         LaunchedEffect(depth) {
             if (depth == 1) categoriesScroll.scrollToItem(active.ordinal) else optionsScroll.scrollToItem(0)
@@ -314,10 +333,13 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
             Control.Options("chooseSubs", "Choose subtitles before playback", onOff(s.chooseSubsBeforePlayback), OnOff),
             Control.Options("hideSdh", "Hide sound effects and speaker names", onOff(s.hideSdh), OnOff),
             Control.Options("subDot", "Subtitle indicator dot", onOff(s.subIndicatorDot), OnOff),
-        )
+        ) + subtitleLook(s, p) + subtitleTiming(s)
     }
-    Cat.SubtitleStyle -> buildList {
-        add(Control.Options("subSize", "Size", nearest(SubSizes, p.subScale * 46f), SubSizes.map { Opt(it, "${it}px") }, letter = true))
+    else -> otherControls(cat, s, p, autoPlay, connected)
+}
+
+/** How subtitles look (part of the one Subtitles page). */
+private fun subtitleLook(s: AppSettings, p: app.harbor.android.data.PlayerPrefs): List<Control> = buildList {
         add(Control.Options("subFont", "Font", s.subFont,
             listOf(Opt("inter", "Inter"), Opt("system", "System"), Opt("condensed", "Condensed"), Opt("serif", "Serif"), Opt("mono", "Mono"), Opt("arabic", "Arabic")) +
                 s.customFonts.map { Opt("file:$it", java.io.File(it).nameWithoutExtension) }))
@@ -342,8 +364,10 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
             add(Control.Options("assSize", "Match my size (mpv)", onOff(s.assOverride == "scale"), OnOff))
             add(Control.Options("assFont", "Advanced: change font only (mpv)", onOff(s.assOverride == "font"), OnOff))
         } else add(Control.Options("assStrip", "Advanced: strip inline styling, signs and karaoke (mpv)", onOff(s.assStripStyles), OnOff))
-    }
-    Cat.SubtitleTiming -> buildList {
+}
+
+/** Sync and timing (part of the one Subtitles page). */
+private fun subtitleTiming(s: AppSettings): List<Control> = buildList {
         add(Control.Options("autoSyncExperimental", "Auto sync (Experimental)", onOff(s.autoSyncExperimental), OnOff))
         if (s.autoSyncExperimental) {
             add(Control.Options("subtitleAutoSync", "Auto-sync subtitles", onOff(s.subtitleAutoSync), OnOff))
@@ -351,7 +375,9 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
             add(Control.Options("autoSyncAsr", "Smart resync with speech recognition", onOff(s.subtitleAutoSyncAsr), OnOff))
         }
         add(Control.Options("syncIndicator", "Show sync indicator", onOff(s.subSyncIndicator), OnOff))
-    }
+}
+
+private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.PlayerPrefs, autoPlay: Boolean, connected: List<String>): List<Control> = when (cat) {
     Cat.Playback -> listOf(
         Control.Options("skipIntro", "Skip intros", onOff(p.autoSkipIntro), OnOff),
         Control.Options("autoNext", "Auto-play next episode", onOff(s.autoPlayNextEpisode), OnOff),
@@ -380,6 +406,9 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         Control.Options("switchStalled", "Automatically switch stalled sources", onOff(s.autoNextStreamOnStall), OnOff),
     ) + (if (s.autoNextStreamOnStall) listOf(Control.Options("stallWait", "Buffering time before switching", s.stallSec.toString(), secondsOptions(listOf(5, 10, 15, 30), s.stallSec))) else emptyList()) + listOf(
         Control.Options("streamSort", "Source order", s.streamSort, listOf(Opt("addon", "Addon order"), Opt("harbor", "Harbor ranking"))),
+        // What tops the list: what this TV plays without stopping (its screen size, its connection's
+        // measured speed), or the best quality whatever it costs (4K first, even on a 1080p screen).
+        Control.Options("smoothFirst", "Put first", onOff(s.smoothSourcesFirst), listOf(Opt("on", "Smooth on this TV"), Opt("off", "Best quality"))),
         Control.Multi("filterResolution", "Resolutions", filterItems(listOf("2160" to "4K", "1080" to "1080p", "720" to "720p", "480" to "SD"), s.streamFilter.resolutions.map { it.toString() }.toSet()), ranked = false),
         Control.Multi("filterSource", "Release types", filterItems(listOf("remux" to "Remux", "bluray" to "Blu-ray", "web" to "WEB"), s.streamFilter.sources), ranked = false),
         Control.Multi("filterCodec", "Video codecs", filterItems(listOf("hevc" to "HEVC", "av1" to "AV1", "h264" to "H.264"), s.streamFilter.codecs), ranked = false),
@@ -406,6 +435,7 @@ private fun controlsFor(cat: Cat, s: AppSettings, p: app.harbor.android.data.Pla
         Control.Action("setupAgain", "Run setup again"),
     )
     Cat.More -> emptyList()
+    else -> emptyList()
 }
 
 private fun commit(repository: Repository, id: String, value: String) {
@@ -482,6 +512,7 @@ private fun commit(repository: Repository, id: String, value: String) {
         "switchStalled" -> repository.updateSettings { it.copy(autoNextStreamOnStall = value == "on") }
         "stallWait" -> repository.updateSettings { it.copy(stallSec = value.toInt()) }
         "streamSort" -> repository.updateSettings { it.copy(streamSort = value) }
+        "smoothFirst" -> repository.updateSettings { it.copy(smoothSourcesFirst = value == "on") }
         "filterResolution" -> repository.updateSettings { s -> s.copy(streamFilter = s.streamFilter.copy(resolutions = if (value.isEmpty()) emptySet() else toggle(s.streamFilter.resolutions, value.toInt()))) }
         "filterSource" -> repository.updateSettings { s -> s.copy(streamFilter = s.streamFilter.copy(sources = if (value.isEmpty()) emptySet() else toggle(s.streamFilter.sources, value))) }
         "filterCodec" -> repository.updateSettings { s -> s.copy(streamFilter = s.streamFilter.copy(codecs = if (value.isEmpty()) emptySet() else toggle(s.streamFilter.codecs, value))) }
@@ -714,7 +745,7 @@ private fun SettingsPane(
                 )
                 Text(overscanLabel(s.tvOverscan), color = Color.White, fontSize = s(8f), fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = u(28f)))
             }
-            Cat.Subtitles, Cat.SubtitleStyle -> SubtitleSample(p, s, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            Cat.Subtitles -> SubtitleSample(p, s, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
             else -> {
                 val rows: List<Pair<String, String>> = when (cat) {
                     Cat.Language -> listOf(
@@ -728,9 +759,6 @@ private fun SettingsPane(
                         },
                         "Poster language" to when (s.imageLanguage) { "" -> "Same as the device"; "null" -> "No text"; else -> langName(s.imageLanguage) },
                     )
-                    Cat.SubtitleTiming -> if (!s.autoSyncExperimental) listOf("Auto sync (Experimental)" to "Off") else listOf("Auto-sync subtitles" to if (s.subtitleAutoSync) "On" else "Off",
-                        "Speech recognition" to if (s.subtitleAutoSyncAsr) "On (model required)" else "Off",
-                        "Corrections" to if (s.autoSyncApplyCorrections) "Apply automatically" else "Review first")
                     Cat.Playback -> listOf(
                         "Skip intros" to if (p.autoSkipIntro) "On" else "Off",
                         "Auto-play next episode" to if (s.autoPlayNextEpisode) "On" else "Off",
@@ -742,6 +770,7 @@ private fun SettingsPane(
                     )
                     Cat.Sources -> listOf(
                         "Source order" to if (s.streamSort == "addon") "Addon order" else "Harbor ranking",
+                        "Put first" to if (s.smoothSourcesFirst) "Smooth on this TV" else "Best quality",
                         "Remember last source" to if (s.rememberLastStream) "On" else "Off",
                         "Switch stalled sources" to if (s.autoNextStreamOnStall) "After ${s.stallSec} s" else "Off",
                         "Resolutions" to s.streamFilter.resolutions.sortedDescending().joinToString(" / ") { if (it == 2160) "4K" else "${it}p" }.ifEmpty { "Any" },

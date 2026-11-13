@@ -84,7 +84,7 @@ object Playback {
         val playable = { s: Stream -> s.playable(debrid != null) }
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
         val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service), anime)
-        val ordered = if (core != null && core.order.isNotEmpty()) {
+        val ranked = if (core != null && core.order.isNotEmpty()) {
             // Indices from the core are checked: a bad one is skipped rather than crashing the sources list.
             val top = core.primary?.let { kept.getOrNull(it) }
             val list = core.order.mapNotNull { kept.getOrNull(it) }
@@ -97,10 +97,21 @@ object Playback {
             val hi10p = if (media3) 500.0 else 100.0 // mpv can decode Hi10P in software, slowly.
             kept.sortedByDescending { Ranking.score(it.stream, playable(it.stream), hi10p, settings.streamLanguages) }
         }
+        // A TV puts the sources it can play smoothly first (its screen size, its connection's speed).
+        // The order within each part is kept: Harbor's ranking, or your addons' own order.
+        val ordered = if (!app.harbor.android.perf.Perf.isTv || !settings.smoothSourcesFirst) ranked
+        else ranked.sortedWith(
+            compareByDescending<RankedStream> { playable(it.stream) }
+                // The screen first: on a Full HD TV, 1080p before 4K whatever the connection reading says.
+                .thenByDescending { StreamFit.fitsScreen(it.stream) }
+                .thenByDescending { StreamFit.fitsNetwork(it.stream, type) },
+        )
         if (prefer == null) return ordered
         val match = ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) && (prefer.second == null || streamKey(it.stream) == prefer.second) }
             ?: ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) }.takeIf { prefer.second == null }
             ?: return ordered
+        // On a TV, a remembered source it can't play smoothly isn't pinned first again.
+        if (app.harbor.android.perf.Perf.isTv && settings.smoothSourcesFirst && !StreamFit.fits(match.stream, type)) return ordered
         return listOf(match) + (ordered - match)
     }
 

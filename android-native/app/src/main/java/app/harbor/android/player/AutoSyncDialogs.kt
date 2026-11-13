@@ -29,7 +29,7 @@ internal fun AutoSyncDialogs(state: PlayerState, actions: PlayerActions) {
     state.autoSyncError?.let { message ->
         val model by WhisperModel.state.collectAsState()
         // Speech recognition needs the model: download it right here instead of a trip to Settings.
-        val offerModel = message.contains("Whisper Tiny") || (model.downloading && !model.installed)
+        val offerModel = message.contains("Whisper Tiny")
         if (offerModel) {
             val context = LocalContext.current
             AlertDialog(onDismissRequest = actions::dismissAutoSync,

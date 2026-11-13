@@ -80,6 +80,8 @@ class PlayerState {
     /** Where a sideways swipe on the video will seek to: the seek bar shows it as a drag would. */
     var gestureSeekMs by mutableStateOf<Long?>(null)
     var liveSync by mutableStateOf<LiveSync?>(null)
+    /** TV: the small subtitle delay bar is open (Stremio's way: nudge while you watch and listen). */
+    var delayBar by mutableStateOf(false)
     var subTimeScale by mutableStateOf(1.0)
     /** X-Ray's cast, crew and facts for what's playing; null until loaded. */
     var xray by mutableStateOf<app.harbor.android.data.TmdbDetails?>(null)

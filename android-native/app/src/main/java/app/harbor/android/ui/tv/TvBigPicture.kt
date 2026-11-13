@@ -129,6 +129,7 @@ val TvServiceTints: Map<String, Color> = mapOf(
 internal val Void = Color(0xFF0E0F11)
 internal val FocusStroke = HarborColors.Ink.copy(alpha = 0.86f)
 internal val Panel = Color(0xFF17181B)
+private val PanelPainter = androidx.compose.ui.graphics.painter.ColorPainter(Panel)
 internal val Edge2 = HarborColors.Ink.copy(alpha = 0.18f)
 
 /** One unit of the 540 dp design height, so a 720 dp television draws the same picture larger. */
@@ -194,30 +195,38 @@ fun TvBigPictureHome(
     metaAddons: suspend () -> List<app.harbor.android.data.Addon>,
     onOpen: (Meta) -> Unit,
     onResume: (CwItem) -> Unit,
+    /** Which section this is (Home, Movies, Shows, Anime): a new one starts its spotlight over. */
+    viewKey: Any? = null,
 ) {
     val shown = remember(rows) { rows.filter { it.metas.isNotEmpty() || it.cw.isNotEmpty() || it.services.isNotEmpty() } }
     if (shown.isEmpty()) return
     // The spotlight's subject: the focused card's title, seeded with the first card of the first row.
     val seed = shown.first().let { it.cw.firstOrNull()?.meta ?: it.metas.firstOrNull() }
-    var subject by remember { mutableStateOf(seed) }
+    var subject by remember(viewKey) { mutableStateOf(seed) }
     if (subject == null && seed != null) subject = seed
     // On the streaming row the spotlight names the service instead (bp-section's band identity).
-    var band by remember { mutableStateOf<TvService?>(null) }
-    var activeRow by remember { mutableIntStateOf(0) }
+    var band by remember(viewKey) { mutableStateOf<TvService?>(null) }
+    var activeRow by remember(viewKey) { mutableIntStateOf(0) }
     // Up asks the row above for the ring by hand: it has scrolled out of the rail, so the focus search
     // would pass over it to the top bar.
     var focusRowAbove by remember { mutableStateOf<String?>(null) }
     val firstFocus = remember { FocusRequester() }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
+    // No page colour here: the backdrop below paints it inside its own layer.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val unit = (maxHeight.value / 540f).coerceIn(0.8f, 2.2f)
         CompositionLocalProvider(LocalUnit provides unit) {
             val enriched = rememberEnriched(subject, tmdbKey, metaAddons)
             val service = band
-            if (service != null) ServiceAmbient(service) else TvAmbient(enriched)
+            // The top bar's fade (TvShell draws it on other pages) is painted inside the backdrop's layer.
+            val topBar = HarborDisplay.settings.tvNavSide != "left"
+            val barFade = if (topBar) TvInsets.BarHeight + 24.dp else null
+            if (service != null) ServiceAmbient(service, barFade) else TvAmbient(enriched, barFade)
             val railTop = u(246f)
-            if (service != null) ServiceSpotlight(service, Modifier.fillMaxWidth().height(railTop - u(26f)))
-            else Spotlight(enriched, Modifier.fillMaxWidth().height(railTop - u(26f)))
+            // The title and its words stay below the top bar, however tall the logo.
+            val spotlight = Modifier.fillMaxWidth().height(railTop - u(26f)).padding(top = if (topBar) TvInsets.BarHeight else 0.dp)
+            if (service != null) ServiceSpotlight(service, spotlight)
+            else Spotlight(enriched, spotlight)
             // The rail: rows below the spotlight, scrolled by the remote alone.
             val listState = rememberLazyListState()
             LaunchedEffect(activeRow) {
@@ -297,7 +306,7 @@ private fun rememberEnriched(meta: Meta?, tmdbKey: String?, metaAddons: suspend 
 // ---- Ambient backdrop (bp-ambient-layers) ----
 
 @Composable
-internal fun TvAmbient(meta: Meta?) {
+internal fun TvAmbient(meta: Meta?, barFade: Dp? = null) {
     val context = LocalContext.current
     // The backdrop settles: scrubbing a row doesn't decode one image per card.
     var art by remember { mutableStateOf(meta?.background) }
@@ -307,8 +316,11 @@ internal fun TvAmbient(meta: Meta?) {
         delay(if (art == null) 0 else 260)
         art = next
     }
+    // The page colour is the window's own (nothing paints it again), the art is drawn straight onto
+    // it, and all of the shading is a single layer the GPU keeps: the art changes with every focus
+    // move, but the shading never does, so each frame puts it on screen in one pass instead of six.
     Box(Modifier.fillMaxSize()) {
-        // The art takes the right 76 % of the screen, fading in from its left edge (ENVELOPE).
+        // The art takes the right 76 % of the screen.
         Box(Modifier.fillMaxHeight().fillMaxWidth(0.76f).align(Alignment.TopEnd)) {
             val layer: @Composable (String?) -> Unit = { url ->
                 if (url != null) {
@@ -317,21 +329,16 @@ internal fun TvAmbient(meta: Meta?) {
                 }
             }
             if (Perf.motion) Crossfade(art, animationSpec = tween(520), label = "ambient") { layer(it) } else layer(art)
-            Box(
-                // Static shading: drawn once into a layer the GPU keeps, not shaded again every frame.
-                Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithCache {
-                    val envelope = Brush.horizontalGradient(
-                        0f to HarborColors.Canvas, 0.17f to HarborColors.Canvas.copy(alpha = 0.5f), 0.38f to Color.Transparent,
-                        endX = size.width,
-                    )
-                    onDrawBehind { drawRect(envelope) }
-                },
-            )
         }
-        // scrim-side, the page fade at the bottom, the top fade under the bar, and the void behind the copy:
-        // four full-screen gradients, kept as one cached layer the GPU draws in a single pass.
+        // The art fading in from its left edge (ENVELOPE), scrim-side, the page fade at the bottom, the
+        // top fade, the void behind the copy and the top bar's fade.
         Box(
             Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithCache {
+                val artLeft = size.width * 0.24f
+                val envelope = Brush.horizontalGradient(
+                    0f to HarborColors.Canvas, 0.17f to HarborColors.Canvas.copy(alpha = 0.5f), 0.38f to Color.Transparent,
+                    startX = artLeft, endX = size.width,
+                )
                 val side = Brush.horizontalGradient(
                     0f to Void.copy(alpha = 0.82f), 0.3f to Void.copy(alpha = 0.52f), 0.52f to Void.copy(alpha = 0.16f), 0.7f to Color.Transparent,
                     endX = size.width,
@@ -345,11 +352,14 @@ internal fun TvAmbient(meta: Meta?) {
                     0f to Void, 0.38f to Void.copy(alpha = 0.55f), 0.7f to Color.Transparent,
                     center = Offset(size.width * 0.08f, size.height * 0.38f), radius = size.width * 0.75f,
                 )
+                val bar = barFade?.toPx()?.let { h -> h to Brush.verticalGradient(0f to Color(0xCC0E0F11), 1f to Color.Transparent, endY = h) }
                 onDrawBehind {
+                    drawRect(envelope, topLeft = Offset(artLeft, 0f), size = Size(size.width - artLeft, size.height))
                     drawRect(side)
                     drawRect(floor)
                     drawRect(top)
                     drawRect(left)
+                    bar?.let { (h, brush) -> drawRect(brush, size = Size(size.width, h)) }
                 }
             },
         )
@@ -366,7 +376,8 @@ private fun Spotlight(meta: Meta?, modifier: Modifier) {
             Modifier.align(Alignment.BottomStart).padding(horizontal = TvInsets.Gutter),
             verticalArrangement = Arrangement.Bottom,
         ) {
-            SpotlightTitle(meta)
+            // Measured last, in whatever height the facts and description leave.
+            Box(Modifier.weight(1f, fill = false)) { SpotlightTitle(meta) }
             Spacer(Modifier.height(u(9f)))
             Row(horizontalArrangement = Arrangement.spacedBy(u(9f)), verticalAlignment = Alignment.CenterVertically) {
                 meta.imdbRating?.takeIf { it.isNotBlank() && !meta.id.startsWith("kitsu:") && !meta.id.startsWith("mal:") }?.let { ImdbBadge(it) }
@@ -447,7 +458,9 @@ private fun TvRailRow(
     if (takeFocus) LaunchedEffect(Unit) {
         // The row may still be coming back into the rail: try for a few frames.
         repeat(20) {
-            if (runCatching { cardRequester(focusedIndex.coerceAtLeast(0)).requestFocus() }.isSuccess) { onFocusTaken(); return@LaunchedEffect }
+            // The row can be shorter now (a finished title left Continue watching): the nearest card.
+            val target = focusedIndex.coerceIn(0, (count - 1).coerceAtLeast(0))
+            if (runCatching { cardRequester(target).requestFocus() }.isSuccess) { focusedIndex = target; onFocusTaken(); return@LaunchedEffect }
             delay(16)
         }
         onFocusTaken()
@@ -589,9 +602,17 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
     }
     val poster = local?.second ?: meta.poster
     val title = local?.first ?: meta.name
-    TvTileBox(width ?: u(121f), 2f / 3f, u(5f), requester, onFocused, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { focused ->
+    // The card's grey shows only until its poster arrives: under a loaded poster it would be one more
+    // full-card pass for the TV's GPU on every frame.
+    TvTileBox(
+        width ?: u(121f), 2f / 3f, u(5f), requester, onFocused, onClick = { TvReturnFocus.mark(meta.id); onClick() },
+        background = if (poster == null) Panel else Color.Transparent,
+    ) { focused ->
         val request = remember(poster) { poster?.let { ImageRequest.Builder(context).data(it).size(Perf.posterWidthPx, (Perf.posterWidthPx * 1.5f).toInt()).build() } }
-        if (request != null) AsyncImage(request, title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        if (request != null) AsyncImage(
+            request, title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+            placeholder = PanelPainter, error = PanelPainter, fallback = PanelPainter,
+        )
         CardTag(meta, Modifier.align(Alignment.TopStart))
         // The title shows on the focused card (or a card with no art), over a fade (bp-tile).
         if (focused || poster == null) {
@@ -798,7 +819,7 @@ private fun ServiceSpotlight(service: TvService, modifier: Modifier) {
 
 /** The page behind the streaming band: the service's colour washing in from the right, over the void. */
 @Composable
-private fun ServiceAmbient(service: TvService) {
+private fun ServiceAmbient(service: TvService, barFade: Dp?) {
     Box(
         Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.background(Void).drawWithCache {
             val wash = Brush.radialGradient(
@@ -806,9 +827,11 @@ private fun ServiceAmbient(service: TvService) {
                 center = Offset(size.width * 0.82f, size.height * 0.3f), radius = size.width * 0.7f,
             )
             val floor = Brush.verticalGradient(0.5f to Color.Transparent, 1f to HarborColors.Canvas, endY = size.height)
+            val bar = barFade?.toPx()?.let { h -> h to Brush.verticalGradient(0f to Color(0xCC0E0F11), 1f to Color.Transparent, endY = h) }
             onDrawBehind {
                 drawRect(wash)
                 drawRect(floor)
+                bar?.let { (h, brush) -> drawRect(brush, size = Size(size.width, h)) }
             }
         },
     )

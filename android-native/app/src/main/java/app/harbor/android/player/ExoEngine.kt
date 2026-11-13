@@ -212,6 +212,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override val positionMs get() = player.currentPosition
     override val durationMs get() = player.duration.takeIf { it != C.TIME_UNSET } ?: 0
     override val bufferedMs get() = player.bufferedPosition
+    override val loading get() = player.isLoading
     override fun seekTo(positionMs: Long) = player.seekTo(positionMs.coerceAtLeast(0))
     override fun setSpeed(speed: Float) = player.setPlaybackSpeed(speed)
     override fun setFit(fit: Fit) {

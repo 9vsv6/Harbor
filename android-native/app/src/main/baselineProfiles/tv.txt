@@ -1,0 +1,15 @@
+# Big Picture, the TV pages and the player are compiled when Harbor installs, so a TV box runs
+# them at full speed from the first launch instead of interpreting them until Android gets round
+# to compiling them (days later on a box that's rarely idle). The generated profile beside this
+# one follows a phone's journey and has none of the TV code.
+HSPLapp/harbor/android/ui/tv/**;->**(**)**
+Lapp/harbor/android/ui/tv/**;
+HSPLapp/harbor/android/player/**;->**(**)**
+Lapp/harbor/android/player/**;
+HSPLapp/harbor/android/ui/HomeScreen**;->**(**)**
+HSPLapp/harbor/android/ui/DetailScreen**;->**(**)**
+HSPLapp/harbor/android/ui/Episodes**;->**(**)**
+HSPLapp/harbor/android/ui/HarborDisplay**;->**(**)**
+HSPLapp/harbor/android/MainActivity**;->**(**)**
+HSPLapp/harbor/android/data/**;->**(**)**
+Lapp/harbor/android/data/**;

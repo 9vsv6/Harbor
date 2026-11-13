@@ -60,6 +60,9 @@ import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -414,6 +417,13 @@ private fun SyncLane(state: PlayerState, actions: PlayerActions) {
         item {
             Rail {
                 Label("Manual offset")
+                // Nudge while watching: the panel steps aside and a small bar takes the remote.
+                Chip("Adjust while watching", Icons.Rounded.Timer) {
+                    if (off) return@Chip
+                    state.panel = null
+                    state.controlsVisible = false
+                    state.delayBar = true
+                }
                 listOf(-1000L, -100L, 100L, 1000L).forEach { step ->
                     Chip(String.format(Locale.US, "%+.1fs", step / 1000f)) { actions.setSubDelay(state.subDelayMs + step) }
                 }
@@ -691,6 +701,56 @@ private fun LaneButton(label: String, onClick: () -> Unit) {
 // ---------------- Live sync on a TV ----------------
 
 /**
+ * The subtitle delay while you watch: a small bar at the bottom, the film carrying on above it.
+ * One row of buttons, moved along with Left / Right and pressed with OK: a short skip back, play or
+ * pause, a short skip forward (to hear a line again), then the delay itself, then Done. Back closes.
+ */
+@Composable
+internal fun TvDelayBar(state: PlayerState, actions: PlayerActions) {
+    androidx.activity.compose.BackHandler(enabled = state.delayBar) { state.delayBar = false }
+    if (!state.delayBar) return
+    val unit = (LocalConfiguration.current.screenHeightDp / 540f).coerceIn(0.8f, 2.2f)
+    CompositionLocalProvider(LocalUnit provides unit) {
+        val first = remember { FocusRequester() }
+        var hasFocus by remember { mutableStateOf(false) }
+        // The closing Subtitles panel hands focus back to the controls a moment later: keep asking.
+        // and while the bar is up nothing else should hold focus, so it's taken back whenever it slips away.
+        LaunchedEffect(Unit) { while (true) { if (!hasFocus) runCatching { first.requestFocus() }; delay(if (hasFocus) 400 else 60) } }
+        fun nudge(step: Long) = actions.setSubDelay(state.subDelayMs + step)
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Row(
+                Modifier.padding(bottom = u(22f)).clip(RoundedCornerShape(u(12f))).background(PanelColor.copy(alpha = 0.94f))
+                    .border(1.dp, Edge, RoundedCornerShape(u(12f)))
+                    .onFocusChanged { hasFocus = it.hasFocus }
+                    .padding(horizontal = u(14f), vertical = u(10f)),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(u(6f)),
+            ) {
+                LaneButton("-$SHORT_SKIP_SEC s") { actions.seekBy(-SHORT_SKIP_SEC * 1_000L) }
+                LaneButton(if (state.playing) "Pause" else "Play") { actions.togglePlay() }
+                LaneButton("+$SHORT_SKIP_SEC s") { actions.seekBy(SHORT_SKIP_SEC * 1_000L) }
+                Spacer(Modifier.width(u(10f)))
+                Text("Delay", color = HarborColors.InkSubtle, fontSize = s(9f), fontWeight = FontWeight.SemiBold)
+                LaneButton("-1 s") { nudge(-1_000) }
+                LaneButton("-0.1") { nudge(-100) }
+                Text(
+                    String.format(Locale.US, "%+.1f s", state.subDelayMs / 1000f), color = HarborColors.Ink, fontSize = s(17f),
+                    fontWeight = FontWeight.SemiBold, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
+                    modifier = Modifier.widthIn(min = u(58f)), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                Box(Modifier.focusRequester(first)) { LaneButton("+0.1") { nudge(100) } }
+                LaneButton("+1 s") { nudge(1_000) }
+                Spacer(Modifier.width(u(10f)))
+                LaneButton("Done") { state.delayBar = false }
+            }
+        }
+    }
+}
+
+/** A skip small enough to hear the same line again while timing subtitles. */
+private const val SHORT_SKIP_SEC = 3
+
+/**
  * Live sync for a remote: a card at the bottom, the video still playing above it. It shows the line
  * coming up, big, with the one before and after; press OK the moment you hear it and the subtitles
  * line up with it. Left and Right pick an earlier or later line (it stops following playback until you
@@ -772,7 +832,9 @@ internal fun TvLiveSync(state: PlayerState, actions: PlayerActions) {
                     color = HarborColors.InkSubtle, fontSize = s(8f), fontWeight = FontWeight.Medium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(u(8f))) {
+                    LaneButton("-$SHORT_SKIP_SEC s") { actions.seekBy(-SHORT_SKIP_SEC * 1_000L) }
                     LaneButton(if (state.playing) "Pause" else "Play") { actions.togglePlay() }
+                    LaneButton("+$SHORT_SKIP_SEC s") { actions.seekBy(SHORT_SKIP_SEC * 1_000L) }
                     if (pinned != null) LaneButton("Follow playback") { pinned = null }
                     if (session.dirty) LaneButton("Reset") { actions.liveSyncReset() }
                     Spacer(Modifier.weight(1f))

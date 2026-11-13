@@ -118,8 +118,8 @@ android {
         // Whisper has a private C++ runtime. mpv's newer shared runtime must keep winning
         // its existing dependency merge; substituting the NDK's can prevent mpv loading.
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
-        versionCode = 28
-        versionName = "1.0.16"
+        versionCode = 29
+        versionName = "1.0.17"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
@@ -153,6 +153,18 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            // Speed checks: -PharborPerf builds a release copy with its own id (app.harbor.android.perf),
+            // signed with the debug key, so it installs beside the real app without touching its data.
+            if (project.hasProperty("harborPerf")) {
+                applicationIdSuffix = ".perf"
+                signingConfig = signingConfigs.getByName("debug")
+                // -PharborTrace as well: readable names and a debuggable app, for method traces on a device.
+                if (project.hasProperty("harborTrace")) {
+                    isMinifyEnabled = false
+                    isShrinkResources = false
+                    isDebuggable = true
+                }
+            }
         }
     }
 

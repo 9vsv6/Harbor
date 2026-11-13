@@ -113,8 +113,12 @@ fun DetailScreen(
     val builtins by repository.builtins.collectAsState()
     // What the poster already knew shows at once, as Harbor's detail page does; the addon's
     // full entry (episodes, cast, links) replaces it when it arrives.
-    var meta by remember { mutableStateOf(MetaPreview.get(id)) }
-    var full by remember { mutableStateOf(false) }
+    // Back from Sources (or the player) the page is built again: what it had already loaded shows at
+    // once, rather than an empty page under the top bar while the addons answer a second time.
+    var meta by remember { mutableStateOf(MetaPreview.full(id) ?: MetaPreview.get(id)) }
+    var full by remember { mutableStateOf(MetaPreview.full(id) != null) }
+    // Asked the addons this time: a page shown from memory still refreshes (a new episode, say).
+    var fetched by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var details by remember {
         mutableStateOf(id.substringBefore(':').takeIf { it.startsWith("tt") }?.let { Tmdb.cachedDetails(it, type) })
@@ -233,13 +237,15 @@ fun DetailScreen(
     val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
 
     LaunchedEffect(addons, builtins, type, id) {
-        if (addons.isEmpty() || full) return@LaunchedEffect
+        if (addons.isEmpty() || fetched) return@LaunchedEffect
         val loaded = AddonClient.meta(repository.metaAddons(), type, id)
         if (loaded != null) {
             // Keep the preview's art where the addon has none.
             val preview = meta
             meta = loaded.copy(poster = loaded.poster ?: preview?.poster, background = loaded.background ?: preview?.background)
             full = true
+            fetched = true
+            meta?.let(MetaPreview::putFull)
         }
         // Built-ins load in the background; only give up once they have had their turn.
         failed = loaded == null && meta == null && builtins.isNotEmpty()
@@ -258,7 +264,8 @@ fun DetailScreen(
     val holdText = !detailsSettled && tmdbKey != null && Tmdb.localizes &&
         id.substringBefore(':').startsWith("tt")
 
-    Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
+    // A TV paints the page colour inside its backdrop's layer (TvAmbient); the window's is the same colour.
+    Box(Modifier.fillMaxSize().then(if (app.harbor.android.perf.Perf.isTv) Modifier else Modifier.background(HarborColors.Canvas))) {
         val current = meta
         when {
             current != null -> DetailBody(
@@ -1107,6 +1114,15 @@ object MetaPreview {
     fun put(meta: Meta) = synchronized(recent) { recent[meta.id] = meta }
 
     fun get(id: String): Meta? = synchronized(recent) { recent[id] }
+
+    // Whole entries (episodes, cast) as the addons gave them, for coming back to a page.
+    private val whole = object : LinkedHashMap<String, Meta>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Meta>?) = size > 12
+    }
+
+    fun putFull(meta: Meta) = synchronized(whole) { whole[meta.id] = meta }
+
+    fun full(id: String): Meta? = synchronized(whole) { whole[id] }
 }
 
 /** An IMDb score as Harbor shows it: 0 < score ≤ 10, one decimal ("7.0"). */

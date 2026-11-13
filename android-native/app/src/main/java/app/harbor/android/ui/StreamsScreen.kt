@@ -809,7 +809,7 @@ private fun TvSourcesPage(
         val row = facetRows.first { it.facet == facet }
         val options = listOf(Triple("All", "${row.total}", row.value == null)) + row.options.map { (v, c) -> Triple(v, "$c", row.value == v) }
         app.harbor.android.ui.tv.TvChoiceDialog(facet.label, options, onClose = { menu = null }) { i ->
-            onFacets(if (i == 0) facets - facet else facets + (facet to row.options[i - 1].first))
+            onFacets(if (i == 0) facets - facet else (row.options.getOrNull(i - 1)?.let { facets + (facet to it.first) } ?: facets))
             menu = null
         }
     }
@@ -819,7 +819,7 @@ private fun TvSourcesPage(
         val options = listOf(Triple("Every addon", "${all.orEmpty().size}", addonFilter == null)) +
             ids.map { id -> Triple(counts.getValue(id).first().addon.manifest.name, "${counts.getValue(id).size}", addonFilter == id) }
         app.harbor.android.ui.tv.TvChoiceDialog("Addons", options, onClose = { addonMenu = false }) { i ->
-            onAddon(if (i == 0) null else ids[i - 1])
+            onAddon(if (i == 0) null else ids.getOrNull(i - 1))
             addonMenu = false
         }
     }

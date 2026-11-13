@@ -39,7 +39,7 @@ Java_app_harbor_android_player_WhisperNative_close(JNIEnv *, jclass, jlong handl
 
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_app_harbor_android_player_WhisperNative_transcribe(JNIEnv *env, jclass, jlong handle,
-                                                     jfloatArray samples, jstring language) {
+                                                     jfloatArray samples, jstring language, jint threads) {
     auto *ctx = reinterpret_cast<whisper_context *>(handle);
     if (!ctx || !samples) { fail(env, "Speech recognition isn't ready."); return nullptr; }
     const auto count = env->GetArrayLength(samples);
@@ -53,14 +53,25 @@ Java_app_harbor_android_player_WhisperNative_transcribe(JNIEnv *env, jclass, jlo
     env->ReleaseStringUTFChars(language, lang);
     if (code.empty() || whisper_lang_id(code.c_str()) < 0) code = "auto";
     auto p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    p.n_threads = 2; // Keep playback responsive on TVs and smaller phones.
+    // Two on TVs and low-end phones keeps playback smooth; more where the cores are free.
+    p.n_threads = threads < 1 ? 2 : (threads > 6 ? 6 : threads);
     p.translate = false;
+    // Whisper hears 30 s at a time and pads anything shorter with silence, so a 10 s clip costs as
+    // much as 30. A clip under 30 s gets an encoder window its own length (plus a little), which
+    // makes a short clip several times cheaper: what lets a slow TV box recognize a sentence or two.
+    if (count < 16000 * 29) {
+        const int frames = static_cast<int>((static_cast<long long>(count) * 1500) / (16000 * 30)) + 64;
+        p.audio_ctx = frames < 1500 ? frames : 0;
+    }
     p.language = code.c_str();
     p.no_context = true;
     p.token_timestamps = true;
     p.max_len = 1;
     p.split_on_word = true;
     p.temperature = 0.0f;
+    // No retries at higher temperatures: an unsure stretch would otherwise be decoded up to five
+    // more times, which on a TV box means minutes. Sync needs the words it's sure of, not more guesses.
+    p.temperature_inc = 0.0f;
     p.suppress_blank = true;
     p.suppress_nst = true;
     p.no_speech_thold = 0.6f;

@@ -189,7 +189,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         val hint = state.hint
         if (hint != null) {
             // A sentence needs longer to read than "+10s".
-            delay(if (hint.length > 28) 3_500 else 900)
+            delay(if (hint.length > 90) 8_000 else if (hint.length > 28) 3_500 else 900)
             state.hint = null
         }
     }
@@ -259,7 +259,8 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 var left = false
                 var seekFrom = 0L
                 var seekDelta = 0L
-                detectDragGestures(
+                // A swipe cut off (the gesture restarting) mustn't leave the seek bar showing its target.
+                try { detectDragGestures(
                     onDragStart = { start ->
                         axis = 0
                         left = start.x < size.width / 2f
@@ -307,6 +308,8 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                             }
                         }
                     }
+                } } finally {
+                    if (state.gestureSeekMs != null) { state.gestureSeekMs = null; state.scrubbing = false }
                 }
             },
     ) {
@@ -365,6 +368,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         AutoSyncPill(state, actions)
         AutoSyncDialogs(state, actions)
         if (state.tv) TvLiveSync(state, actions) else LiveSyncPanel(state, actions)
+        if (state.tv) TvDelayBar(state, actions)
 
         if (state.stillWatching) StillWatching(state, actions)
         EndScreen(state, actions)
@@ -872,10 +876,17 @@ fun episodeCode(video: Video): String =
 private fun languageCode(lang: String): String = runCatching { Locale(lang).language }.getOrDefault(lang)
 
 fun languageName(lang: String): String {
-    val locale = Locale.forLanguageTag(lang).takeIf { it.language.isNotEmpty() } ?: Locale(lang)
-    return locale.getDisplayLanguage(Locale.getDefault()).takeIf { it.isNotBlank() && it != lang }?.replaceFirstChar { it.titlecase() }
-        ?: lang.uppercase()
+    // Looked up once per language: Android's language names come from ICU's data tables, which
+    // cost a TV box tens of milliseconds a name (Settings and the track menus ask on every move).
+    val shown = Locale.getDefault()
+    return languageNames.getOrPut("${shown.toLanguageTag()}|$lang") {
+        val locale = Locale.forLanguageTag(lang).takeIf { it.language.isNotEmpty() } ?: Locale(lang)
+        locale.getDisplayLanguage(shown).takeIf { it.isNotBlank() && it != lang }?.replaceFirstChar { it.titlecase() }
+            ?: lang.uppercase()
+    }
 }
+
+private val languageNames = java.util.concurrent.ConcurrentHashMap<String, String>()
 
 /** While casting: what's on the TV, with play/pause, ±10 s and Stop casting. */
 @Composable

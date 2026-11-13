@@ -352,7 +352,7 @@ private fun HarborRoot(repository: Repository) {
                 popEnterTransition = if (tv) ({ EnterTransition.None }) else ({ fadeIn(animationSpec = tween(700)) }),
                 popExitTransition = if (tv) ({ ExitTransition.None }) else ({ fadeOut(animationSpec = tween(700)) }),
             ) {
-                composable("discover") {
+                tvPage("discover") {
                     // Phones: the top bar, as on Home (the page's own Back steps aside).
                     if (!wide) androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
                         app.harbor.android.ui.PhoneTopBar(solid = true)
@@ -373,49 +373,49 @@ private fun HarborRoot(repository: Repository) {
                         onGenre = { type, genre -> nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre Movies") },
                     )
                 }
-                composable("calendar") { app.harbor.android.ui.CalendarScreen(repository, onBack = if (wide) null else ({ nav.popBackStack() }), onOpen = { open(it) }, onSettings = { nav.selectTab(Tab.Profile) }) }
-                composable("downloads") {
+                tvPage("calendar") { app.harbor.android.ui.CalendarScreen(repository, onBack = if (wide) null else ({ nav.popBackStack() }), onOpen = { open(it) }, onSettings = { nav.selectTab(Tab.Profile) }) }
+                tvPage("downloads") {
                     app.harbor.android.ui.DownloadsScreen(onBack = if (wide) null else ({ nav.popBackStack() })) { d ->
                         val uri = android.net.Uri.fromFile(java.io.File(d.file)).toString()
                         context.startActivity(PlayerActivity.intent(context, app.harbor.android.data.Ready(app.harbor.android.data.Stream(url = uri, name = "Downloaded"), uri), d.type, d.metaId, d.videoId, d.title))
                     }
                 }
-                composable("collections") {
+                tvPage("collections") {
                     if (tv) app.harbor.android.ui.tv.TvCollections(repository)
                     else app.harbor.android.ui.CollectionsScreen(repository, onBack = { nav.popBackStack() })
                 }
-                composable("rowgrid/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                tvPage("rowgrid/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
                     app.harbor.android.ui.RowGridScreen(back.arguments?.getString("key").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) })
                 }
-                composable("plugins") {
+                tvPage("plugins") {
                     app.harbor.android.ui.PluginsScreen(
                         onBack = if (wide) null else ({ nav.popBackStack() }),
                         onOpen = { nav.navigate("plugintitle/${enc(it.key)}") },
                         onSettings = { nav.navigate(Tab.Profile.route) },
                     )
                 }
-                composable("plugintitle/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                tvPage("plugintitle/{key}", arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
                     val key = back.arguments?.getString("key").orEmpty()
                     app.harbor.android.ui.PluginTitleScreen(key, onBack = { nav.popBackStack() }) { stream, title, data ->
                         val url = stream.url ?: return@PluginTitleScreen
                         context.startActivity(PlayerActivity.intent(context, app.harbor.android.data.Ready(stream, url), "movie", "plugin:$key", "plugin:$data", title))
                     }
                 }
-                composable("spooktober") { app.harbor.android.ui.SpooktoberScreen(onBack = { nav.popBackStack() }, onOpen = { open(it) }) }
-                composable("collection/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { back ->
+                tvPage("spooktober") { app.harbor.android.ui.SpooktoberScreen(onBack = { nav.popBackStack() }, onOpen = { open(it) }) }
+                tvPage("collection/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { back ->
                     app.harbor.android.ui.CollectionScreen(repository, back.arguments?.getInt("id") ?: 0, onBack = { nav.popBackStack() }, onOpen = { open(it) })
                 }
-                composable("list/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) { back ->
+                tvPage("list/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) { back ->
                     app.harbor.android.ui.CuratedListScreen(back.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) })
                 }
-                composable(Tab.Home.route) { HomeScreen(repository, browse, browseView, { browseView = it }, showSwitcher = !wide) }
-                composable(Tab.Search.route) {
+                tvPage(Tab.Home.route) { HomeScreen(repository, browse, browseView, { browseView = it }, showSwitcher = !wide) }
+                tvPage(Tab.Search.route) {
                     if (tv) app.harbor.android.ui.tv.TvSearch(repository) { open(it) }
                     else SearchScreen(repository, onOpen = { open(it) }) { type, genre ->
                         nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre ${if (type == "movie") "Movies" else "Shows"}")
                     }
                 }
-                composable(Tab.MyStuff.route) {
+                tvPage(Tab.MyStuff.route) {
                     if (tv) app.harbor.android.ui.tv.TvLibrary(repository) { open(it) }
                     else LibraryScreen(
                         repository, onOpen = { open(it) }, onResume = browse::resume,
@@ -427,15 +427,15 @@ private fun HarborRoot(repository: Repository) {
                         },
                     )
                 }
-                composable(Tab.Profile.route) {
+                tvPage(Tab.Profile.route) {
                     // TV: Big Picture's settings (ui/tv/TvSettings.kt); "Every setting" opens these.
                     if (tv) app.harbor.android.ui.tv.TvSettings(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) })
                     else SettingsScreen(repository, onOpenAddons = { nav.navigate("addons") }, onExit = { nav.selectTab(Tab.Home) })
                 }
-                composable("addons") { AddonsScreen(repository, onBack = { nav.popBackStack() }) }
+                tvPage("addons") { AddonsScreen(repository, onBack = { nav.popBackStack() }) }
                 // Harbor's person and award pages; their links are plain pushes so one person leads to the next.
                 val peopleRoute: (String) -> Unit = { r -> if (r == Tab.Profile.route) nav.selectTab(Tab.Profile) else nav.navigate(r) }
-                composable(
+                tvPage(
                     app.harbor.android.ui.PeopleRoutes.PERSON,
                     arguments = listOf(
                         navArgument("id") { type = NavType.IntType; defaultValue = -1 },
@@ -451,13 +451,13 @@ private fun HarborRoot(repository: Repository) {
                         onRoute = peopleRoute,
                     )
                 }
-                composable(app.harbor.android.ui.PeopleRoutes.AWARD, arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
+                tvPage(app.harbor.android.ui.PeopleRoutes.AWARD, arguments = listOf(navArgument("key") { type = NavType.StringType })) { back ->
                     app.harbor.android.ui.AwardScreen(back.arguments?.getString("key").orEmpty(), onBack = { nav.popBackStack() }, onOpen = { open(it) }, onRoute = peopleRoute)
                 }
-                composable(app.harbor.android.ui.PeopleRoutes.AWARDS) {
+                tvPage(app.harbor.android.ui.PeopleRoutes.AWARDS) {
                     app.harbor.android.ui.AwardsScreen(onBack = { nav.popBackStack() }, onRoute = peopleRoute)
                 }
-                composable(
+                tvPage(
                     "detail/{type}/{id}",
                     arguments = listOf(navArgument("type") { type = NavType.StringType }, navArgument("id") { type = NavType.StringType }),
                 ) { back ->
@@ -472,7 +472,7 @@ private fun HarborRoot(repository: Repository) {
                         onOpen = { open(it) },
                     )
                 }
-                composable(
+                tvPage(
                     "catalog/{addon}/{type}/{id}?genre={genre}&title={title}",
                     arguments = listOf(
                         navArgument("addon") { type = NavType.StringType },
@@ -494,7 +494,7 @@ private fun HarborRoot(repository: Repository) {
                         onOpen = { open(it) },
                     )
                 }
-                composable(
+                tvPage(
                     "tmdbrow?spec={spec}&title={title}",
                     arguments = listOf(
                         navArgument("spec") { type = NavType.StringType; defaultValue = "" },
@@ -511,7 +511,7 @@ private fun HarborRoot(repository: Repository) {
                         tmdb = spec,
                     )
                 }
-                composable(
+                tvPage(
                     "streams/{type}/{metaId}/{videoId}?title={title}&queue={queue}",
                     arguments = listOf(
                         navArgument("type") { type = NavType.StringType },
@@ -731,3 +731,10 @@ private fun androidx.compose.foundation.layout.ColumnScope.RailIcon(glyph: Int, 
         Icon(androidx.compose.ui.res.painterResource(glyph), label, tint = if (on) HarborColors.Accent else HarborColors.Ink.copy(alpha = 0.82f), modifier = Modifier.size(24.dp))
     }
 }
+
+/** A NavHost page, inside the TV chrome's margins for its route (see TvPage). Phones: as composable. */
+private fun androidx.navigation.NavGraphBuilder.tvPage(
+    route: String,
+    arguments: List<androidx.navigation.NamedNavArgument> = emptyList(),
+    content: @Composable (androidx.navigation.NavBackStackEntry) -> Unit,
+) = composable(route, arguments = arguments) { entry -> app.harbor.android.ui.tv.TvPage(route) { content(entry) } }

@@ -65,8 +65,11 @@ object I18n {
     private val ownNames: Set<String> = UiLanguages.all.flatMap { listOf(it.native, it.greeting) }.toSet()
 
     /** Arabic letters join: spacing them apart breaks the words (and their measured width). */
-    private val arabic = Regex("[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
-    fun joinsLetters(text: String) = arabic.containsMatchIn(text)
+    // Checked for every Text on screen, so a plain scan rather than a regex.
+    fun joinsLetters(text: String) = text.any { c ->
+        c in '\u0600'..'\u06FF' || c in '\u0750'..'\u077F' || c in '\uFB50'..'\uFDFF' || c in '\uFE70'..'\uFEFF'
+    }
+    private val spaces = Regex("""\s+""")
 
     fun load(context: Context, language: String) {
         if (language == code && (language == "en" || table.isNotEmpty())) return
@@ -85,7 +88,7 @@ object I18n {
      */
     fun tr(text: String): String {
         if (table.isEmpty() || text.length < 2 || text in ownNames) return text
-        val key = text.replace("...", "…").replace(Regex("""\s+"""), " ").trim().lowercase()
+        val key = text.replace("...", "…").replace(spaces, " ").trim().lowercase()
         val found = table[key] ?: return text
         val caps = text.any { it.isLetter() } && text.none { it.isLowerCase() } && text.count { it.isLetter() } > 1
         return if (caps) found.uppercase(java.util.Locale.forLanguageTag(code)) else found

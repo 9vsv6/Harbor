@@ -112,6 +112,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var secondaryDone = false
     /** When buffering started, for switching source on a stall; 0 when not buffering. */
     private var bufferingSince = 0L
+    private var fitSavedAt = 0L
+    private var heavyToldFor: String? = "none"
+    private var rebuffers = 0
+    private var bestBandwidth = 0L
+    private var rxFrom = 0L
+    private var rxSince = 0L
+    private var lastSeekAt = 0L
     /** The addon and source playing now, for "keep the same source" and stall switching. */
     private var currentAddonId: String? = null
     /** The play queue item this video is (PlayQueue), or null when it wasn't started from the queue. */
@@ -335,7 +342,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             if (intent.getBooleanExtra("autosync", false)) lifecycleScope.launch {
                 kotlinx.coroutines.delay(5_000)
                 selectSubtitle(SubChoice.Addon(sub))
-                while (subtitleFile == null) kotlinx.coroutines.delay(500)
+                while (subtitleFile == null || state.durationMs <= 0) kotlinx.coroutines.delay(500)
                 startAutoSync()
             }
         } else loadAddonSubtitles(videoId)
@@ -399,7 +406,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 if (duration > 0) {
                     pendingFraction = null
                     val target = (duration * fraction).toLong()
-                    seekNow(target)
+                    seekNow(target, byUser = false)
                     state.resumedFromMs = target
                 }
             }
@@ -460,6 +467,31 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 state.hintIcon = 0
             }
 
+            // What this connection carries, measured while you watch, for the next source list (StreamFit).
+            val now = System.currentTimeMillis()
+            // What actually arrives while the player is fetching, over 5-second stretches; the best this session.
+            // (Media3's own meter reads well under the real speed on TV boxes.)
+            // Read only at the start and end of each stretch: on old Android every reading is a call into
+            // the system process, too much to make four times a second on a TV box.
+            if (engine.loading && state.castingTo == null) {
+                if (rxFrom == 0L) { rxFrom = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid()); rxSince = now }
+                else if (now - rxSince >= 5_000) {
+                    val bytes = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid())
+                    if (bytes > rxFrom) bestBandwidth = maxOf(bestBandwidth, (bytes - rxFrom) * 8_000 / (now - rxSince))
+                    rxFrom = bytes; rxSince = now
+                }
+            } else rxFrom = 0L
+            if (state.hasPlayed && bestBandwidth > 0 && now - fitSavedAt > 30_000) {
+                fitSavedAt = now
+                app.harbor.android.data.StreamFit.remember(bestBandwidth)
+            }
+            // A source too heavy for the connection stalls again and again: say so once, with what would play.
+            if (state.buffering && state.hasPlayed && (rebuffers >= 3 || bufferingSince in 1 until now - 6_000) && heavyToldFor != currentStreamKey) {
+                heavyToldFor = currentStreamKey
+                app.harbor.android.data.StreamFit.remember(bestBandwidth, stalled = true)
+                currentStream?.let { app.harbor.android.data.StreamFit.heavyReason(it, type) }?.let { state.hint = it; state.hintIcon = 0 }
+            }
+
             // Harbor's "next source when a stream stalls".
             if (state.buffering && !state.ended && state.error == null && state.castingTo == null) {
                 if (bufferingSince == 0L) bufferingSince = System.currentTimeMillis()
@@ -498,6 +530,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     override fun onBufferingChanged(buffering: Boolean) {
+        // Stalls once playback is under way (not the first load, not a seek's), for the too-heavy notice.
+        if (buffering && !state.buffering && state.hasPlayed && System.currentTimeMillis() - lastSeekAt > 3_000) rebuffers++
         state.buffering = buffering
     }
 
@@ -768,6 +802,17 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     /** This episode's season and number from the video id (tt…:1:2), for picking it from a season pack. */
+    /**
+     * A subtitle whose name says it's for another episode ("MobLand S01E01.srt" offered for episode 2,
+     * as addons sometimes do): never picked by itself. You can still choose it from the menu.
+     */
+    private fun otherEpisode(sub: app.harbor.android.data.Subtitle): Boolean {
+        val (season, episode) = seasonEpisode()
+        if (season == null || episode == null) return false
+        val name = listOfNotNull(sub.label, sub.release, sub.id).joinToString(" ")
+        return SubtitleEpisode.names(name, season, episode) == false
+    }
+
     private fun seasonEpisode(): Pair<Int?, Int?> {
         val parts = state.videoId.split(':')
         return parts.getOrNull(parts.size - 2)?.toIntOrNull()?.takeIf { parts.size >= 3 } to parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 }
@@ -915,7 +960,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             }
             // The addons haven't answered yet: wait for them before settling on anything.
             val addon = state.addonSubs ?: return
-            addon.firstOrNull { sameLanguage(it.lang, lang) && !(settings.hideSdh && isSdh(it.id, null)) }?.let {
+            addon.firstOrNull { sameLanguage(it.lang, lang) && !(settings.hideSdh && isSdh(it.id, null)) && !otherEpisode(it) }?.let {
                 autoSubDone = true
                 applySubtitle(SubChoice.Addon(it), remember = false)
                 return
@@ -1045,7 +1090,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             KeyEvent.KEYCODE_MEDIA_NEXT -> { if (down && event.repeatCount == 0 && state.next != null) playNext(); return true }
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                 // The live sync panel handles Back itself.
-                if (state.liveSync != null) return super.dispatchKeyEvent(event)
+                if (state.liveSync != null || state.delayBar) return super.dispatchKeyEvent(event)
                 // The release goes with its press: a press that closed something never leaves the player.
                 if (!down) {
                     if (!backPressHandled) return super.dispatchKeyEvent(event)
@@ -1058,7 +1103,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 return if (handled) true else super.dispatchKeyEvent(event)
             }
         }
-        val hidden = !state.controlsVisible && state.panel == null && state.endScreen == null && state.liveSync == null
+        val hidden = !state.controlsVisible && state.panel == null && state.endScreen == null && state.liveSync == null && !state.delayBar
         // The Connecting page has its own buttons: the remote goes to them, not to play/pause and seeking.
         if (!hidden || state.locked || state.tvCovered) return super.dispatchKeyEvent(event)
         when (code) {
@@ -1128,8 +1173,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.hint = if (kotlin.math.abs(moved) == kotlin.math.abs(deltaMs)) label else "$label  ·  ${clock(target)}"
     }
 
-    /** An immediate seek: drops any coalesced one still waiting. */
-    private fun seekNow(positionMs: Long) {
+    /**
+     * An immediate seek: drops any coalesced one still waiting. `byUser` false for Harbor's own
+     * (a resume point arriving late); every other seek means you moved, and stays where you put it.
+     */
+    private fun seekNow(positionMs: Long, byUser: Boolean = true) {
+        if (byUser) userSeekedAt = System.currentTimeMillis()
+        lastSeekAt = System.currentTimeMillis()
         ticker.removeCallbacks(settleSeek)
         pendingSeekMs = -1L
         state.seekPreviewMs = null
@@ -1154,6 +1204,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun back() = finish()
 
     override fun togglePlay() {
+        // Your own play or pause wins: auto sync won't resume a film you paused while it listened.
+        heldForSync = false
         when {
             engine.ended -> {
                 seekNow(0)
@@ -1164,10 +1216,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
     }
 
-    override fun seekTo(positionMs: Long) {
-        userSeekedAt = System.currentTimeMillis()
-        seekNow(positionMs.coerceAtLeast(0))
-    }
+    override fun seekTo(positionMs: Long) = seekNow(positionMs.coerceAtLeast(0))
 
     private var userSeekedAt = 0L
 
@@ -1187,7 +1236,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             if (attempt != playbackAttempt || state.videoId != videoId || userSeekedAt > openedAt) return@launch
             val duration = engine.durationMs
             if (duration > 0 && remote >= duration * 0.95) return@launch
-            seekNow(remote)
+            seekNow(remote, byUser = false)
             state.resumedFromMs = if (state.settings.resumeNotice && remote > 30_000) remote else 0
         }
     }
@@ -1317,6 +1366,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private var autoSyncJob: kotlinx.coroutines.Job? = null
     private var syncGeneration = 0
+    /** Auto sync paused the film to listen (a slow TV), and will play it again when done. */
+    private var heldForSync = false
     private var automaticSyncKey = ""
     private var syncingAutomatically = false
     private var lastSyncFailed = false
@@ -1392,6 +1443,19 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     onStep = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Listening to the audio… ${done + 1} of $of" else "Matching the lines…" },
                     useSpeech = useSpeech, forceSpeech = forceSpeech, audioLanguage = audioLanguage, caFile = certificates,
                     onSpeech = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Recognizing speech… ${done + 1} of $of" else "Matching the words…" },
+                    // A slow TV: the film waits while a few sentences are recognized, then carries on
+                    // (only if it was playing, and only if you didn't pause or play it yourself meanwhile).
+                    onHold = { hold ->
+                        runOnUiThread {
+                            if (hold) {
+                                heldForSync = engine.isPlaying
+                                if (heldForSync) { engine.pause(); state.hint = "Paused while Harbor listens to a few sentences"; state.hintIcon = 0 }
+                            } else if (heldForSync) {
+                                heldForSync = false
+                                if (!engine.isPlaying && attempt == playbackAttempt) engine.play()
+                            }
+                        }
+                    },
                     ensureSpeechResources = {
                         val manager = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
                         val memory = android.app.ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }
@@ -1648,6 +1712,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         currentAddonId = ready.addonId ?: currentAddonId
         currentStreamKey = Playback.streamKey(ready.stream)
         currentSource = AdSkip.sourceKey(ready.stream)
+        rebuffers = 0
         showSource()
         if (videoId != state.videoId) stalledKeys.clear()
         begin(videoId, ready.url, startAt, preferLocal = videoId != state.videoId)
