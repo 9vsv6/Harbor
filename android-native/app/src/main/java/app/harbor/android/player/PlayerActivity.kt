@@ -878,18 +878,35 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         lifecycleScope.launch {
             val subs = withTimeoutOrNull(15_000) { AddonClient.subtitles(repository.addons.value, type, videoId) }.orEmpty()
             if (state.videoId != videoId) return@launch
-            state.addonSubs = subs.distinctBy { it.url }
+            state.addonSubs = ranked(subs.distinctBy { it.url })
             maybeAutoSelectAddon(engine.textTracks())
             // Harbor's own sources (SubDL, Subsource, Wyzie, OpenSubtitles) join in as they arrive.
             val native = withTimeoutOrNull(25_000) { nativeSubtitles(videoId) }.orEmpty()
             if (state.videoId != videoId || native.isEmpty()) return@launch
-            state.addonSubs = (state.addonSubs.orEmpty() + native).distinctBy { it.url }
+            state.addonSubs = ranked((state.addonSubs.orEmpty() + native).distinctBy { it.url })
             // What's on (nothing, or only the video's default track) isn't in your languages: these may have one.
             // Late sources may still give a first subtitle; replacing one that's on is Harbor's
             // "Upgrade subtitles when better ones load" (off keeps the current track).
             if (!userPickedSub && !showingWantedLanguage() && (state.subChoice == SubChoice.Off || state.settings.upgradeSubtitles)) autoSubDone = false
             maybeAutoSelectAddon(engine.textTracks())
         }
+    }
+
+    /** The playing file's release name (filename, else the source's title), for matching subtitles to it. */
+    private fun videoRelease(): String = listOfNotNull(
+        currentStream?.behaviorHints?.filename, currentStream?.title, currentStream?.description, currentStream?.name,
+    ).joinToString(" ")
+
+    /**
+     * Subtitles made for the playing release first (the same group, or source and service): they're
+     * usually in sync as they are, so the automatic choice picks one of them. The rest keep their order.
+     */
+    private fun ranked(subs: List<app.harbor.android.data.Subtitle>): List<app.harbor.android.data.Subtitle> {
+        val video = videoRelease()
+        if (video.isBlank()) { state.matchingSubs = emptySet(); return subs }
+        val score = subs.associate { it.url to ReleaseMatch.score(listOfNotNull(it.label, it.release, it.id).joinToString(" "), video) }
+        state.matchingSubs = subs.filter { (score[it.url] ?: 0) >= 3 }.map { it.url }.toSet()
+        return subs.sortedByDescending { score[it.url] ?: 0 }
     }
 
     private suspend fun nativeSubtitles(videoId: String): List<app.harbor.android.data.Subtitle> {
@@ -1406,6 +1423,69 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         runAutoSync(automatic = false)
     }
 
+    /**
+     * Auto sync without the audio: the subtitle lined up with another one in the film's language,
+     * downloaded from your subtitle sources. A reference made for the playing release is trusted on
+     * its own; otherwise two references have to agree. Null when there's no clear answer.
+     */
+    private suspend fun referenceSync(
+        target: List<SubtitleFile.Cue>, targetUrl: String, audioLanguage: String, onStatus: (String) -> Unit,
+    ): AudioSync.Result? {
+        val language = audioLanguage.ifEmpty { "en" }
+        val video = videoRelease()
+        fun usable(it: app.harbor.android.data.Subtitle) =
+            it.url != targetUrl && app.harbor.android.data.AudioChoices.sameLanguage(it.lang, language) && !app.harbor.android.data.SubtitleNames.forced(it)
+        // Your subtitle sources usually fetch only your own languages: if they gave none in the film's
+        // language, OpenSubtitles' public Stremio addon (every language, no account) is asked for some.
+        val listed = state.addonSubs.orEmpty().filter(::usable)
+        val extra = if (listed.size >= 2) emptyList() else openSubtitlesIn(language).filter(::usable)
+        val candidates = (listed + extra).distinctBy { it.url }
+            .sortedByDescending { ReleaseMatch.score(listOfNotNull(it.label, it.release, it.id).joinToString(" "), video) }
+            .take(4)
+        if (candidates.isEmpty()) return null
+        onStatus("Comparing with ${languageName(language)} subtitles…")
+        val (season, episode) = seasonEpisode()
+        val found = mutableListOf<Pair<AudioSync.Result, Boolean>>()
+        for (ref in candidates) {
+            kotlinx.coroutines.yield()
+            val cues = runCatching { SubtitleFile.load(ref.url, ref.lang, season, episode).lines }.getOrNull() ?: continue
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { ReferenceSync.solve(target, cues) } ?: continue
+            val sameRelease = ReleaseMatch.matches(listOfNotNull(ref.label, ref.release, ref.id).joinToString(" "), video)
+            if (sameRelease) return result.copy(method = "the ${languageName(language)} subtitle made for this release")
+            found += result to sameRelease
+            // Two references that agree (same shift within 0.3 s, same frame rate) settle it.
+            val agree = found.dropLast(1).firstOrNull { (o, _) ->
+                kotlin.math.abs(o.offsetMs - result.offsetMs) <= 300 && kotlin.math.abs(o.timeScale - result.timeScale) < 1e-6
+            }
+            if (agree != null) return result.copy(
+                offsetMs = (agree.first.offsetMs + result.offsetMs) / 2,
+                confidence = maxOf(agree.first.confidence, result.confidence),
+                method = "two ${languageName(language)} subtitles",
+            )
+        }
+        return null
+    }
+
+    /** OpenSubtitles' subtitles for this video in [language], from its public Stremio addon. */
+    private suspend fun openSubtitlesIn(language: String): List<app.harbor.android.data.Subtitle> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val kind = if (type == "movie") "movie" else "series"
+                val body = app.harbor.android.data.Net.get("https://opensubtitles-v3.strem.io/subtitles/$kind/${state.videoId}.json")
+                val list = (app.harbor.android.data.Net.json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)["subtitles"]
+                    as? kotlinx.serialization.json.JsonArray ?: return@runCatching emptyList()
+                list.mapNotNull { e ->
+                    val o = e as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+                    fun str(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    val url = str("url") ?: return@mapNotNull null
+                    val lang = str("lang") ?: return@mapNotNull null
+                    if (!app.harbor.android.data.AudioChoices.sameLanguage(lang, language)) return@mapNotNull null
+                    app.harbor.android.data.Subtitle(id = str("id"), url = url, lang = lang,
+                        label = str("subtitleFileName"), release = str("movieReleaseName"), from = "OpenSubtitles")
+                }.take(8)
+            }.getOrDefault(emptyList())
+        }
+
     private fun runAutoSync(automatic: Boolean) {
         if (!automatic) state.panel = null
         if (autoSyncJob?.isActive == true) return
@@ -1432,14 +1512,17 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val baseDelay = state.subDelayMs
         val baseScale = state.subTimeScale
         val useSpeech = state.settings.subtitleAutoSyncAsr
-        val forceSpeech = !automatic && lastSyncFailed && useSpeech && app.harbor.android.data.WhisperModel.state.value.installed
+        val forceSpeech = useSpeech && app.harbor.android.data.WhisperModel.state.value.installed &&
+            ((!automatic && lastSyncFailed) || state.settings.autoSyncAlwaysSpeech)
         state.autoSyncOffer = null; state.autoSyncError = null
         state.autoSync = "Listening to the audio…"
         syncingAutomatically = automatic
         autoSyncJob = lifecycleScope.launch {
             try {
+                // First, in a second or two: line the subtitle up with a well-timed one in the film's language.
+                val reference = referenceSync(file!!.lines, (choice as SubChoice.Addon).subtitle.url, audioLanguage) { if (generation == syncGeneration) state.autoSync = it }
                 val certificates = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { MpvEngine.caBundle(this@PlayerActivity) }
-                val r = AudioSync.run(state.currentUrl, headers, audioTrack, state.durationMs, file!!.lines, cacheDir,
+                val r = reference ?: AudioSync.run(state.currentUrl, headers, audioTrack, state.durationMs, file!!.lines, cacheDir,
                     onStep = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Listening to the audio… ${done + 1} of $of" else "Matching the lines…" },
                     useSpeech = useSpeech, forceSpeech = forceSpeech, audioLanguage = audioLanguage, caFile = certificates,
                     onSpeech = { done, of -> if (generation == syncGeneration) state.autoSync = if (done < of) "Recognizing speech… ${done + 1} of $of" else "Matching the words…" },
@@ -1714,6 +1797,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         currentSource = AdSkip.sourceKey(ready.stream)
         rebuffers = 0
         showSource()
+        // Another file: other subtitles are now the ones made for it.
+        state.addonSubs?.let { state.addonSubs = ranked(it) }
         if (videoId != state.videoId) stalledKeys.clear()
         begin(videoId, ready.url, startAt, preferLocal = videoId != state.videoId)
     }

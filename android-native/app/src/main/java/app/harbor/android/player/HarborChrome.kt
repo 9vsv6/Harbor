@@ -913,7 +913,10 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, prefs: PlayerPrefs,
                                 itemsIndexed(rows, key = { _, it -> "a" + it.url }) { i, sub ->
                                     TrackRow(
                                         title = subtitleTitle(sub),
-                                        meta = listOfNotNull(languageName(sub.lang), subtitleSource(sub), subtitleFormat(sub)).joinToString(" · "),
+                                        meta = listOfNotNull(
+                                            languageName(sub.lang), subtitleSource(sub), subtitleFormat(sub),
+                                            "Matches this source".takeIf { sub.url in state.matchingSubs },
+                                        ).joinToString(" · "),
                                         language = sub.lang,
                                         selected = (state.subChoice as? SubChoice.Addon)?.subtitle?.url == sub.url,
                                         trailing = "${start + i + 1}",

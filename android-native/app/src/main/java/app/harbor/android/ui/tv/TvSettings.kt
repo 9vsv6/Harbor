@@ -373,6 +373,7 @@ private fun subtitleTiming(s: AppSettings): List<Control> = buildList {
             add(Control.Options("subtitleAutoSync", "Auto-sync subtitles", onOff(s.subtitleAutoSync), OnOff))
             add(Control.Options("autoSyncApply", "Apply corrections automatically", onOff(s.autoSyncApplyCorrections), OnOff))
             add(Control.Options("autoSyncAsr", "Smart resync with speech recognition", onOff(s.subtitleAutoSyncAsr), OnOff))
+            if (s.subtitleAutoSyncAsr) add(Control.Options("autoSyncAlwaysSpeech", "Always use the speech model", onOff(s.autoSyncAlwaysSpeech), OnOff))
         }
         add(Control.Options("syncIndicator", "Show sync indicator", onOff(s.subSyncIndicator), OnOff))
 }
@@ -490,6 +491,7 @@ private fun commit(repository: Repository, id: String, value: String) {
         "subtitleAutoSync" -> repository.updateSettings { it.copy(subtitleAutoSync = value == "on") }
         "autoSyncApply" -> repository.updateSettings { it.copy(autoSyncApplyCorrections = value == "on") }
         "autoSyncAsr" -> repository.updateSettings { it.copy(subtitleAutoSyncAsr = value == "on") }
+        "autoSyncAlwaysSpeech" -> repository.updateSettings { it.copy(autoSyncAlwaysSpeech = value == "on") }
         "syncIndicator" -> repository.updateSettings { it.copy(subSyncIndicator = value == "on") }
         "assMode" -> repository.updateSettings { it.copy(assOverride = value) }
         "assSize" -> repository.updateSettings { it.copy(assOverride = if (value == "on") "scale" else "no") }

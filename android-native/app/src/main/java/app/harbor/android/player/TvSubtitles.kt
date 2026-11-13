@@ -206,7 +206,10 @@ private fun TracksLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerAc
         } + state.addonSubs.orEmpty().map { sub ->
             SubRow(
                 "a" + sub.url, SubtitleNames.title(sub),
-                listOf("External", languageName(sub.lang), SubtitleNames.format(sub).uppercase()).joinToString(" · "),
+                listOfNotNull(
+                    "External", languageName(sub.lang), SubtitleNames.format(sub).uppercase(),
+                    "Matches this source".takeIf { sub.url in state.matchingSubs },
+                ).joinToString(" · "),
                 sub.lang, external = true,
                 hearingImpaired = SubtitleNames.hearingImpaired(sub), forced = SubtitleNames.forced(sub),
                 on = (choice as? SubChoice.Addon)?.subtitle?.url == sub.url,

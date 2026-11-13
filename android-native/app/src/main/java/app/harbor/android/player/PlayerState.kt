@@ -134,6 +134,8 @@ class PlayerState {
     var hasPlayed by mutableStateOf(false)
     /** The playing source's name line, to mark it in the switcher. */
     var currentStreamKey by mutableStateOf<String?>(null)
+    /** Downloaded subtitles named for the playing release (likely in sync as they are), by URL. */
+    var matchingSubs by mutableStateOf<Set<String>>(emptySet())
     /** "4K", "1080p"… from the source, beside the title. */
     var quality by mutableStateOf<String?>(null)
     /** A movie's year, under the title when there's no episode line. */

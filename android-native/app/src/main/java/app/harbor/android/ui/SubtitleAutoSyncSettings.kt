@@ -29,6 +29,9 @@ fun SubtitleAutoSyncSettings(repository: Repository) {
     ToggleRow("Smart resync with speech recognition", "Use the optional Whisper Tiny model for difficult matches and Try again. Speech stays on this device.", settings.subtitleAutoSyncAsr) {
         repository.updateSettings { s -> s.copy(subtitleAutoSyncAsr = it) }
     }
+    if (settings.subtitleAutoSyncAsr) ToggleRow("Always use the speech model", "Skip the quick speech-timing check and match the words right away. Slower, more accurate.", settings.autoSyncAlwaysSpeech) {
+        repository.updateSettings { s -> s.copy(autoSyncAlwaysSpeech = it) }
+    }
     WhisperModelPanel()
 }
 

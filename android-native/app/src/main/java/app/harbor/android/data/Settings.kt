@@ -177,6 +177,8 @@ data class AppSettings(
     val autoSyncExperimental: Boolean = false,
     val subtitleAutoSync: Boolean = false,
     val subtitleAutoSyncAsr: Boolean = true,
+    /** Auto sync goes straight to the speech model (when installed), skipping the speech-timing pass. */
+    val autoSyncAlwaysSpeech: Boolean = false,
     val autoSyncApplyCorrections: Boolean = false,
     val hideSdh: Boolean = false,
     /** A second subtitle shown at the same time (mpv); empty is off. */
