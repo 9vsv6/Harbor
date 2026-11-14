@@ -94,7 +94,7 @@ enum class ExtraPage(val route: String, val label: String, val icon: androidx.co
 @Composable
 private fun PageHeader(title: String, onBack: (() -> Unit)?, trailing: @Composable () -> Unit = {}) {
     // Phones: the buttons go on their own scrolling line under the title, so the title never wraps.
-    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600 || !tabletLayout()
     Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = HarborColors.Ink) }
@@ -235,7 +235,7 @@ private fun CollectionsRail(tmdbKey: String, onOpen: (CatalogCollection) -> Unit
             Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "See all", tint = HarborColors.InkSubtle)
         }
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(Discover.collections.filter { "Sagas" in it.cats }.take(16), key = { it.id }) { c ->
+            items(Discover.collections.filter { it.id > 0 && "Sagas" in it.cats }.take(16), key = { it.id }) { c ->
                 CollectionCard(c, tmdbKey, Modifier.width(260.dp)) { onOpen(c) }
             }
         }
@@ -265,7 +265,8 @@ fun CollectionsScreen(repository: Repository, onBack: () -> Unit) {
     val tmdbKey by repository.tmdbKey.collectAsState()
     val open = LocalOpenPage.current
     var category by rememberSaveable { mutableStateOf<String?>(null) }
-    val shown = Discover.collections.filter { category == null || category in it.cats }
+    // Entries without a TMDB id (0) can't open and would share a list key (a crash): left out.
+    val shown = Discover.collections.filter { it.id > 0 && (category == null || category in it.cats) }
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
         PageHeader("Collections", onBack)
         if (tmdbKey == null) {

@@ -2,6 +2,7 @@ package app.harbor.android.data
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -81,7 +82,31 @@ object AnimeInfo {
     /** The ids every anime site uses for a title (relations.yuna.moe), by one of them. */
     data class Ids(val anilist: Int?, val mal: Int?, val kitsu: Int?, val imdb: String?, val tvdb: Int? = null)
 
-    private val idCache = mutableMapOf<String, Ids?>()
+    private val idCache = java.util.Collections.synchronizedMap(mutableMapOf<String, Ids?>())
+    /** A catalog of anime cards asks for many at once: a few at a time. */
+    private val idGate = kotlinx.coroutines.sync.Semaphore(4)
+
+    private fun isAnimeId(metaId: String) = metaId.substringBefore(':') in setOf("kitsu", "mal", "anilist")
+
+    private fun idKey(metaId: String): String? {
+        val source = when (metaId.substringBefore(':')) { "kitsu" -> "kitsu"; "mal" -> "myanimelist"; "anilist" -> "anilist"; else -> return null }
+        val id = metaId.substringAfter(':').substringBefore(':').toIntOrNull() ?: return null
+        return "$source:$id"
+    }
+
+    /** The IMDb id behind a title: its own, or for anime (Kitsu, MAL, AniList) the anime id map's, if already known. */
+    fun cachedImdb(metaId: String): String? {
+        metaId.substringBefore(':').takeIf { it.startsWith("tt") }?.let { return it }
+        if (!isAnimeId(metaId)) return null
+        return idKey(metaId)?.let { idCache[it] }?.imdb?.takeIf { it.startsWith("tt") }
+    }
+
+    /** As cachedImdb, looking the anime up when it isn't known yet. */
+    suspend fun imdbFor(metaId: String): String? {
+        cachedImdb(metaId)?.let { return it }
+        if (!isAnimeId(metaId)) return null
+        return idGate.withPermit { ids(metaId) }?.imdb?.takeIf { it.startsWith("tt") }
+    }
 
     suspend fun ids(metaId: String): Ids? {
         val source = when (metaId.substringBefore(':')) { "kitsu" -> "kitsu"; "mal" -> "myanimelist"; "anilist" -> "anilist"; else -> return null }

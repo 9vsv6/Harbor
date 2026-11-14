@@ -149,7 +149,10 @@ object Debrid {
             val unrestricted = Net.json.parseToJsonElement(rdPost(account, "/unrestrict/link", mapOf("link" to link))).jsonObject
             return unrestricted.string("download") ?: error("Real-Debrid returned no download link")
         } catch (e: Exception) {
-            if (e is NotCached) runCatching { Net.call(rdRequest(account, "/torrents/delete/$id").delete().build()) }
+            // Anything that stops here (not cached, an error, leaving the page) leaves no torrent behind.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                runCatching { Net.call(rdRequest(account, "/torrents/delete/$id").delete().build()) }
+            }
             throw e
         }
     }
@@ -248,7 +251,9 @@ object Debrid {
             val unlocked = adGet(account, "/v4/link/unlock?link=${Uri.encode(flat[file.id].second)}")
             return unlocked.string("link") ?: error("AllDebrid returned no link")
         } catch (e: Exception) {
-            if (e is NotCached) runCatching { adGet(account, "/v4/magnet/delete?id=$magnetId") }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                runCatching { adGet(account, "/v4/magnet/delete?id=$magnetId") }
+            }
             throw e
         }
     }

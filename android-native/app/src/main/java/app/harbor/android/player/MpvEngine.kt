@@ -62,6 +62,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     private var lastPlaying = false
 
     companion object {
+        private val STANDARD_RATES = listOf(23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 120.0)
         private const val TAG = "HarborMpv"
         private const val ARABIC_FONT = "Noto Sans Arabic"
 
@@ -152,10 +153,12 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             // 1–2 GB get the small buffer unless you chose otherwise.
             val memory = android.app.ActivityManager.MemoryInfo().also { context.getSystemService(android.app.ActivityManager::class.java)?.getMemoryInfo(it) }
             val lowMemory = memory.totalMem in 1 until 2_500L * 1024 * 1024
+            // Phones with 6 GB or more get more: a 40+ Mbit/s remux burns 64 MB in about 12 seconds.
+            val roomy = memory.totalMem >= 6_000L * 1024 * 1024
             val bufferMb = when (s.bufferSize) {
                 "small" -> 32
-                "large" -> if (lowMemory) 96 else 160
-                else -> if (lowMemory) 32 else 64
+                "large" -> if (lowMemory) 96 else if (roomy) 320 else 160
+                else -> if (lowMemory) 32 else if (roomy) 160 else 64
             }
             opt("demuxer-max-bytes", "${bufferMb * 1024 * 1024}")
             opt("demuxer-max-back-bytes", "${bufferMb / 2 * 1024 * 1024}")
@@ -233,6 +236,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("demuxer-cache-time", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
+        mpv.observeProperty("container-fps", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
+        mpv.observeProperty("estimated-vf-fps", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
         mpv.observeProperty("paused-for-cache", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
         mpv.observeProperty("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
@@ -258,6 +263,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.setOptionString("force-window", "yes")
         mpv.setPropertyString("vo", "gpu")
         surfaceSeen = true
+        // A new surface (back from the background) votes again.
+        if (videoFps > 0f) matchFrameRate()
         pendingLoad?.let { pendingLoad = null; it() }
     }
 
@@ -293,6 +300,43 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             "time-pos" -> position = value
             "duration" -> duration = value
             "demuxer-cache-time" -> cacheTime = value
+            "container-fps" -> main.post { containerFps = value.toFloat(); updateFps() }
+            // Files that don't state a rate (some MKVs, live streams): measured from the frames instead.
+            "estimated-vf-fps" -> standardRate(value).let { if (it != measuredFps) main.post { measuredFps = it; updateFps() } }
+        }
+    }
+
+    /** The video's frame rate, from the file; 0 until known. */
+    private var videoFps = 0f
+    private var containerFps = 0f
+    @Volatile private var measuredFps = 0f
+
+    private fun updateFps() {
+        val fps = containerFps.takeIf { it in 1f..240f } ?: measuredFps
+        if (fps == videoFps) return
+        videoFps = fps
+        matchFrameRate()
+    }
+
+    /** A measured rate snapped to the standard one it is (23.976, 25, 29.97…); 0 when it's none. */
+    private fun standardRate(fps: Double): Float =
+        STANDARD_RATES.firstOrNull { kotlin.math.abs(it - fps) < 0.3 }?.toFloat() ?: 0f
+
+    /**
+     * Tells Android the video's frame rate, as Media3 does: phones with 120/48 Hz screens switch to a
+     * rate that 24 fps divides evenly. Left at 60 Hz, 24 fps frames alternate 33 and 50 ms (judder).
+     * Only switches that don't blank the screen.
+     */
+    private fun matchFrameRate() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        val target = surface.holder.surface?.takeIf { it.isValid } ?: return
+        val fps = (videoFps * playSpeed).takeIf { videoFps > 0f && it in 1f..240f } ?: 0f
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                target.setFrameRate(fps, android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS)
+            } else {
+                target.setFrameRate(fps, android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+            }
         }
     }
 
@@ -447,6 +491,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun pause() = later { mpv.setPropertyBoolean("pause", true) }
     override val isPlaying get() = loaded && !paused && !pausedForCache && !eof
+    override val wantsPlay get() = loaded && !paused && !eof
     override val ended get() = eof
     override val positionMs get() = (position * 1000).toLong()
     override val durationMs get() = (duration * 1000).toLong()
@@ -456,7 +501,14 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.command(arrayOf("seek", "%.3f".format(Locale.US, positionMs.coerceAtLeast(0) / 1000.0), "absolute"))
     }
 
-    override fun setSpeed(speed: Float) = later { mpv.setPropertyDouble("speed", speed.toDouble()) }
+    override fun setSpeed(speed: Float) {
+        // Frames now come speed× as often: the screen's rate follows, or 1.5× at 24 Hz drops a third of them.
+        playSpeed = speed
+        main.post { matchFrameRate() }
+        later { mpv.setPropertyDouble("speed", speed.toDouble()) }
+    }
+
+    @Volatile private var playSpeed = 1f
 
     override fun setFit(fit: Fit) = later {
         mpv.setPropertyString("keepaspect", if (fit == Fit.Stretch) "no" else "yes")
@@ -676,6 +728,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     override fun release() {
+        surface.holder.removeCallback(this)
         calls.shutdownNow()
         subtitleWork.shutdownNow()
         mpv.removeObserver(this)

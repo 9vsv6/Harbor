@@ -241,7 +241,12 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         val phoneTop = statusTop + PhoneSectionBarHeight
         // The bar takes the page colour once the hero has scrolled under it.
         val density = androidx.compose.ui.platform.LocalDensity.current
-        val heroPx = with(density) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 0.9f - phoneTop).toPx() }
+        val heroPx = with(density) {
+            val config = androidx.compose.ui.platform.LocalConfiguration.current
+            // The hero's height: 10:9 of the width upright, 80% of the screen sideways (see HeroCarousel).
+            val hero = if (config.screenWidthDp > config.screenHeightDp) config.screenHeightDp.dp * 0.8f else config.screenWidthDp.dp * 0.9f
+            (hero - phoneTop).toPx()
+        }
         val barSolid by remember(phoneHero, heroPx) {
             androidx.compose.runtime.derivedStateOf { !phoneHero || listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > heroPx }
         }
@@ -318,7 +323,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                                     )
                                 }
                                 if (spooktober == "small" && heroSlides.isNotEmpty()) {
-                                    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
+                                    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720 && tabletLayout()
                                     SpooktoberEntry(
                                         compact = true,
                                         onDismiss = dismissSpooktober,

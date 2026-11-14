@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -145,6 +146,8 @@ fun AccountMenu(profile: Profile?, items: List<AccountItem>, onSwitch: () -> Uni
                 .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(18.dp))
                 // Taps on the card stay on the card.
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                // Scrolls when it doesn't fit (a phone held sideways cut Settings off at the bottom).
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
                 .padding(vertical = 6.dp),
         ) {
             Row(

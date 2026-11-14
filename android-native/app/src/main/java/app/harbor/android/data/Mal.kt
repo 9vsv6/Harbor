@@ -61,9 +61,20 @@ object Mal {
     }
 
     /** Refreshes the token when it is within a day of expiring. */
+    private val refreshing = kotlinx.coroutines.sync.Mutex()
+    private var lastRefresh: Pair<String, TrackerAuth>? = null
+
     suspend fun fresh(auth: TrackerAuth): TrackerAuth {
-        if (auth.expiresAt - System.currentTimeMillis() > 86_400_000 || auth.refreshToken == null) return auth
-        return token(auth, mapOf("grant_type" to "refresh_token", "refresh_token" to auth.refreshToken))
+        val refreshToken = auth.refreshToken
+        if (auth.expiresAt - System.currentTimeMillis() > 86_400_000 || refreshToken == null) return auth
+        // MyAnimeList rotates the refresh token: two refreshes at once would leave one signed out.
+        refreshing.lock()
+        try {
+            lastRefresh?.takeIf { it.first == refreshToken }?.let { return it.second }
+            return token(auth, mapOf("grant_type" to "refresh_token", "refresh_token" to refreshToken)).also { lastRefresh = refreshToken to it }
+        } finally {
+            refreshing.unlock()
+        }
     }
 
     private fun request(auth: TrackerAuth, path: String) = Request.Builder().url(API + path)

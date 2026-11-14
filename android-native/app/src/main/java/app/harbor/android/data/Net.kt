@@ -95,7 +95,10 @@ object Net {
             .post(body.toRequestBody("application/json".toMediaType()))
             .build()
         return client.newCall(request).await { response ->
-            response.body?.string() ?: throw IOException("Empty response from $url")
+            val text = response.body?.string() ?: throw IOException("Empty response from $url")
+            // Stremio answers its own errors as 200 with {error}; a 5xx is the server failing.
+            if (response.code >= 500) throw HttpError(response.code, text)
+            text
         }
     }
 }

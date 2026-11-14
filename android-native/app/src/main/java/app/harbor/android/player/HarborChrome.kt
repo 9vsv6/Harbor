@@ -338,6 +338,8 @@ private fun HarborSeekBar(state: PlayerState, actions: PlayerActions, onTouch: (
         pending = null
     }
     fun seek(fraction: Float) {
+        // A length that isn't known yet (or a live stream) has nowhere to seek to.
+        if (state.durationMs <= 0) return
         val ms = (fraction.coerceIn(0f, 1f) * duration).toLong()
         pending = ms
         actions.seekTo(ms)
@@ -477,6 +479,9 @@ private fun PhonePreviewFrame(preview: SeekPreview, timeMs: Long, width: android
  * The open menu, as Harbor's popovers: a dark card above the control row on the right,
  * or, for sources, Harbor's centred switcher over a dim backdrop. Tapping outside closes it.
  */
+/** A short screen (a phone held sideways): menus take the full height and fold their extras. */
+private val LocalCompactMenu = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 @Composable
 internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
     // On a TV, Subtitles is Big Picture's own panel (TvSubtitlePanel).
@@ -500,7 +505,8 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
             visible = panel != null && panel != Panel.Sources && panel != Panel.SubStyle,
             enter = fadeIn() + scaleIn(initialScale = 0.96f),
             exit = fadeOut() + scaleOut(targetScale = 0.96f),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 96.dp),
+            // Short screens: over the controls, so the list isn't squeezed to a row or two.
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = if (maxH < 480.dp) 14.dp else 96.dp),
         ) {
             val current = shown
             val width = when (current) {
@@ -508,8 +514,9 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
                 Panel.Audio, Panel.SubStyle, Panel.Chapters -> minOf(360.dp, maxW - 36.dp)
                 else -> minOf(300.dp, maxW - 36.dp)
             }
+            androidx.compose.runtime.CompositionLocalProvider(LocalCompactMenu provides (maxH < 480.dp)) {
             Column(
-                Modifier.width(width).heightIn(max = maxH - 108.dp).clip(RoundedCornerShape(14.dp)).background(Pop)
+                Modifier.width(width).heightIn(max = if (maxH < 480.dp) maxH - 28.dp else maxH - 108.dp).clip(RoundedCornerShape(14.dp)).background(Pop)
                     .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(14.dp))
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
             ) {
@@ -546,6 +553,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
                     Panel.Chapters -> ChaptersPopover(state, actions)
                     Panel.Sources -> {}
                 }
+            }
             }
         }
         AnimatedVisibility(
@@ -640,6 +648,38 @@ internal fun LangTag(language: String) {
 /** Harbor's "Sync Offset" row: the value, a reset, and a split −/+ strip. */
 @Composable
 private fun SyncOffset(label: String, valueMs: Long, steps: List<Long>, onChange: (Long) -> Unit) {
+    if (LocalCompactMenu.current) {
+        // One row on a short screen: label, value, reset, then the steps.
+        Row(
+            Modifier.fillMaxWidth().background(Color(0x4D121316)).padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(
+                "%s%.2fs".format(Locale.US, if (valueMs > 0) "+" else "", valueMs / 1000f),
+                color = if (valueMs != 0L) HarborColors.Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f),
+            )
+            if (valueMs != 0L) {
+                Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(PopRaised).clickable { onChange(0) }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.RestartAlt, "Reset", tint = Muted, modifier = Modifier.size(14.dp))
+                }
+            }
+            (steps.map { -it }.reversed() + steps).forEach { step ->
+                Box(
+                    Modifier.height(30.dp).widthIn(min = 44.dp).clip(RoundedCornerShape(7.dp)).background(PopRaised).clickable { onChange(valueMs + step) }.padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        (if (step > 0) "+" else "−") + if (kotlin.math.abs(step) >= 1000) "${kotlin.math.abs(step) / 1000}s" else "0.${kotlin.math.abs(step) / 100}s",
+                        color = Muted, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+        return
+    }
     Column(
         Modifier.fillMaxWidth().background(Color(0x4D121316)).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -694,7 +734,7 @@ private fun ColumnScope.AudioPopover(state: PlayerState, actions: PlayerActions)
     PopoverFrame("Audio", tracks.size.takeIf { it > 0 }, onClose = { state.panel = null }) {
         if (searchable) {
             Row(
-                Modifier.padding(horizontal = 14.dp, vertical = 10.dp).fillMaxWidth().height(36.dp).clip(RoundedCornerShape(9.dp)).background(PopRaised).padding(horizontal = 10.dp),
+                Modifier.padding(horizontal = 14.dp, vertical = if (LocalCompactMenu.current) 6.dp else 10.dp).fillMaxWidth().height(36.dp).clip(RoundedCornerShape(9.dp)).background(PopRaised).padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Rounded.Search, null, tint = Subtle, modifier = Modifier.size(15.dp))
@@ -705,7 +745,10 @@ private fun ColumnScope.AudioPopover(state: PlayerState, actions: PlayerActions)
                 }
             }
         }
-        LazyColumn(Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Opens at the playing track: with 20 languages it can be far down the list.
+        val audioList = rememberLazyListState()
+        LaunchedEffect(Unit) { shown.indexOfFirst { it.selected }.takeIf { it > 0 }?.let { audioList.scrollToItem(it) } }
+        LazyColumn(Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = 6.dp), state = audioList, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             if (tracks.isEmpty()) item { MenuNote("No audio track found yet.") }
             else if (shown.isEmpty()) item { MenuNote("No audio track in that language.") }
             items(shown, key = { it.key }) { track ->
@@ -886,7 +929,15 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, prefs: PlayerPrefs,
                 // A new tab or language starts the list at its top (Compose would otherwise keep the
                 // selected row in place, so the list looked unchanged).
                 val listState = rememberLazyListState()
-                LaunchedEffect(tab, language) { listState.scrollToItem(0) }
+                LaunchedEffect(tab, language) {
+                    // The first time, open at the subtitle that's on; a new tab or language starts at the top.
+                    val chosenAt = if (tab == SubTab.All && language == null) {
+                        val e = embedded.indexOfFirst { (state.subChoice as? SubChoice.Embedded)?.key == it.key }
+                        val a = external.indexOfFirst { (state.subChoice as? SubChoice.Addon)?.subtitle?.url == it.url }
+                        if (e >= 0) e else if (a >= 0 && state.addonSubs != null) embedded.size + a else 0
+                    } else 0
+                    listState.scrollToItem(chosenAt)
+                }
                 LazyColumn(Modifier.padding(horizontal = 8.dp), state = listState, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     var index = 0
                     if (showEmbedded) {
@@ -1036,7 +1087,7 @@ private fun SourcesSwitcher(state: PlayerState, actions: PlayerActions, modifier
             }
             Text(
                 when {
-                    sources == null -> "Refreshing…"
+                    sources == null -> "Loading sources…"
                     sources.isEmpty() -> "No other sources"
                     else -> "${sources.size} sources"
                 },

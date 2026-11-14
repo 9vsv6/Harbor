@@ -170,7 +170,7 @@ fun CalendarScreen(repository: Repository, onBack: (() -> Unit)?, onOpen: (Meta)
     fun pickSource(s: CalendarSource) { source = s; prefs.edit().putString("source", s.name).apply() }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
-        val wide = maxWidth >= 720.dp
+        val wide = maxWidth >= 720.dp && tabletLayout()
         val gutter = if (wide) 32.dp else 16.dp
         Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 110.dp)) {
             // ---- Header: eyebrow, title and the month controls ----

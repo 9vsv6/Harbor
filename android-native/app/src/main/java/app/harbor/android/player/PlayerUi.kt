@@ -1,5 +1,6 @@
 package app.harbor.android.player
 
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -254,22 +255,17 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
             }
             .pointerInput(state.locked) {
                 if (state.locked) return@pointerInput
-                // Harbor's phone gestures: left edge brightness, right edge volume, sideways to seek.
+                // Harbor's phone gestures: left edge brightness, right edge volume. Seeking is only on the
+                // seek bar: a sideways swipe over the picture does nothing, so a stray swipe can't jump.
                 var axis = 0 // 0 undecided, 1 horizontal, 2 vertical
                 var left = false
-                var seekFrom = 0L
-                var seekDelta = 0L
                 // A swipe cut off (the gesture restarting) mustn't leave the seek bar showing its target.
                 try { detectDragGestures(
                     onDragStart = { start ->
                         axis = 0
                         left = start.x < size.width / 2f
-                        seekFrom = state.positionMs
-                        seekDelta = 0
                     },
                     onDragEnd = {
-                        // Under a second is a nudge (or the start of a pinch), not a seek.
-                        if (axis == 1 && abs(seekDelta) >= 1_000 && state.durationMs > 0) actions.seekTo((seekFrom + seekDelta).coerceIn(0, state.durationMs))
                         if (axis == 1) { state.gestureSeekMs = null; state.scrubbing = false }
                         axis = 0
                     },
@@ -278,20 +274,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                     change.consume()
                     if (axis == 0) axis = if (abs(drag.x) > abs(drag.y)) 1 else 2
                     if (axis == 1) {
-                        // A full swipe across the screen moves 90 seconds.
-                        seekDelta += (drag.x / size.width * 90_000).toLong()
-                        val target = (seekFrom + seekDelta).coerceIn(0, state.durationMs)
-                        if (state.tv) {
-                            state.hint = "${if (seekDelta >= 0) "+" else "-"}${clock(abs(seekDelta))}  ·  ${clock(target)}"
-                            state.hintIcon = 0
-                        } else {
-                            // As dragging the seek bar (Harbor PC's scrubber): the controls show, the
-                            // middle buttons step aside, and the bar shows the preview and time.
-                            state.controlsVisible = true
-                            touchedAt.longValue = System.currentTimeMillis()
-                            state.scrubbing = true
-                            state.gestureSeekMs = target
-                        }
+                        // Sideways: no seek (see above).
                     } else {
                         val delta = -drag.y / size.height
                         if (left) {
@@ -313,6 +296,16 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             },
     ) {
+        // While a source connects, the title's backdrop, dimmed, rather than a black screen (TVs have
+        // their own Connecting page). It goes as soon as the first frame plays.
+        if (!state.tv && !state.hasPlayed && state.error == null) {
+            state.meta?.let { it.background ?: it.poster }?.let { art ->
+                Box(Modifier.fillMaxSize()) {
+                    AsyncImage(art, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Box(Modifier.fillMaxSize().background(Color(0xB3000000)))
+                }
+            }
+        }
         SubtitleLayer(state, prefs)
 
         if (state.buffering && !state.ended && state.error == null) {
@@ -330,7 +323,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             }
         } else {
-            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !state.tvCovered && !(state.tv && (state.panel == Panel.Subtitles || state.panel == Panel.Audio || state.panel == Panel.Sources || state.liveSync != null)), enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(state.controlsVisible && state.endScreen == null && !state.stillWatching && !state.tvCovered && !(state.tv && (state.panel == Panel.Subtitles || state.panel == Panel.Audio || state.panel == Panel.Sources || state.liveSync != null)), enter = fadeIn(), exit = fadeOut()) {
                 // Left to right in every language: a timeline and its buttons don't mirror.
                 androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
                     if (state.tv) TvPlayerControls(state, actions) { touchedAt.longValue = System.currentTimeMillis() }
@@ -708,8 +701,11 @@ private fun StillWatching(state: PlayerState, actions: PlayerActions) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Are you still watching?", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
             state.episodeLine?.let { Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp) }
+            // The remote lands on Keep watching (OK on the Play button underneath replayed the episode).
+            val keep = remember { androidx.compose.ui.focus.FocusRequester() }
+            LaunchedEffect(Unit) { repeat(10) { delay(50); if (runCatching { keep.requestFocus() }.isSuccess) return@LaunchedEffect } }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Pill("Keep watching", primary = true) { actions.keepWatching() }
+                Box(Modifier.focusRequester(keep)) { Pill("Keep watching", primary = true) { actions.keepWatching() } }
                 Pill("Exit", primary = false) { actions.back() }
             }
         }
@@ -821,7 +817,9 @@ private fun Muted(text: String) {
 @Composable
 private fun Pill(label: String, primary: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.clip(RoundedCornerShape(50)).background(if (primary) Color.White else Color(0x26FFFFFF))
+        // A dark glass with a light edge: readable over bright scenes too (white on 15% white vanished there).
+        Modifier.clip(RoundedCornerShape(50)).background(if (primary) Color.White else Color(0xB3121316))
+            .then(if (primary) Modifier else Modifier.border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(50)))
             .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
     ) {
         Text(label, color = if (primary) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)

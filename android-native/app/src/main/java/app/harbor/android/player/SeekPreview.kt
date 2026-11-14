@@ -129,11 +129,14 @@ class SeekPreview(private val scope: CoroutineScope) {
     fun release() {
         cues = emptyList()
         localAllowed = false
-        scope.launch(local) {
-            runCatching { retriever?.release() }
-            retriever = null
-            localThread.shutdown()
+        // On the executor itself: a cancelled scope would skip the release and leak the retriever.
+        runCatching {
+            localThread.execute {
+                runCatching { retriever?.release() }
+                retriever = null
+            }
         }
+        localThread.shutdown()
     }
 
     private fun cueAt(list: List<Cue>, timeMs: Long): Cue? {

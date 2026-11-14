@@ -215,7 +215,8 @@ private fun EpisodesHeader(
             Text("${inSeason.size} episodes", color = HarborColors.InkSubtle, fontSize = 14.sp, modifier = Modifier.padding(end = 4.dp))
             if (meta.type != "movie") ToolButton(Icons.Rounded.Download, "Download season") {
                 Toast.makeText(context, "Downloading ${inSeason.size} episodes…", Toast.LENGTH_SHORT).show()
-                scope.launch { downloadSeason(context, repository, meta, inSeason) }
+                // Not the screen's scope: scrolling or leaving the page would stop it half-way.
+                repository.appScope.launch { downloadSeason(context.applicationContext, repository, meta, inSeason) }
             }
             ToolButton(Icons.Rounded.Shuffle, "Play a random episode") { videos.filter { (it.season ?: 0) > 0 }.randomOrNull()?.let(onPlay) }
             LayoutToggle(display.episodeLayout) { v -> set { it.copy(episodeLayout = v) } }
@@ -290,7 +291,9 @@ private suspend fun downloadSeason(context: android.content.Context, repository:
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Downloads.enqueue(context, ready.url, meta.id, meta.type, v.id, "${meta.name} S${v.season}E${v.episode}", meta.poster,
             ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) } }.onSuccess { queued++ }
     }
-    Toast.makeText(context, if (queued == 0) "No downloadable sources found" else "$queued of ${episodes.size} episodes downloading", Toast.LENGTH_LONG).show()
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+        Toast.makeText(context, if (queued == 0) "No downloadable sources found" else "$queued of ${episodes.size} episodes downloading", Toast.LENGTH_LONG).show()
+    }
 }
 
 @Composable

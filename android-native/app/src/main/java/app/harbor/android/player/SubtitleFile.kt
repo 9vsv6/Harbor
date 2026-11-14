@@ -104,7 +104,26 @@ class SubtitleFile(private val cues: List<Cue>) {
             // Binary data that isn't a known image format: nothing Harbor can read.
             val control = text.take(2048).count { it < ' ' && it != '\n' && it != '\r' && it != '\t' }
             if (control > text.take(2048).length / 20) throw IOException("Not a subtitle file")
-            Fetched(text, null, name)
+            Fetched(withoutAds(text), null, name)
+        }
+
+        /** Lines the subtitle sites inject: their address, "Advertise your product or brand here", VIP pleas. */
+        private val adLine = Regex(
+            """opensubtitles\.(org|com)|osdb\.link|advertise your product or brand|become vip member|please rate this subtitle at|""" +
+                """قم بالإعلان هنا""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val cueTime = Regex("""\d{1,2}:\d{2}(:\d{2})?[,.]\d{1,3}\s*-->""")
+
+        /** SRT and WebVTT without the blocks that only carry a site's ad; other formats untouched. */
+        internal fun withoutAds(text: String): String {
+            if (isAss(text) || !adLine.containsMatchIn(text) || !cueTime.containsMatchIn(text)) return text
+            val blocks = text.replace("\r\n", "\n").split(Regex("""\n[ \t]*\n"""))
+            val kept = blocks.filterNot { block ->
+                val timing = block.lines().indexOfFirst { cueTime.containsMatchIn(it) }
+                timing >= 0 && block.lines().drop(timing + 1).joinToString(" ").let { adLine.containsMatchIn(it) }
+            }
+            return if (kept.size == blocks.size) text else kept.joinToString("\n\n")
         }
 
         /** The subtitle's text, decoded (see [decode]). */

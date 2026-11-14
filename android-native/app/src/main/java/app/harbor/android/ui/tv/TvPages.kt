@@ -105,7 +105,14 @@ internal fun TvPill(label: String, on: Boolean, count: Int? = null, icon: ImageV
 /** A wide card: the title's backdrop with its name over a fade (bp-result-card). */
 @Composable
 internal fun TvWideCard(meta: Meta, width: Dp, focus: FocusRequester? = null, onClick: () -> Unit) {
-    TvTileBox(width, 16f / 9f, u(6f), focus, onFocused = {}, onClick = onClick) { _ ->
+    // Back from the title it opened, the ring comes back to this card (as on Home) instead of the top of the page.
+    val requester = focus ?: remember { FocusRequester() }
+    LaunchedEffect(meta.id) {
+        if (TvReturnFocus.target != meta.id) return@LaunchedEffect
+        delay(60)
+        if (TvReturnFocus.consume(meta.id)) runCatching { requester.requestFocus() }
+    }
+    TvTileBox(width, 16f / 9f, u(6f), requester, onFocused = {}, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { _ ->
         (meta.background ?: meta.poster)?.let { AsyncImage(it, meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Void.copy(alpha = 0.9f))))
         Text(
@@ -142,13 +149,20 @@ private enum class SearchKind(val label: String) { All("All"), Movies("Movies"),
  * Big Picture's Search: the field, Harbor's own keyboard for the remote (no phone keyboard over the
  * TV), recent searches and suggestions while it's empty, then a top match and the results by kind.
  */
+/** The last TV search and its results, for coming back to it from a title. */
+private object TvSearchMemory {
+    var key: String? = null
+    var results: List<Meta>? = null
+}
+
 @Composable
 fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var typing by rememberSaveable { mutableStateOf(false) }
     var kind by rememberSaveable { mutableStateOf(SearchKind.All) }
-    var results by remember { mutableStateOf<List<Meta>?>(null) }
+    // Kept across a trip to a title and back, so Back doesn't search all over again.
+    var results by remember { mutableStateOf(TvSearchMemory.results.takeIf { TvSearchMemory.key != null }) }
     var loading by remember { mutableStateOf(false) }
     // A TV searches only when you press Search (or pick a suggestion): a full search on every key
     // was too heavy for a TV and never finished while you typed.
@@ -170,6 +184,7 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     }
     LaunchedEffect(submitted, runs) {
         val q = submitted.trim()
+        if (TvSearchMemory.key == "$q|$runs" && TvSearchMemory.results != null) { results = TvSearchMemory.results; return@LaunchedEffect }
         searchFailed = false
         if (q.isEmpty()) { results = null; return@LaunchedEffect }
         loading = true
@@ -180,6 +195,7 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
             (found.exceptionOrNull() as? kotlinx.coroutines.CancellationException)?.let { throw it }
             searchFailed = found.isFailure
             results = found.getOrDefault(emptyList())
+            if (found.isSuccess) { TvSearchMemory.key = "$q|$runs"; TvSearchMemory.results = results }
         } finally {
             // Cancelled by a newer search: that one owns the spinner now.
             if (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive != false) loading = false
@@ -211,7 +227,17 @@ fun TvSearch(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     }
     BackHandler(enabled = typing) { typing = false }
     // Closing the keyboard puts the ring back on the field, not the top bar.
-    LaunchedEffect(typing) { if (!typing) runCatching { field.requestFocus() } }
+    // (Unless a result is getting the ring back after Back.)
+    LaunchedEffect(typing) {
+        if (typing) return@LaunchedEffect
+        val pending = TvReturnFocus.target
+        if (pending != null) {
+            delay(500)
+            if (TvReturnFocus.target != pending) return@LaunchedEffect
+            TvReturnFocus.clearIf(pending)
+        }
+        runCatching { field.requestFocus() }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(top = u(6f))) {
@@ -474,13 +500,25 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
                 }
                 itemsIndexed(list.chunked(8), key = { i, _ -> "r-$label-$i" }) { _, row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(u(10f)), modifier = Modifier.padding(vertical = u(3f))) {
-                        row.forEach { (m, _) -> PosterTile(m, null, {}, width = u(97f), onClick = { onOpen(m) }) }
+                        // Back from a title, its poster takes the ring again (as on Home).
+                        CompositionLocalProvider(LocalHomeFocusRestore provides true) {
+                            row.forEach { (m, _) -> PosterTile(m, null, {}, width = u(97f), onClick = { onOpen(m) }) }
+                        }
                     }
                 }
             }
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    LaunchedEffect(Unit) {
+        // A poster scrolled out of view can't take it back: then the first chip after all.
+        val pending = TvReturnFocus.target
+        if (pending != null) {
+            delay(500)
+            if (TvReturnFocus.target != pending) return@LaunchedEffect
+            TvReturnFocus.clearIf(pending)
+        }
+        runCatching { first.requestFocus() }
+    }
 }
 
 // ---------------- Collections ----------------
@@ -495,7 +533,7 @@ fun TvCollections(repository: Repository) = withUnit {
     val open = app.harbor.android.ui.LocalOpenPage.current
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     val first = remember { FocusRequester() }
-    val shown = app.harbor.android.data.Discover.collections.filter { category == null || category in it.cats }
+    val shown = app.harbor.android.data.Discover.collections.filter { it.id > 0 && (category == null || category in it.cats) }
     Column(Modifier.fillMaxSize().padding(top = u(6f))) {
         if (tmdbKey == null) {
             Text("Collections need a TMDB key. Add it in Settings → Setup.", color = HarborColors.InkMuted, fontSize = s(10f))

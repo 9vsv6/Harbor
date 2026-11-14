@@ -59,6 +59,27 @@ private val Edge = Color(0x40505257)
 /** "‹ Back", the page title, and the search field, as Harbor's phone settings header. */
 @Composable
 fun SettingsHeader(title: String, onBack: (() -> Unit)?, query: String, onQuery: (String) -> Unit) {
+    // A phone held sideways: Back, the title and the search on one row, so the list keeps the height.
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    if (config.screenWidthDp > config.screenHeightDp && config.screenHeightDp < 480) {
+        Row(
+            Modifier.fillMaxWidth().background(HarborColors.Canvas).padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (onBack != null) {
+                Box(Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, "Back", tint = HarborColors.InkMuted, modifier = Modifier.size(26.dp))
+                }
+            }
+            Text(
+                title, color = HarborColors.Ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 320.dp),
+            )
+            Box(Modifier.weight(1f)) { SettingsSearchField(query, onQuery) }
+        }
+        return
+    }
     Column(Modifier.fillMaxWidth().background(HarborColors.Canvas).padding(horizontal = 16.dp)) {
         if (onBack != null) {
             Row(

@@ -169,11 +169,16 @@ fun HeroCarousel(
         }
     }
     // Phones get Harbor's mobile card (16:13); tablets a wide desktop-style hero.
-    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 720 && tabletLayout()
+    val landscape = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
+    val screenHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
     val context = androidx.compose.ui.platform.LocalContext.current
     Column(Modifier.onFocusChanged { focused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(
-            if (fullBleed) Modifier.fillMaxWidth().aspectRatio(10f / 9f).background(HarborColors.Surface)
+            // A phone held sideways: 80% of the screen's height, so the rows show under it
+            // (10:9 of a sideways phone is taller than the screen).
+            if (fullBleed && landscape) Modifier.fillMaxWidth().height(screenHeight * 0.8f).background(HarborColors.Surface)
+            else if (fullBleed) Modifier.fillMaxWidth().aspectRatio(10f / 9f).background(HarborColors.Surface)
             else Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
                 .clip(HeroShape).background(HarborColors.Surface)
                 .border(1.dp, HarborColors.EdgeSoft, HeroShape),
@@ -276,13 +281,25 @@ private fun GlassCircle(icon: ImageVector, description: String, tint: Color, onC
 /** The title's logo when it has one, else its name in large type. */
 @Composable
 fun TitleArt(meta: Meta, maxHeight: Int) {
-    var failed by remember(meta.id) { mutableStateOf(false) }
-    val logo = meta.logoUrl
+    // Anime (Kitsu, MAL, AniList) in another language: TMDB's logo and title through the anime id map.
+    val tmdbKey = HarborDisplay.tmdbKey
+    val languages = HarborDisplay.textLanguages
+    val animeId = meta.id.substringBefore(':') in setOf("kitsu", "mal", "anilist")
+    var local by remember(meta.id, languages) { mutableStateOf<app.harbor.android.data.TmdbDetails?>(null) }
+    if (animeId && tmdbKey != null && app.harbor.android.data.Tmdb.localizes) {
+        LaunchedEffect(meta.id, tmdbKey, languages) {
+            val imdb = app.harbor.android.data.AnimeInfo.imdbFor(meta.id) ?: return@LaunchedEffect
+            local = runCatching { app.harbor.android.data.Tmdb.details(tmdbKey, imdb, meta.type) }.getOrNull()
+        }
+    }
+    val name = local?.title?.takeIf { it.isNotBlank() } ?: meta.name
+    val logo = local?.logo ?: meta.logoUrl
+    var failed by remember(meta.id, logo) { mutableStateOf(false) }
     if (logo != null && !failed) {
         val tone = rememberToneLogo(logo)
         AsyncImage(
             tone.request,
-            contentDescription = meta.name,
+            contentDescription = name,
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
             colorFilter = tone.filter,
@@ -291,7 +308,7 @@ fun TitleArt(meta: Meta, maxHeight: Int) {
             modifier = Modifier.heightIn(max = maxHeight.dp).fillMaxWidth(0.74f),
         )
     } else {
-        Text(meta.name, color = Color.White, fontSize = 30.sp, lineHeight = 31.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(name, color = Color.White, fontSize = 30.sp, lineHeight = 31.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -343,12 +360,16 @@ fun Rail(title: String, list: List<Meta>, onOpen: (Meta) -> Unit, onSeeAll: (() 
 fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val display = HarborDisplay.settings
     // An IMDb title (library, history, an addon's catalog) in your title and poster languages, from TMDB.
-    val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
+    // Anime (Kitsu, MAL, AniList ids) through the anime id map's IMDb id.
     val tmdbKey = HarborDisplay.tmdbKey
     val languages = HarborDisplay.textLanguages
+    val imdb = app.harbor.android.data.AnimeInfo.cachedImdb(meta.id)
     var local by remember(meta.id, languages) { mutableStateOf(imdb?.let { app.harbor.android.data.Tmdb.cachedLocal(it, meta.type) }) }
-    if (imdb != null && tmdbKey != null && local == null && app.harbor.android.data.Tmdb.localizesCards) {
-        LaunchedEffect(imdb, tmdbKey, languages) { local = runCatching { app.harbor.android.data.Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull() }
+    if (tmdbKey != null && local == null && app.harbor.android.data.Tmdb.localizesCards) {
+        LaunchedEffect(meta.id, tmdbKey, languages) {
+            val id = imdb ?: app.harbor.android.data.AnimeInfo.imdbFor(meta.id) ?: return@LaunchedEffect
+            local = runCatching { app.harbor.android.data.Tmdb.localized(tmdbKey, id, meta.type) }.getOrNull()
+        }
     }
     val ownPoster = local?.second ?: meta.poster
     val title = local?.first ?: meta.name

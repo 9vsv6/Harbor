@@ -711,7 +711,8 @@ private fun LaneButton(label: String, onClick: () -> Unit) {
 @Composable
 internal fun TvDelayBar(state: PlayerState, actions: PlayerActions) {
     androidx.activity.compose.BackHandler(enabled = state.delayBar) { state.delayBar = false }
-    if (!state.delayBar) return
+    // Something more important on screen (the end, "still watching?", a source failing): it waits.
+    if (!state.delayBar || state.tvCovered || state.endScreen != null || state.stillWatching || state.panel != null) return
     val unit = (LocalConfiguration.current.screenHeightDp / 540f).coerceIn(0.8f, 2.2f)
     CompositionLocalProvider(LocalUnit provides unit) {
         val first = remember { FocusRequester() }

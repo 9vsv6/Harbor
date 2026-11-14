@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 
@@ -165,13 +166,23 @@ class Accounts(private val repository: Repository) {
     }
 
     /** Keeps the token fresh; a refused refresh token signs out. */
-    private suspend fun nuvioSession(): NuvioSession? {
-        val s = _nuvio.value.session ?: return null
-        if (!Nuvio.expiring(s)) return s
-        val fresh = Nuvio.refresh(s)
+    private val nuvioRefresh = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun nuvioSession(): NuvioSession? = nuvioRefresh.withLock {
+        // One refresh at a time: Nuvio rotates the refresh token, so a second one racing it would be refused.
+        val s = _nuvio.value.session ?: return@withLock null
+        if (!Nuvio.expiring(s)) return@withLock s
+        val fresh = try {
+            Nuvio.refresh(s)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Offline or Nuvio is down: keep the session and try again next time.
+            return@withLock s
+        }
         saveNuvio(_nuvio.value.copy(session = fresh))
         if (fresh == null && _shared.value.provider == "nuvio") updateShared { it.copy(provider = "stremio") }
-        return fresh
+        fresh
     }
 
     suspend fun nuvioSignedIn(session: NuvioSession) {

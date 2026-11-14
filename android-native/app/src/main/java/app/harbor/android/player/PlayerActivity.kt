@@ -170,6 +170,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         engine = (if (settings.engine == "media3" || state.tv) null else MpvEngine.create(this, setup)) ?: ExoEngine(this, setup)
         engine.listener = this
         state.engineName = engine.name
+        androidx.core.content.ContextCompat.registerReceiver(this, noisy, android.content.IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         state.anime4kAvailable = false // Set once the title is known to be anime (updateAnime4KButton).
         lifecycleScope.launch { repository.settings.collect { state.settings = it } }
 
@@ -293,6 +294,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.skip = null
         segments = emptyList()
         segmentsFor = ""
+        state.delayBar = false
         autoSkipped.clear()
         autoSubDone = false
         userPickedSub = false
@@ -518,6 +520,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun onPlayingChanged(playing: Boolean) {
         state.playing = playing
+        if (playing) holdAudioFocus()
         // Playing means whatever error was showing no longer applies.
         if (playing) {
             state.error = null
@@ -574,7 +577,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun onError(message: String) {
         if (fallbackPending) return
-        if (state.tv && !triedMpv && (engine as? ExoEngine)?.cantPlay == true) {
+        // A file Media3 can't decode (4:4:4 or 10-bit anime, rare codecs) goes to mpv in place, on phones
+        // as on TVs: before, choosing Media3 on a phone just showed "This source didn't play".
+        if (!triedMpv && (engine as? ExoEngine)?.cantPlay == true) {
             triedMpv = true
             fallbackPending = true
             val failedEngine = engine
@@ -636,6 +641,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         engine = next
         next.listener = this
         state.engineName = next.name
+        if (next.name != "mpv") dropAudioFocus()
         state.cues = emptyList()
         state.audioTracks = emptyList()
         state.embeddedSubs = emptyList()
@@ -1228,9 +1234,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 seekNow(0)
                 engine.play()
             }
-            engine.isPlaying -> engine.pause()
+            engine.isPlaying || engine.wantsPlay -> engine.pause()
             else -> engine.play()
         }
+        resumeOnFocusGain = false
     }
 
     override fun seekTo(positionMs: Long) = seekNow(positionMs.coerceAtLeast(0))
@@ -1901,7 +1908,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     override fun changeVolume(delta: Float): Float {
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat()
-        if (volumeLevel < 0) volumeLevel = audio.getStreamVolume(AudioManager.STREAM_MUSIC) / max
+        // Re-read when the phone's own buttons changed it since the last swipe (mpv's boost above full stays).
+        val device = audio.getStreamVolume(AudioManager.STREAM_MUSIC) / max
+        if (volumeLevel < 0 || (volumeLevel <= 1f && Math.round(volumeLevel * max) != Math.round(device * max))) volumeLevel = device
         // Past full phone volume, mpv boosts its own up to the chosen maximum.
         volumeLevel = (volumeLevel + delta).coerceIn(0f, engine.maxVolume)
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(volumeLevel.coerceAtMost(1f) * max), 0)
@@ -2157,10 +2166,17 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private fun startCasting(session: CastSession) {
         val client = session.remoteMediaClient ?: return
+        // A downloaded file lives on this phone: the Chromecast can only play the source it came from.
+        val castUrl = state.currentUrl.takeUnless { it.startsWith("file:") || it.startsWith("content:") } ?: onlineUrl
+        if (castUrl == null) {
+            state.hint = "Downloaded files can't be cast"
+            state.hintIcon = 0
+            return
+        }
         remotePositionMs = engine.positionMs
         engine.pause()
         // The Chromecast fetches the stream itself; addons that need special headers won't play there.
-        CastLoader.load(client, CastItem(state.currentUrl, state.title, state.episodeLine, meta?.poster, engine.positionMs))
+        CastLoader.load(client, CastItem(castUrl, state.title, state.episodeLine, meta?.poster, engine.positionMs))
         // One callback and listener per cast: the last session's come off first, and endCasting removes them.
         castListeners()
         client.registerCallback(remoteCallback)
@@ -2172,6 +2188,44 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     private var castClient: RemoteMediaClient? = null
+
+    // ---- Audio focus (Media3 handles its own; mpv needs it here) ----
+
+    /** Headphones pulled out or Bluetooth gone: pause rather than play out loud. */
+    private val noisy = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: android.content.Intent) {
+            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && state.castingTo == null) engine.pause()
+        }
+    }
+    private var focusRequest: android.media.AudioFocusRequest? = null
+    private var resumeOnFocusGain = false
+    private val focusChange = AudioManager.OnAudioFocusChangeListener { change ->
+        if (engine.name != "mpv") return@OnAudioFocusChangeListener
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> { resumeOnFocusGain = false; engine.pause() }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> if (engine.isPlaying || engine.wantsPlay) { resumeOnFocusGain = true; engine.pause() }
+            AudioManager.AUDIOFOCUS_GAIN -> if (resumeOnFocusGain) { resumeOnFocusGain = false; engine.play() }
+        }
+    }
+
+    private fun holdAudioFocus() {
+        if (engine.name != "mpv" || focusRequest != null) return
+        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val request = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE).build(),
+            )
+            .setOnAudioFocusChangeListener(focusChange, android.os.Handler(mainLooper))
+            .build()
+        if (audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) focusRequest = request
+    }
+
+    private fun dropAudioFocus() {
+        focusRequest?.let { (getSystemService(Context.AUDIO_SERVICE) as AudioManager).abandonAudioFocusRequest(it) }
+        focusRequest = null
+        resumeOnFocusGain = false
+    }
     private val castProgress = RemoteMediaClient.ProgressListener { progress, _ -> if (progress > 0) remotePositionMs = progress }
 
     private fun castListeners() {
@@ -2185,8 +2239,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.castingTo = null
         // Carry on here from where the TV got to.
         seekNow(remotePositionMs)
-        engine.play()
+        // Only resume here when the player is on screen (or in picture-in-picture), not in the background.
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) || isInPictureInPictureMode) engine.play()
     }
+
+    /** Where playback is: the Chromecast's position while casting, else this player's. */
+    private fun nowMs() = if (state.castingTo != null) remotePositionMs else engine.positionMs
 
     override fun castTogglePlay() {
         castContext?.sessionManager?.currentCastSession?.remoteMediaClient?.togglePlayback()
@@ -2211,6 +2269,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         ticker.removeCallbacks(hideSeekPreview)
         stopScrobble()
         saveResume()
+        runCatching { unregisterReceiver(noisy) }
+        dropAudioFocus()
         engine.listener = null
         engine.release()
         previews.release()
@@ -2230,7 +2290,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private fun progressPercent(): Double {
         val duration = engine.durationMs.takeIf { it > 0 } ?: return 0.0
-        return (engine.positionMs * 100.0 / duration).coerceIn(0.0, 100.0)
+        return (nowMs() * 100.0 / duration).coerceIn(0.0, 100.0)
     }
 
     private fun scrobble(action: String) {
@@ -2251,7 +2311,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private fun saveResume() {
         val duration = engine.durationMs.takeIf { it > 0 } ?: return
         if (state.videoId.isNotEmpty()) {
-            repository.saveResume(state.videoId, engine.positionMs, duration, meta, meta?.videos?.firstOrNull { it.id == state.videoId })
+            repository.saveResume(state.videoId, nowMs(), duration, meta, meta?.videos?.firstOrNull { it.id == state.videoId })
             syncStremio()
         }
     }
@@ -2270,7 +2330,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val last = episodes.maxWithOrNull(compareBy({ it.season }, { it.episode }))?.id == state.videoId
         app.harbor.android.data.StremioSync.record(
             account.authKey, metaId, type, meta?.name ?: state.title, meta?.poster,
-            state.videoId.takeIf { it != metaId }, engine.positionMs, duration, last,
+            state.videoId.takeIf { it != metaId }, nowMs(), duration, last,
         )
     }
 

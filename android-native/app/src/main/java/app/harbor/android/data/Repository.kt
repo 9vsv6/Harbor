@@ -105,6 +105,8 @@ data class PlayerPrefs(
  */
 class Repository(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** For work that must outlive a screen (queuing a season's downloads). */
+    val appScope: CoroutineScope get() = scope
     private class PendingProfileWrite(val apply: (androidx.datastore.preferences.core.MutablePreferences) -> Unit)
     private val pendingProfileWrites = java.util.concurrent.ConcurrentHashMap<String, PendingProfileWrite>()
     private val profileSwitchLock = kotlinx.coroutines.sync.Mutex()
@@ -393,7 +395,8 @@ class Repository(private val context: Context) {
         }
     }
 
-    private val rewatchGuards = mutableMapOf<String, RewatchGuard>()
+    // Reached from the player and from background syncs at once.
+    private val rewatchGuards = java.util.concurrent.ConcurrentHashMap<String, RewatchGuard>()
 
     /** This profile's finished-rewatch guard for one tracker. */
     private fun rewatchGuard(tracker: String): RewatchGuard = profileKey(tracker).let { scope ->
@@ -469,7 +472,8 @@ class Repository(private val context: Context) {
         if (System.currentTimeMillis() - libraryLoadedAt < 30_000) return
         libraryLoadedAt = System.currentTimeMillis()
         scope.launch {
-            val library = runCatching { StremioApi.library(account.authKey) }.getOrNull() ?: return@launch
+            // Offline: forget the attempt, so coming back later tries again instead of waiting 30 s.
+            val library = runCatching { StremioApi.library(account.authKey) }.getOrNull() ?: run { libraryLoadedAt = 0L; return@launch }
             if (_account.value?.authKey == account.authKey) _library.value = library
         }
     }
@@ -583,8 +587,10 @@ class Repository(private val context: Context) {
     suspend fun moveAddon(addon: Addon, delta: Int) {
         val list = rawCollection.toMutableList()
         val from = list.indexOfFirst { it.string("transportUrl") == addon.transportUrl }
+        // Not in the list (a built-in addon) or nothing to move: an empty list has no range to coerce into.
+        if (from < 0) return
         val to = (from + delta).coerceIn(0, list.lastIndex)
-        if (from < 0 || from == to) return
+        if (from == to) return
         list.add(to, list.removeAt(from))
         saveCollection(list)
     }
@@ -684,7 +690,8 @@ class Repository(private val context: Context) {
 
     fun rememberStream(metaId: String, addonId: String, streamName: String) {
         if (!_settings.value.rememberLastStream) return
-        val next = (_lastStreams.value + (metaId to "$addonId|$streamName")).entries.toList().takeLast(500).associate { it.key to it.value }
+        // Taken out first, so a title played again counts as recent and isn't the next to be dropped.
+        val next = (_lastStreams.value - metaId + (metaId to "$addonId|$streamName")).entries.toList().takeLast(500).associate { it.key to it.value }
         _lastStreams.value = next
         val key = keyLastStreams
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }

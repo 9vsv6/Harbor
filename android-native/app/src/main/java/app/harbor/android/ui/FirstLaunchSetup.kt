@@ -61,7 +61,7 @@ internal fun FirstLaunchSetup(repository: Repository, step: Int) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val primary = remember { FocusRequester() }
-    val compact = LocalConfiguration.current.screenWidthDp < 600
+    val compact = LocalConfiguration.current.screenWidthDp < 600 || !tabletLayout()
     val keyboardVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     fun advance(next: Int) {
         if (busy) return

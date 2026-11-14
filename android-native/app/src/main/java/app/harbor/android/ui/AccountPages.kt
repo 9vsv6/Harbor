@@ -753,10 +753,12 @@ private fun NuvioAddonsCard(repository: Repository, onOpenAddons: () -> Unit) {
     var syncedAt by remember { mutableStateOf<Long?>(null) }
     fun sync() = scope.launch {
         busy = true
-        addons = repository.accounts.syncNuvioAddons()
-        syncedAt = System.currentTimeMillis()
-        if (repository.accounts.nuvioActive) repository.refresh()
-        busy = false
+        // A failed refresh must not leave the Sync button greyed out (or take the app down).
+        try {
+            addons = runCatching { repository.accounts.syncNuvioAddons() }.getOrNull() ?: addons
+            syncedAt = System.currentTimeMillis()
+            if (repository.accounts.nuvioActive) runCatching { repository.refresh() }
+        } finally { busy = false }
     }
     LaunchedEffect(state.session?.userId) { if (state.session != null && addons == null) sync() }
     if (state.session == null) {

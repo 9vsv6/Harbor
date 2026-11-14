@@ -75,11 +75,23 @@ object SubtitleSources {
         val movieId = movies.firstOrNull()?.let { it["movieId"]?.jsonPrimitive?.content } ?: return emptyList()
         return langs.flatMap { lang ->
             val name = Locale(lang).getDisplayLanguage(Locale.ENGLISH).lowercase().replace(' ', '_')
-            val rows = (Net.json.parseToJsonElement(Net.call(get("$base/subtitles?movieId=$movieId&limit=30&sort=rating&language=$name"))).jsonObject["data"] as? JsonArray).orEmptyObjects()
+            val rows = try {
+                (Net.json.parseToJsonElement(Net.call(get("$base/subtitles?movieId=$movieId&limit=30&sort=rating&language=$name"))).jsonObject["data"] as? JsonArray).orEmptyObjects()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@flatMap emptyList()
+            }
             rows.filter { r -> q.episode == null || r.string("releaseInfo").orEmpty().contains(episodeTag(q), true) || rows.size == 1 }
                 .ifEmpty { rows }.take(PER_LANGUAGE).mapNotNull { row ->
                     val id = row["subtitleId"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                    val file = unzip(dir, "subsource-$id", get("$base/subtitles/$id/download"), q) ?: return@mapNotNull null
+                    val file = try {
+                        unzip(dir, "subsource-$id", get("$base/subtitles/$id/download"), q)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    } ?: return@mapNotNull null
                     Subtitle("Subsource · " + (row.string("releaseInfo")?.lines()?.firstOrNull() ?: lang), release = row.string("releaseInfo")?.lines()?.firstOrNull(), from = "Subsource", url = file, lang = lang)
                 }
         }
@@ -114,7 +126,7 @@ object SubtitleSources {
             rows.mapNotNull { it["attributes"] as? JsonObject }.filter { code(it.string("language")) == lang }.take(PER_LANGUAGE).mapNotNull { attrs ->
                 val fileId = ((attrs["files"] as? JsonArray)?.firstOrNull() as? JsonObject)?.get("file_id")?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                 val target = File(dir, "opensubtitles-$fileId.srt")
-                if (!target.isFile || target.length() == 0L) {
+                if (!target.isFile || target.length() == 0L) try {
                     val body = buildJsonObject { put("file_id", fileId) }.toString().toRequestBody("application/json".toMediaType())
                     val link = Net.json.parseToJsonElement(Net.call(headers(Request.Builder().url("$base/download").post(body)).build())).jsonObject.string("link") ?: return@mapNotNull null
                     withContext(Dispatchers.IO) {
@@ -123,6 +135,11 @@ object SubtitleSources {
                         saveSubtitle(target, bytes)
                     }
                     if (!target.isFile || target.length() == 0L) return@mapNotNull null
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // A download limit or one broken file: skip this one, keep the others.
+                    return@mapNotNull null
                 }
                 Subtitle("OpenSubtitles · " + (attrs.string("release") ?: lang), release = attrs.string("release"), from = "OpenSubtitles", url = target.toURI().toString(), lang = lang)
             }

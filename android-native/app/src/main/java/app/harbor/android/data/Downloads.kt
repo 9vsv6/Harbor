@@ -62,7 +62,8 @@ object Downloads {
         require(Uri.parse(url).scheme in setOf("http", "https")) { "Only HTTP files can be downloaded." }
         states(context).firstOrNull { it.item.videoId == videoId && !it.failed }?.let { return it.item.downloadId }
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
-        val ext = url.substringBefore('?').substringAfterLast('.', "mkv").takeIf { it.length in 2..4 } ?: "mkv"
+        val ext = Uri.parse(url).lastPathSegment.orEmpty().substringAfterLast('.', "")
+            .takeIf { it.length in 2..4 && it.all(Char::isLetterOrDigit) }?.lowercase() ?: "mkv"
         val name = title.replace(Regex("""[\\/:*?"<>|]"""), " ").replace(Regex("\\s+"), " ").trim().take(90) + "." + ext
         // Never the same file as another download (two episodes saved under one title, say).
         var target = File(dir, name)

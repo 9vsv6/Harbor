@@ -48,6 +48,8 @@ interface Engine {
     fun play()
     fun pause()
     val isPlaying: Boolean
+    /** Playing or about to (buffering with play on): Play/Pause pauses it rather than "playing" again. */
+    val wantsPlay: Boolean get() = isPlaying
     val ended: Boolean
     val positionMs: Long
     /** 0 while unknown. */

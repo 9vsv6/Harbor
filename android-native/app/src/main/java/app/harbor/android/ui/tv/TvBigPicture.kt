@@ -165,8 +165,10 @@ internal object TvEnrich {
                 )
             }
         }
-        if (tmdbKey != null && imdb != null) {
-            runCatching { Tmdb.details(tmdbKey, imdb, meta.type) }.getOrNull()?.let { d ->
+        // Anime in another language: TMDB's text through the anime id map's IMDb id.
+        val textImdb = imdb ?: if (tmdbKey != null && Tmdb.localizes) app.harbor.android.data.AnimeInfo.imdbFor(meta.id) else null
+        if (tmdbKey != null && textImdb != null) {
+            runCatching { Tmdb.details(tmdbKey, textImdb, meta.type) }.getOrNull()?.let { d ->
                 out = out.copy(
                     name = d.title?.takeIf { it.isNotBlank() } ?: out.name,
                     description = d.overview?.takeIf { it.isNotBlank() } ?: out.description,
@@ -206,7 +208,9 @@ fun TvBigPictureHome(
     if (subject == null && seed != null) subject = seed
     // On the streaming row the spotlight names the service instead (bp-section's band identity).
     var band by remember(viewKey) { mutableStateOf<TvService?>(null) }
-    var activeRow by remember(viewKey) { mutableIntStateOf(0) }
+    // By key, not position: rows that arrive above (Continue watching, trackers) shift the positions.
+    var activeKey by remember(viewKey) { mutableStateOf<String?>(null) }
+    val activeRow = shown.indexOfFirst { it.key == activeKey }.coerceAtLeast(0)
     // Up asks the row above for the ring by hand: it has scrolled out of the rail, so the focus search
     // would pass over it to the top bar.
     var focusRowAbove by remember { mutableStateOf<String?>(null) }
@@ -253,10 +257,10 @@ fun TvBigPictureHome(
                         // ModulateAlpha fades each drawing as it's made: no offscreen copy of the dimmed rows every frame.
                         Box(
                             Modifier.graphicsLayer { this.alpha = alpha; compositingStrategy = CompositingStrategy.ModulateAlpha }
-                                .onFocusChanged { if (it.hasFocus) activeRow = index }
+                                .onFocusChanged { if (it.hasFocus) activeKey = row.key }
                                 .onPreviewKeyEvent { e ->
                                     if (index > 0 && e.type == KeyEventType.KeyDown && e.key.nativeKeyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                                        activeRow = index - 1
+                                        activeKey = shown[index - 1].key
                                         focusRowAbove = shown[index - 1].key
                                         true
                                     } else false
@@ -285,7 +289,15 @@ fun TvBigPictureHome(
     }
     // Home opens on the first card (bp-home's seed), unless a title opened from here takes it back.
     LaunchedEffect(Unit) {
-        if (TvReturnFocus.target == null) runCatching { firstFocus.requestFocus() }
+        // Back from a title opened elsewhere (a "More like this" pick): no card here claims it, so the
+        // first card takes focus after all rather than leaving Home with no ring.
+        val pending = TvReturnFocus.target
+        if (pending != null) {
+            delay(400)
+            if (TvReturnFocus.target != pending) return@LaunchedEffect
+            TvReturnFocus.clearIf(pending)
+        }
+        runCatching { firstFocus.requestFocus() }
     }
 }
 
@@ -590,14 +602,16 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
     val restore = LocalHomeFocusRestore.current
     val requester = focus ?: remember { FocusRequester() }
     // An IMDb title in your title and poster languages, as on phones (only when those aren't English).
-    val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
+    // Anime (Kitsu, MAL, AniList ids) through the anime id map's IMDb id.
     val tmdbKey = HarborDisplay.tmdbKey
     val languages = HarborDisplay.textLanguages
+    val imdb = app.harbor.android.data.AnimeInfo.cachedImdb(meta.id)
     var local by remember(meta.id, languages) { mutableStateOf(imdb?.let { Tmdb.cachedLocal(it, meta.type) }) }
-    if (imdb != null && tmdbKey != null && local == null && Tmdb.localizesCards) {
-        LaunchedEffect(imdb, tmdbKey, languages) {
+    if (tmdbKey != null && local == null && Tmdb.localizesCards) {
+        LaunchedEffect(meta.id, tmdbKey, languages) {
             delay(200) // A held key passes over cards without looking each one up.
-            local = runCatching { Tmdb.localized(tmdbKey, imdb, meta.type) }.getOrNull()
+            val id = imdb ?: app.harbor.android.data.AnimeInfo.imdbFor(meta.id) ?: return@LaunchedEffect
+            local = runCatching { Tmdb.localized(tmdbKey, id, meta.type) }.getOrNull()
         }
     }
     val poster = local?.second ?: meta.poster

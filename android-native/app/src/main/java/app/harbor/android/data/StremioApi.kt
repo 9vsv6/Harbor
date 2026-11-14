@@ -22,7 +22,7 @@ object StremioApi {
         val response = Net.json.parseToJsonElement(text).jsonObject
         val error = response["error"]
         if (error != null && error !is JsonNull) {
-            throw StremioException(error.jsonObject.string("message") ?: "Stremio request failed")
+            throw StremioException((error as? JsonObject)?.string("message") ?: (error as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: "Stremio request failed")
         }
         return response["result"] ?: JsonNull
     }

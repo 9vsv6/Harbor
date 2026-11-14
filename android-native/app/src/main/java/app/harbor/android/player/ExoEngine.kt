@@ -208,6 +208,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override fun play() = player.play()
     override fun pause() = player.pause()
     override val isPlaying get() = player.isPlaying
+    override val wantsPlay get() = player.playWhenReady && player.playbackState != androidx.media3.common.Player.STATE_ENDED
     override val ended get() = player.playbackState == Player.STATE_ENDED
     override val positionMs get() = player.currentPosition
     override val durationMs get() = player.duration.takeIf { it != C.TIME_UNSET } ?: 0

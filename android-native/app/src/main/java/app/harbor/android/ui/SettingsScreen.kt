@@ -275,7 +275,7 @@ fun SettingsScreen(repository: Repository, onOpenAddons: () -> Unit, onExit: () 
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
         // Tablets get Harbor's desktop layout: the sidebar on the left, the open page beside it.
-        val wide = maxWidth >= 720.dp
+        val wide = maxWidth >= 720.dp && tabletLayout()
         val section = Section.valueOf(sectionName)
         val group = if (wide) groupOf(section) else groupName.takeIf { it.isNotEmpty() }?.let { Group.valueOf(it) }
         fun open(g: Group, s: Section? = null) {
@@ -1810,15 +1810,15 @@ private fun StorageSection(repository: Repository, set: ((AppSettings) -> AppSet
     val context = LocalContext.current
     fun say(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
     HarborHeading("Caches", "What Harbor keeps on this phone. Clearing frees space; it all comes back as needed.")
+    val cacheScope = rememberCoroutineScope()
     run {
         ActionRow("Image cache", "Posters and artwork. They download again as needed.", "Clear") {
             context.imageLoader.memoryCache?.clear()
-            context.imageLoader.diskCache?.clear()
-            say("Image cache cleared")
+            // Deleting hundreds of MB of posters takes a while: not on the screen's thread.
+            cacheScope.launch { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { context.imageLoader.diskCache?.clear() }; say("Image cache cleared") }
         }
         ActionRow("Anime4K shaders", "They download again the next time Anime4K is on.", "Remove") {
-            File(context.filesDir, "anime4k").deleteRecursively()
-            say("Anime4K shaders removed")
+            cacheScope.launch { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { File(context.filesDir, "anime4k").deleteRecursively() }; say("Anime4K shaders removed") }
         }
         ActionRow("Watch positions on this device", "For this profile. Stremio's and Trakt's stay.", "Clear") {
             repository.clearResumeHistory()

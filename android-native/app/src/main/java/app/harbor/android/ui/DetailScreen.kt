@@ -121,7 +121,7 @@ fun DetailScreen(
     var fetched by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var details by remember {
-        mutableStateOf(id.substringBefore(':').takeIf { it.startsWith("tt") }?.let { Tmdb.cachedDetails(it, type) })
+        mutableStateOf(AnimeInfo.cachedImdb(id)?.let { Tmdb.cachedDetails(it, type) }?.let { if (id.startsWith("tt")) it else it.forAnime() })
     }
     // In another language than English, the title, logo, genres and story wait for TMDB's (at most a
     // few seconds) instead of showing the addon's English ones and swapping them a moment later.
@@ -254,15 +254,18 @@ fun DetailScreen(
     // TMDB with a key; without one (or when TMDB misses), Harbor's keyless sources.
     LaunchedEffect(meta?.id, tmdbKey) {
         val current = meta ?: return@LaunchedEffect
-        val imdb = current.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return@LaunchedEffect
         val key = tmdbKey
-        details = (if (key != null) runCatching { Tmdb.details(key, imdb, current.type) }.getOrNull() else null)
-            ?: if (HarborDisplay.settings.keylessDetails) runCatching { Keyless.details(current) }.getOrNull() else null
+        val own = current.id.substringBefore(':').takeIf { it.startsWith("tt") }
+        // Anime in another language: TMDB's text and art through the anime id map's IMDb id.
+        val imdb = own ?: (if (key != null && Tmdb.localizes) AnimeInfo.imdbFor(current.id) else null)
+        if (imdb == null) { detailsSettled = true; return@LaunchedEffect }
+        details = (if (key != null) runCatching { Tmdb.details(key, imdb, current.type) }.getOrNull()?.let { if (own != null) it else it.forAnime() } else null)
+            ?: if (own != null && HarborDisplay.settings.keylessDetails) runCatching { Keyless.details(current) }.getOrNull() else null
         detailsSettled = true
     }
     // Only TMDB (with your key) translates; the keyless sources are English, so nothing would swap.
     val holdText = !detailsSettled && tmdbKey != null && Tmdb.localizes &&
-        id.substringBefore(':').startsWith("tt")
+        (id.substringBefore(':').startsWith("tt") || id.substringBefore(':') in setOf("kitsu", "mal", "anilist"))
 
     // A TV paints the page colour inside its backdrop's layer (TvAmbient); the window's is the same colour.
     Box(Modifier.fillMaxSize().then(if (app.harbor.android.perf.Perf.isTv) Modifier else Modifier.background(HarborColors.Canvas))) {
@@ -438,7 +441,7 @@ private fun DetailBody(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // TV: Harbor PC's Big Picture title page (ui/tv/TvDetail.kt) over the title's ambient backdrop.
         val tv = app.harbor.android.perf.Perf.isTv
-        val wide = maxWidth >= 720.dp
+        val wide = maxWidth >= 720.dp && tabletLayout()
         val side = if (tv) app.harbor.android.ui.tv.TvInsets.Gutter else if (wide) 48.dp else 20.dp
         val heroHeight = if (wide) (maxHeight * 0.78f).coerceAtMost(680.dp) else (maxHeight * 0.68f).coerceIn(420.dp, 620.dp)
         // The screen, not this box: the page can be measured shorter while it settles in.
@@ -492,7 +495,7 @@ private fun DetailBody(
                         )
                     }
                     LaunchedEffect(Unit) { runCatching { tvPlay.requestFocus() } }
-                } else Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play, holdText) { onStreams(meta.id, meta.name) }
+                } else Hero(repository, meta, details, awards, scores, heroHeight, side, wide, isSeries, next, play, holdText, short = wide && maxHeight < 560.dp) { onStreams(meta.id, meta.name) }
             }
             // TV: Big Picture's episode strip comes straight after the hero (bp-detail's row order).
             if (tv && isSeries && seasons.isNotEmpty()) item(key = "tv-episodes") {
@@ -637,13 +640,19 @@ private fun Hero(
     next: Video?,
     play: () -> Unit,
     holdText: Boolean,
+    /**
+     * A wide but short screen (a phone held sideways): the hero grows to fit under the top bar, and the
+     * awards sit in the column, where a fixed height pushed the title under the search bar and the
+     * awards badge over the facts.
+     */
+    short: Boolean = false,
     /** Opens the sources, whose cards download (Harbor's download button on films). */
     download: () -> Unit,
 ) {
     val uri = LocalUriHandler.current
     var trailersOpen by remember(meta.id) { mutableStateOf(false) }
     if (trailersOpen) TrailersDialog(repository, meta, next?.season) { trailersOpen = false }
-    Box(Modifier.fillMaxWidth().height(height)) {
+    Box(Modifier.fillMaxWidth().then(if (short) Modifier.heightIn(min = height) else Modifier.height(height))) {
         AsyncImage(
             model = details?.backdrop ?: meta.background ?: meta.poster,
             contentDescription = null,
@@ -656,7 +665,7 @@ private fun Hero(
         Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to Color(0x33000000), 0.45f to Color.Transparent, 1f to HarborColors.Canvas)))
         Box(Modifier.matchParentSize().background(Brush.horizontalGradient(0f to Color(0xCC121316), if (wide) 0.55f to Color.Transparent else 0.9f to Color(0x33121316))))
         Column(
-            Modifier.align(Alignment.BottomStart).padding(start = side, end = side, bottom = 8.dp).widthIn(max = 760.dp),
+            Modifier.align(Alignment.BottomStart).padding(start = side, end = side, bottom = 8.dp, top = if (short) 96.dp else 0.dp).widthIn(max = 760.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             val logo = details?.logo ?: meta.logoUrl
@@ -703,7 +712,7 @@ private fun Hero(
 
             AccoladePills(meta.id.substringBefore(':').takeIf { it.startsWith("tt") })
             if (!isSeries) details?.movieReleases?.let { MovieReleaseCountdowns(it) }
-            if (!wide) HeroAwards(awards, Modifier)
+            if (!wide || short) HeroAwards(awards, Modifier)
             HeroActions(
                 repository, meta, details, isSeries, wide,
                 playLabel = when {
@@ -717,7 +726,7 @@ private fun Hero(
                 download = download,
             )
         }
-        if (wide) HeroAwards(awards, Modifier.align(Alignment.BottomEnd).padding(end = side, bottom = 120.dp))
+        if (wide && !short) HeroAwards(awards, Modifier.align(Alignment.BottomEnd).padding(end = side, bottom = 120.dp))
     }
 }
 
@@ -1128,3 +1137,10 @@ object MetaPreview {
 /** An IMDb score as Harbor shows it: 0 < score ≤ 10, one decimal ("7.0"). */
 private fun validImdbRating(value: String): String? =
     value.trim().toDoubleOrNull()?.takeIf { it > 0 && it <= 10 }?.let { "%.1f".format(Locale.US, it) }
+
+/**
+ * TMDB's details for an anime entry found through its IMDb id: the text, art, cast and suggestions only.
+ * Kitsu and MAL give each season its own entry, so TMDB's whole-show numbering (seasons, episode names
+ * by number, its TVDB id) would label this entry's episodes wrongly.
+ */
+private fun app.harbor.android.data.TmdbDetails.forAnime() = copy(tmdbId = 0, tvdbId = null, seasons = null, episodes = null)

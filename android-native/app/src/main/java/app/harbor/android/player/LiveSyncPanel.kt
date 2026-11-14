@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -212,7 +213,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.PanelBody(session: Li
             Text("No line has those words.", color = Muted, fontSize = 13.5.sp, modifier = Modifier.align(Alignment.Center).padding(28.dp))
         }
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
-            items(shown, key = { it.startMs.toString() + it.text.hashCode() }) { line ->
+            itemsIndexed(shown, key = { i, it -> "$i:${it.startMs}" }) { _, line ->
                 val active = line.startMs == activeStart
                 val open = selected == line.startMs
                 LineRow(line, active, pointOrder[line.startMs], query) { selected = if (open) null else line.startMs }

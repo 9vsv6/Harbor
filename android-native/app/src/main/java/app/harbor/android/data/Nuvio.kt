@@ -138,11 +138,19 @@ object Nuvio {
         return tokens.str("access_token")?.let { session(tokens) }
     }
 
-    /** A fresh token from the refresh token; null when Nuvio no longer accepts it. */
-    suspend fun refresh(s: NuvioSession): NuvioSession? = runCatching {
-        val res = Net.call(anon("/auth/v1/token?grant_type=refresh_token", buildJsonObject { put("refresh_token", s.refreshToken) }))
-        session(parse(res) as JsonObject, s.refreshToken, s.userId to s.email)
-    }.getOrNull()
+    /**
+     * A fresh token from the refresh token; null when Nuvio no longer accepts it.
+     * No connection or a server error throws instead, so being offline never signs you out.
+     */
+    suspend fun refresh(s: NuvioSession): NuvioSession? {
+        val res = try {
+            Net.call(anon("/auth/v1/token?grant_type=refresh_token", buildJsonObject { put("refresh_token", s.refreshToken) }))
+        } catch (e: Net.HttpError) {
+            if (e.code in 400..403) return null
+            throw e
+        }
+        return session(parse(res) as JsonObject, s.refreshToken, s.userId to s.email)
+    }
 
     suspend fun signOut(s: NuvioSession) {
         runCatching {

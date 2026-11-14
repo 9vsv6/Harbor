@@ -95,13 +95,13 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
         val q = query.trim()
         if (q.length < 2 || aiMode) {
             results = null
+            loading = false
             if (q.length < 2) aiResults = null
             return@LaunchedEffect
         }
         delay(350) // Wait for typing to pause.
         loading = true
-        results = searchCatalogs(repository, q)
-        loading = false
+        try { results = searchCatalogs(repository, q) } finally { loading = false }
     }
 
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {

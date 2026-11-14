@@ -362,7 +362,8 @@ private fun SeasonPicker(seasons: List<Int>, counts: Map<Int, Int>, current: Int
             }
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    // The dialog composes in its own window a frame later: ask until the row is there.
+    LaunchedEffect(Unit) { repeat(15) { kotlinx.coroutines.delay(40); if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect } }
 }
 
 @Composable
@@ -448,5 +449,6 @@ fun TvChoiceDialog(title: String, options: List<Triple<String, String?, Boolean>
             }
         }
     }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    // The dialog composes in its own window a frame later: ask until the row is there.
+    LaunchedEffect(Unit) { repeat(15) { kotlinx.coroutines.delay(40); if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect } }
 }

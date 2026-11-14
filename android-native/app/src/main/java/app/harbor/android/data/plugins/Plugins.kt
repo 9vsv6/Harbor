@@ -243,6 +243,8 @@ object Plugins {
 
     fun supported(entry: PluginEntry) = entry.format == FORMAT_ANDROID
 
+    private const val MAX_PLUGIN_BYTES = 50L * 1024 * 1024
+
     /** Downloads and installs one plugin (or updates it), then loads it to check it runs here. */
     suspend fun install(repo: PluginRepo, entry: PluginEntry): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -250,14 +252,29 @@ object Plugins {
             val id = idFor(repo.url, entry.id)
             val files = File(dir, "files").apply { mkdirs() }
             val target = File(files, id.replace(Regex("[^A-Za-z0-9._-]"), "_") + ".cs3")
+            // An extension is code that runs in the app: never fetched over plain http.
+            require(android.net.Uri.parse(entry.entry).scheme.equals("https", true)) { "This extension isn't offered over https" }
             val bytes = Net.client.newCall(Request.Builder().url(entry.entry).header("User-Agent", Net.USER_AGENT).build()).execute().use { res ->
                 check(res.isSuccessful) { "Download failed (${res.code})" }
-                res.body?.bytes() ?: error("Empty download")
+                val body = res.body ?: error("Empty download")
+                check(body.contentLength() <= MAX_PLUGIN_BYTES) { "That extension is too large" }
+                body.byteStream().use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        out.write(buffer, 0, n)
+                        check(out.size() <= MAX_PLUGIN_BYTES) { "That extension is too large" }
+                    }
+                    out.toByteArray()
+                }
             }
             check(bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()) { "That download isn't an extension archive" }
             CloudstreamHost.unload(id)
             if (target.exists()) { target.setWritable(true); target.delete() }
-            File(files, "${target.name}.part").apply { writeBytes(bytes); renameTo(target) }
+            val part = File(files, "${target.name}.part").apply { writeBytes(bytes) }
+            if (!part.renameTo(target)) { part.delete(); error("Couldn't save the extension") }
             val now = System.currentTimeMillis()
             var plugin = InstalledPlugin(
                 id = id, entryId = entry.id, repoUrl = repo.url, repoName = repo.name, name = entry.name, version = entry.version,

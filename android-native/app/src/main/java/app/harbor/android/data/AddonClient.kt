@@ -85,6 +85,17 @@ object AddonClient {
 
     data class AddonStreams(val addon: Addon, val streams: List<Stream>, val error: String? = null)
 
+    /**
+     * Each addon's streams for a title, kept a few minutes: the player's source switcher, "try the next
+     * source" and the sources page opened again show them at once instead of asking every addon again.
+     * Refresh on the sources page forgets them.
+     */
+    private class CachedStreams(val at: Long, val streams: List<Stream>)
+    private val streamCache = java.util.concurrent.ConcurrentHashMap<String, CachedStreams>()
+    private const val STREAM_CACHE_MS = 5 * 60_000L
+
+    fun forgetStreams() = streamCache.clear()
+
     /** Streams from every addon that offers them, in parallel; a slow addon times out alone. */
     suspend fun streams(addons: List<Addon>, type: String, id: String, onEach: (suspend (AddonStreams) -> Unit)? = null): List<AddonStreams> =
         streams(addons, onEach) { addon -> if (addon.manifest.supports("stream", type, id)) listOf(type to id) else emptyList() }
@@ -106,9 +117,19 @@ object AddonClient {
                         coroutineScope {
                             ids.map { (type, id) ->
                                 async {
-                                    fetch(path(addon, "stream", type, id))["streams"].arrayOrNull?.mapNotNull {
+                                    val url = path(addon, "stream", type, id)
+                                    val now = System.currentTimeMillis()
+                                    streamCache[url]?.takeIf { now - it.at < STREAM_CACHE_MS }?.let { return@async it.streams }
+                                    val list = fetch(url)["streams"].arrayOrNull?.mapNotNull {
                                         runCatching { Net.json.decodeFromJsonElement(Stream.serializer(), it) }.getOrNull()
                                     } ?: emptyList()
+                                    // Only answers worth keeping; an empty one may be an addon still warming up.
+                                    if (list.isNotEmpty()) {
+                                        if (streamCache.size > 40) streamCache.entries.removeIf { now - it.value.at >= STREAM_CACHE_MS }
+                                        if (streamCache.size > 40) streamCache.clear()
+                                        streamCache[url] = CachedStreams(now, list)
+                                    }
+                                    list
                                 }
                             }.awaitAll().flatten()
                         }

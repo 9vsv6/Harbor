@@ -65,7 +65,8 @@ fun CatalogScreen(
     val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= metas.size - 12 } }
     val canPage = catalog?.let { c -> c.extra.any { it.name == "skip" } || "skip" in c.extraSupported } == true
 
-    LaunchedEffect(addon, catalog, nearEnd) {
+    // metas.size too: a first page that fits on a wide screen leaves nearEnd true, and the next page must still load.
+    LaunchedEffect(addon, catalog, nearEnd, metas.size) {
         if (addon == null || catalog == null || loading || done) return@LaunchedEffect
         if (metas.isNotEmpty() && (!nearEnd || !canPage)) return@LaunchedEffect
         loading = true
@@ -73,7 +74,10 @@ fun CatalogScreen(
             genre?.let { put("genre", it) }
             if (metas.isNotEmpty()) put("skip", metas.size.toString())
         }
-        val page = runCatching { AddonClient.catalog(addon, catalog, extra) }.getOrDefault(emptyList())
+        // Scrolled back up mid-load: that cancels this; it mustn't count as "no more pages".
+        val page = try { AddonClient.catalog(addon, catalog, extra) }
+            catch (e: kotlinx.coroutines.CancellationException) { loading = false; throw e }
+            catch (_: Exception) { emptyList() }
         val known = metas.map { it.id }.toSet()
         // distinctBy: a title repeated within one page would crash the grid (each cell's key must be unique).
         val fresh = page.filter { it.id !in known }.distinctBy { it.id }
@@ -116,11 +120,13 @@ private fun TmdbCatalog(repository: Repository, spec: Tmdb.RowSpec, title: Strin
     val grid = rememberLazyGridState()
     val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= metas.size - 12 } }
 
-    LaunchedEffect(key, nearEnd) {
+    LaunchedEffect(key, nearEnd, metas.size) {
         val k = key ?: return@LaunchedEffect
         if (loading || done || (metas.isNotEmpty() && !nearEnd) || page >= 20) return@LaunchedEffect
         loading = true
-        val next = runCatching { Tmdb.row(k, spec, page + 1) }.getOrDefault(emptyList())
+        val next = try { Tmdb.row(k, spec, page + 1) }
+            catch (e: kotlinx.coroutines.CancellationException) { loading = false; throw e }
+            catch (_: Exception) { emptyList() }
         val known = metas.map { it.id }.toSet()
         val fresh = next.filter { it.id !in known }.distinctBy { it.id }
         if (fresh.isEmpty()) done = true

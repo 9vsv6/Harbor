@@ -1,5 +1,7 @@
 package app.harbor.android.ui
 
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.foundation.layout.heightIn
@@ -283,7 +285,7 @@ fun StreamsScreen(
             title, meta, all, narrowed, shown, loading, facetRows, facets, { facets = it }, addonFilter, { addonFilter = it }, mode, { mode = it },
             remembered, debrid, status, error, connecting,
             onCancel = { job?.cancel(); status = null; connecting = null },
-            onRefresh = { refreshKey++; failures = emptyList() },
+            onRefresh = { app.harbor.android.data.AddonClient.forgetStreams(); refreshKey++; failures = emptyList() },
             onBack = onBack,
             onPlay = { play(it) },
         )
@@ -291,7 +293,7 @@ fun StreamsScreen(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
-        val wide = maxWidth >= 600.dp
+        val wide = maxWidth >= 600.dp && tabletLayout()
         val side = if (wide) 40.dp else 18.dp
         LazyColumn(
             state = listState,
@@ -305,7 +307,7 @@ fun StreamsScreen(
                     // Harbor's "Move Refresh next to Back"; off keeps it at the far end.
                     if (!settings.pickerRefreshNextToBack) Spacer(Modifier.weight(1f))
                     HeaderPill(Icons.Rounded.Refresh, "Refresh", spin = loading) {
-                        refreshKey++
+                        app.harbor.android.data.AddonClient.forgetStreams(); refreshKey++
                         failures = emptyList()
                     }
                 }
@@ -351,7 +353,7 @@ fun StreamsScreen(
                             }
                         }
                         Box(
-                            Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Elevated).clickable { refreshKey++; failures = emptyList() }
+                            Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Elevated).clickable { app.harbor.android.data.AddonClient.forgetStreams(); refreshKey++; failures = emptyList() }
                                 .padding(horizontal = 18.dp, vertical = 10.dp),
                         ) { Text("Recheck", color = HarborColors.Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
                     }
@@ -436,8 +438,9 @@ fun StreamsScreen(
             }
         }
         if (scrolled) {
+            // Bottom centre: on the right it sat over the cards' Play buttons (a phone held sideways).
             Row(
-                Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(end = 18.dp, bottom = 96.dp)
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 22.dp)
                     .clip(RoundedCornerShape(50)).background(HarborColors.Accent)
                     .clickable { scope.launch { listState.animateScrollToItem(0) } }.padding(horizontal = 18.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -966,6 +969,7 @@ private fun Modifier.tvRing(focused: Boolean, radius: androidx.compose.ui.unit.D
  * Big Picture's Connecting screen (player/bp-connecting.tsx): the title's backdrop, blurred and
  * dark, its logo, the source's quality and size, a running bar, CONNECTING and Cancel.
  */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 internal fun TvConnecting(
     meta: Meta?,
@@ -977,7 +981,10 @@ internal fun TvConnecting(
     interactive: Boolean = true,
 ) {
     val cancel = remember { androidx.compose.ui.focus.FocusRequester() }
-    Box(Modifier.fillMaxSize().background(app.harbor.android.ui.tv.Void).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}) {
+    // Focus stays on this page: the sources underneath mustn't be reachable while one connects.
+    Box(Modifier.fillMaxSize().background(app.harbor.android.ui.tv.Void)
+        .focusProperties { exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }.focusGroup()
+        .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}) {
         (meta?.background ?: meta?.poster)?.let { art ->
             AsyncImage(
                 art, null, contentScale = ContentScale.Crop,

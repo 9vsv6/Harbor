@@ -38,10 +38,16 @@ object SubtitleNames {
         }
     }.getOrNull()
 
+    /** A database path or number ("subtitle/3703328-8624305", "12345"), not a name. */
+    private fun looksLikeId(text: String): Boolean {
+        val last = text.trim().trimEnd('/').substringAfterLast('/')
+        return hashLike.matches(last) || numberedId.matches(last) || last.all { it.isDigit() || it == '-' || it == '_' }
+    }
+
     /** An addon's id, when it is a release name rather than a database number or hash. */
     private fun namedId(id: String?): String? {
         val text = id?.trim().orEmpty()
-        val named = text.length in 4..120 && text.any { it.isLetter() } && !hashLike.matches(text) && !numberedId.matches(text) &&
+        val named = text.length in 4..120 && text.any { it.isLetter() } && !looksLikeId(text) &&
             !text.contains(" · ") // Harbor's own sources keep "SubDL · release" here.
         return if (named) text.replace('.', ' ').replace('_', ' ') else null
     }
@@ -66,9 +72,10 @@ object SubtitleNames {
         // OpenSubtitles v3 gives no names: Harbor numbers them in each language.
         if (isOpenSubtitlesV3(sub)) return "OpenSubtitles V3" + if (sub.number > 0) " #${sub.number}" else ""
         return fileName(sub.url)
-            ?: sub.label
+            ?: sub.label?.takeUnless { looksLikeId(it) }
             ?: namedId(sub.id)
-            ?: provider(sub)
+            // Numbered in its language like OpenSubtitles V3, so two from the same site differ.
+            ?: provider(sub)?.let { it + if (sub.number > 0) " #${sub.number}" else "" }
             ?: app.harbor.android.player.languageName(sub.lang)
     }
 

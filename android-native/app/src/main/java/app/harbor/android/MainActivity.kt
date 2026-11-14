@@ -293,7 +293,7 @@ private fun HarborRoot(repository: Repository) {
     // Tablets get Harbor's desktop layout: a rail down the left instead of the floating tab bar.
     // No background here: the window background (themes.xml) is already the Canvas colour.
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
-    val wide = tv || maxWidth >= 720.dp
+    val wide = tv || (maxWidth >= 720.dp && app.harbor.android.ui.tabletLayout())
     // Phones: Discover is one of the top bar's sections, so the tab bar stays with it.
     val phoneBar = showBar || (!wide && route == "discover")
     Row(Modifier.fillMaxSize()) {

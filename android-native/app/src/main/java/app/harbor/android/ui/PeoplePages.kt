@@ -79,7 +79,7 @@ object PeopleRoutes {
 private val PageShape = RoundedCornerShape(16.dp)
 
 @Composable
-private fun pageWide() = Perf.isTv || LocalConfiguration.current.screenWidthDp >= 720
+private fun pageWide() = Perf.isTv || (LocalConfiguration.current.screenWidthDp >= 720 && tabletLayout())
 
 @Composable
 private fun BackBar(onBack: () -> Unit) {
