@@ -118,8 +118,8 @@ android {
         // Whisper has a private C++ runtime. mpv's newer shared runtime must keep winning
         // its existing dependency merge; substituting the NDK's can prevent mpv loading.
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
-        versionCode = 29
-        versionName = "1.0.17"
+        versionCode = 30
+        versionName = "1.0.18"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
