@@ -9,6 +9,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.layout.layout
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -171,70 +176,95 @@ private fun RankChip(text: String, modifier: Modifier) {
     )
 }
 
-/** Harbor's CuratedListTiles: every list as a tile, for the shelf. */
+/** Harbor's CuratedListTiles (curated-list-tiles.tsx): "The canon", each list as a 5:4 tile of its first backdrops and the curator's mark. */
 @Composable
-fun CuratedShelf(lists: List<CuratedList>) {
+fun CuratedShelf(lists: List<CuratedList>, title: String = "The canon") {
     val open = LocalOpenList.current
     if (lists.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Lists", color = HarborColors.Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
+        Text(title, color = HarborColors.Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(lists, key = { it.id }) { list ->
-                Column(
-                    Modifier.width(240.dp).height(150.dp).clip(RoundedCornerShape(18.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFF26272C), Color(0xFF18191C)))).clickable { open(list.id) }.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ListMark(list, 34.dp)
-                        Text(list.curator, color = HarborColors.InkMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    Text(list.title, color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text("${list.count} titles", color = HarborColors.InkSubtle, fontSize = 12.sp)
-                }
-            }
+            items(lists, key = { it.id }) { list -> CuratedListTile(list) { open(list.id) } }
         }
     }
 }
 
-/** Harbor's curated list page (views/curated-list.tsx): the curator, title and blurb, then every title. */
+/** The PC's local publisher marks, by list id (assets/curated-logos, from src/assets/curated). */
+private val curatedLogos = mapOf(
+    "sight-and-sound-2022" to "png", "criterion-collection" to "svg", "afi-100-1998" to "png",
+    "national-film-registry" to "svg", "nbr-top-ten" to "png", "locarno-golden-leopard" to "svg",
+    "golden-horse-best-feature" to "svg", "sundance-documentary-jury" to "svg", "annecy-cristal-feature" to "svg",
+    "karlovy-vary-crystal-globe" to "svg", "san-sebastian-golden-shell" to "svg", "cannes-camera-dor" to "svg",
+    "tiff-peoples-choice" to "svg",
+)
+
+private fun curatedLogo(id: String): String? = curatedLogos[id]?.let { "file:///android_asset/curated-logos/$id.$it" }
+
+@Composable
+private fun CuratedListTile(list: CuratedList, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        Modifier.width(240.dp).aspectRatio(5f / 4f).clip(shape).background(HarborColors.Elevated)
+            .border(1.dp, HarborColors.EdgeSoft, shape).clickable(onClick = onClick),
+    ) {
+        // Its first three titles' backdrops, side by side and faded.
+        Row(Modifier.fillMaxSize()) {
+            list.head.take(3).forEach { item ->
+                coil.compose.AsyncImage(
+                    "https://images.metahub.space/background/medium/${item.imdb}/img", null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    alpha = 0.4f,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                )
+            }
+        }
+        Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to Color(0x4D080A0E), 0.55f to Color(0x80080A0E), 1f to Color(0xEB080A0E))))
+        // The publisher's mark in white, else the curator's initials.
+        Box(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 58.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+            val logo = curatedLogo(list.id)
+            if (logo != null) {
+                coil.compose.AsyncImage(
+                    logo, null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+                    modifier = Modifier.height(56.dp).widthIn(max = 170.dp).fillMaxWidth(),
+                )
+            } else ListMark(list, 48.dp)
+        }
+        Row(
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(list.curator, color = Color.White.copy(alpha = 0.95f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("%,d titles".format(list.count), color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+            }
+            Text("›", color = Color.White.copy(alpha = 0.8f), fontSize = 18.sp)
+        }
+    }
+}
+
+/** Harbor's curated list page (views/curated-list.tsx): a mosaic of the list's backdrops behind its curator, title and blurb, then every title. */
 @Composable
 fun CuratedListScreen(id: String, onBack: () -> Unit, onOpen: (Meta) -> Unit) {
     val list = remember(id) { Curated.list(id) }
     val items = remember(id) { Curated.items(id) }
-    Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
-        }
+    Box(Modifier.fillMaxSize().background(HarborColors.Canvas)) {
         if (list == null) {
-            EmptyState("List not found", "This list isn't bundled with the app.")
-            return
-        }
-        LazyVerticalGrid(
+            Column(Modifier.statusBarsPadding()) { EmptyState("List not found", "This list isn't bundled with the app.") }
+        } else LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 112.dp * HarborDisplay.settings.posterScale),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Column(Modifier.padding(bottom = 12.dp).widthIn(max = 820.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ListMark(list, 44.dp)
-                        Text(list.curator.uppercase(), color = HarborColors.InkSubtle, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
-                    }
-                    Text(list.title, color = HarborColors.Ink, fontSize = 30.sp, lineHeight = 36.sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), fontWeight = FontWeight.SemiBold)
-                    Text(list.blurb, color = HarborColors.InkMuted, fontSize = 15.sp, lineHeight = 22.sp)
-                    Text(
-                        listOfNotNull("${list.count} titles", list.year?.toString(), when (list.ordering) {
-                            ListOrdering.Ranked -> "Ranked"
-                            ListOrdering.Spine -> "In spine order"
-                            ListOrdering.Awarded -> "By award year"
-                            ListOrdering.Unordered -> null
-                        }).joinToString("  ·  "),
-                        color = HarborColors.InkSubtle,
-                        fontSize = 13.sp,
-                    )
-                }
+                // Full bleed past the grid's side padding, as the PC header runs edge to edge.
+                Box(Modifier.layout { measurable, constraints ->
+                    val extra = 32.dp.roundToPx()
+                    val placeable = measurable.measure(constraints.copy(minWidth = constraints.maxWidth + extra, maxWidth = constraints.maxWidth + extra))
+                    layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
+                }) { CuratedListHeader(list) }
             }
             items(items, key = { it.imdb }) { item ->
                 val meta = Curated.meta(list, item)
@@ -243,6 +273,47 @@ fun CuratedListScreen(id: String, onBack: () -> Unit, onOpen: (Meta) -> Unit) {
                     Curated.badge(list, item)?.let { RankChip(it, Modifier.align(Alignment.TopEnd).padding(6.dp)) }
                 }
             }
+            if (items.size < list.count) item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("Showing %,d of %,d from the last snapshot.".format(items.size, list.count), color = HarborColors.InkSubtle, fontSize = 13.sp)
+            }
+        }
+        IconButton(onClick = onBack, modifier = Modifier.statusBarsPadding().padding(8.dp)) {
+            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = HarborColors.Ink)
+        }
+    }
+}
+
+/** list-header.tsx: the list's backdrops as a faded mosaic, then its curator, title, blurb and count. */
+@Composable
+private fun CuratedListHeader(list: CuratedList) {
+    val tiles = remember(list.id) {
+        val imgs = list.head.take(9).map { "https://images.metahub.space/background/medium/${it.imdb}/img" }
+        if (imgs.size < 3) emptyList() else List(9) { imgs[it % imgs.size] }
+    }
+    Box(Modifier.fillMaxWidth().heightIn(min = 420.dp)) {
+        if (tiles.isNotEmpty()) Column(Modifier.matchParentSize()) {
+            tiles.chunked(3).forEach { row ->
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    row.forEach { src ->
+                        coil.compose.AsyncImage(src, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, alpha = 0.72f, modifier = Modifier.weight(1f).fillMaxHeight())
+                    }
+                }
+            }
+        }
+        // The PC's fades: from the page colour on the left, and up from the bottom into the grid.
+        Box(Modifier.matchParentSize().background(Brush.horizontalGradient(0f to HarborColors.Canvas, 0.5f to HarborColors.Canvas.copy(alpha = 0.75f), 1f to HarborColors.Canvas.copy(alpha = 0.15f))))
+        Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to HarborColors.Canvas.copy(alpha = 0.6f), 0.25f to Color.Transparent, 0.6f to HarborColors.Canvas.copy(alpha = 0.1f), 1f to HarborColors.Canvas)))
+        Column(
+            Modifier.align(Alignment.BottomStart).statusBarsPadding().padding(start = 20.dp, end = 20.dp, top = 96.dp, bottom = 32.dp).widthIn(max = 820.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(list.curator.uppercase(), color = HarborColors.InkSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+            Text(list.title, color = HarborColors.Ink, fontSize = 38.sp, lineHeight = 40.sp, fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), fontWeight = FontWeight.Medium)
+            Text(list.blurb, color = HarborColors.InkMuted, fontSize = 16.sp, lineHeight = 26.sp)
+            Text(
+                listOfNotNull(list.year?.toString(), "%,d titles".format(list.count)).joinToString("   ·   "),
+                color = HarborColors.InkSubtle, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            )
         }
     }
 }

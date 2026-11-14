@@ -83,10 +83,17 @@ private enum class LibTab(val label: String) {
 }
 
 private enum class Kind { All, Movies, Shows }
-private enum class Sort(val label: String) { Recent("Recent"), Az("A-Z"), Year("Year") }
+/**
+ * Stremio's library orders. "Last watched" uses only Stremio's own date for each title (kept on your
+ * Stremio account, so the same on every device); titles without one go to the end.
+ */
+private enum class Sort(val label: String) {
+    LastWatched("Last watched"), Az("Name"), Za("Name descending"), TimesWatched("Times watched"),
+    Watched("Watched"), NotWatched("Not watched"), Year("Year"),
+}
 
 /** A title in a library tab, with when it was last touched (for Recent and History's groups). */
-private data class Entry(val meta: Meta, val at: Long)
+private data class Entry(val meta: Meta, val at: Long, val times: Int = 0, val watched: Boolean = false)
 
 /** Harbor's "My library · Your collection." page. */
 @Composable
@@ -129,8 +136,10 @@ fun LibraryScreen(
     // Library: Stremio's library (what you added or played) and your watchlist on this device.
     // In Nuvio mode the watchlist is the Nuvio profile's library.
     val all = remember(library, myList, nuvioLibrary, continuing) {
-        (library.filter { !it.removed || it.temp }.map { Entry(it.toMeta(), maxOf(time(it.state?.lastWatched), time(it.mtime))) } +
-            continuing.map { Entry(it.meta, it.updatedAt) } +
+        (library.filter { !it.removed || it.temp }.map {
+            Entry(it.toMeta(), time(it.state?.lastWatched), it.state?.timesWatched ?: 0, (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0)
+        } +
+            continuing.map { Entry(it.meta, 0L) } +
             (if (repository.accounts.nuvioActive) nuvioLibrary else myList).map { Entry(it, 0L) }).distinctBy { it.meta.id }
     }
 
@@ -140,9 +149,9 @@ fun LibraryScreen(
             LibTab.Library -> MetaTab(all, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.Watchlist -> MetaTab(all.filter { it.meta.id !in watchedIds }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.History -> MetaTab(
-                (continuing.map { Entry(it.meta, it.updatedAt) } +
-                    library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
-                        .map { Entry(it.toMeta(), time(it.state?.lastWatched ?: it.mtime)) }).distinctBy { it.meta.id },
+                (library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
+                    .map { Entry(it.toMeta(), time(it.state?.lastWatched), it.state?.timesWatched ?: 0, true) } +
+                    continuing.map { Entry(it.meta, 0L) }).distinctBy { it.meta.id },
                 onOpen, inList = { repository.inMyList(it) }, groupByYear = false,
             )
             LibTab.TorBox -> TorboxTab(repository, onConnectTorbox, onPlayFile)
@@ -244,7 +253,9 @@ private fun tabIcon(t: LibTab): Painter = when (t) {
 private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (String) -> Boolean, groupByYear: Boolean) {
     var kind by rememberSaveable { mutableStateOf(Kind.All) }
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(Sort.Recent) }
+    var sort by rememberSaveable { mutableStateOf(Sort.LastWatched) }
+    val watchedIds = HarborDisplay.watchedIds
+    fun Entry.isWatched() = watched || meta.id in watchedIds
     var grouped by rememberSaveable { mutableStateOf(true) }
     val movies = entries.count { it.meta.type == "movie" }
     val shown = entries
@@ -252,8 +263,12 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
         .filter { query.isBlank() || it.meta.name.contains(query.trim(), ignoreCase = true) }
         .let { list ->
             when (sort) {
-                Sort.Recent -> list.sortedByDescending { it.at }
+                Sort.LastWatched -> list.sortedByDescending { it.at }
                 Sort.Az -> list.sortedBy { it.meta.name.lowercase() }
+                Sort.Za -> list.sortedByDescending { it.meta.name.lowercase() }
+                Sort.TimesWatched -> list.sortedByDescending { it.times }
+                Sort.Watched -> list.sortedWith(compareByDescending<Entry> { it.isWatched() }.thenBy { it.meta.name.lowercase() })
+                Sort.NotWatched -> list.sortedWith(compareBy<Entry> { it.isWatched() }.thenBy { it.meta.name.lowercase() })
                 Sort.Year -> list.sortedByDescending { it.meta.year ?: "0" }
             }
         }
@@ -267,17 +282,23 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Segmented(listOf(Kind.All to "All ${entries.size}", Kind.Movies to "Movies $movies", Kind.Shows to "Shows ${entries.size - movies}"), kind) { kind = it }
+                    // Only where most titles have a year: Stremio library items often come without one.
+                    if (groupByYear && sort == Sort.Year && entries.count { it.meta.year != null } * 2 >= entries.size) Segmented(listOf(true to "Grouped", false to "One list"), grouped) { grouped = it }
+                }
+                // Stremio's orders on their own row, above the search.
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
                     Segmented(Sort.entries.map { it to it.label }, sort) { sort = it }
-                    Segmented(listOf(true to "Grouped", false to "One list"), grouped) { grouped = it }
                 }
                 SearchBox(query) { query = it }
             }
         }
         if (shown.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) { EmptyState("Nothing here yet", "Titles you add, play or watch show up here.") }
-        } else if (grouped) {
-            // Grouped by year (Library, Watchlist) or by when you watched (History), as Harbor's.
-            val groups = if (groupByYear) shown.groupBy { it.meta.year ?: "Unknown" }.toList() else shown.groupBy { historyBucket(it.at) }.toList()
+        } else if (grouped && groupByYear && sort == Sort.Year && shown.count { it.meta.year != null } * 2 >= shown.size) {
+            // Grouped by release year, newest first; titles without one at the end. Never by when you
+            // watched: that isn't kept the same across devices.
+            val groups = shown.groupBy { it.meta.year?.take(4) ?: "Year unknown" }.toList()
+                .sortedWith(compareByDescending<Pair<String, List<Entry>>> { it.first.toIntOrNull() ?: -1 })
             groups.forEach { (label, list) ->
                 item(span = { GridItemSpan(maxLineSpan) }) { GroupLabel(label, list.size) }
                 posters(label, list, onOpen, inList)
@@ -297,19 +318,6 @@ private fun LazyGridScope.posters(group: String, list: List<Entry>, onOpen: (Met
                 }
             }
         }
-    }
-}
-
-/** History's groups: This week, This month, This year, then each year. */
-private fun historyBucket(at: Long): String {
-    if (at <= 0) return "Earlier"
-    val days = (System.currentTimeMillis() - at) / 86_400_000
-    val year = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).year
-    return when {
-        days < 7 -> "This week"
-        days < 31 -> "This month"
-        year == java.time.LocalDate.now().year -> "This year"
-        else -> "$year"
     }
 }
 

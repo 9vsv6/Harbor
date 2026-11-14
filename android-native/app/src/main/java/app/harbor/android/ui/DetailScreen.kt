@@ -263,6 +263,8 @@ fun DetailScreen(
             ?: if (own != null && HarborDisplay.settings.keylessDetails) runCatching { Keyless.details(current) }.getOrNull() else null
         detailsSettled = true
     }
+    val waitForTmdb = !detailsSettled && tmdbKey != null &&
+        (id.substringBefore(':').startsWith("tt") || (Tmdb.localizes && id.substringBefore(':') in setOf("kitsu", "mal", "anilist")))
     // Only TMDB (with your key) translates; the keyless sources are English, so nothing would swap.
     val holdText = !detailsSettled && tmdbKey != null && Tmdb.localizes &&
         (id.substringBefore(':').startsWith("tt") || id.substringBefore(':') in setOf("kitsu", "mal", "anilist"))
@@ -271,6 +273,10 @@ fun DetailScreen(
     Box(Modifier.fillMaxSize().then(if (app.harbor.android.perf.Perf.isTv) Modifier else Modifier.background(HarborColors.Canvas))) {
         val current = meta
         when {
+            // With a TMDB key, TMDB's page (its backdrop, logo, credits and cast) is the one shown: the
+            // addon's own version first and swapped a moment later looked like a second page loading.
+            // Waits at most 2.5 s (detailsSettled), and not at all when the details are cached.
+            current != null && waitForTmdb -> Loading(Modifier.padding(top = 160.dp))
             current != null -> DetailBody(
                 repository,
                 current.copy(
