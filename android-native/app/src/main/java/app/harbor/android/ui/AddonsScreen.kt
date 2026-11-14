@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package app.harbor.android.ui
 
 import androidx.activity.compose.BackHandler
@@ -63,6 +65,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
@@ -98,7 +107,8 @@ private sealed interface InstallTarget {
  */
 @Composable
 fun AddonsScreen(repository: Repository, onBack: () -> Unit) {
-    val installed by repository.addons.collectAsState()
+    val installed by repository.allAddons.collectAsState()
+    val disabledAddons by repository.disabledAddons.collectAsState()
     val account by repository.account.collectAsState()
     val canUndo by repository.canUndoAddons.collectAsState()
     val pending by repository.pendingInstall.collectAsState()
@@ -197,6 +207,8 @@ fun AddonsScreen(repository: Repository, onBack: () -> Unit) {
                         isProtected = repository::isProtected,
                         onOpen = { installedDetail = it },
                         onMove = { addon, delta -> act { repository.moveAddon(addon, delta); "Moved ${addon.manifest.name}" } },
+                        disabled = disabledAddons,
+                        onToggle = { addon, on -> repository.setAddonEnabled(addon.transportUrl, on) },
                         nuvio = repository.accounts.nuvioActive,
                         origin = { AccountOriginBadge(repository, it.transportUrl) },
                     )
@@ -301,8 +313,8 @@ private fun DiscoverPane(
         item(key = "categories") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Categories", color = HarborColors.Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
-                LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(AddonCatalog.categories) { (slug, label) ->
+                androidx.compose.foundation.layout.FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AddonCatalog.categories.forEach { (slug, label) ->
                         Box(
                             Modifier.clip(RoundedCornerShape(12.dp)).background(HarborColors.Surface)
                                 .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(12.dp))
@@ -321,7 +333,8 @@ private fun DiscoverPane(
 @Composable
 private fun HeroAddon(addon: CatalogAddon, installed: Boolean, onOpen: () -> Unit, onInstall: () -> Unit) {
     Box(
-        Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(22.dp))
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth()
+            .height(minOf(androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp * 0.5625f, 250.dp)).clip(RoundedCornerShape(22.dp))
             .background(HarborColors.Surface).clickable(onClick = onOpen),
     ) {
         addon.background?.let { AsyncImage(it, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
@@ -409,14 +422,14 @@ private fun BrowsePane(
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item(key = "sorts") {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(AddonCatalog.Sort.entries) { s -> ChoiceChip(s.label, s == sort) { onSort(s) } }
+            androidx.compose.foundation.layout.FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AddonCatalog.Sort.entries.forEach { s -> ChoiceChip(s.label, s == sort) { onSort(s) } }
             }
         }
         item(key = "cats") {
-            LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { ChoiceChip("All", category == null) { onCategory(null) } }
-                items(AddonCatalog.categories) { (slug, label) -> ChoiceChip(label, category == slug) { onCategory(slug) } }
+            androidx.compose.foundation.layout.FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceChip("All", category == null) { onCategory(null) }
+                AddonCatalog.categories.forEach { (slug, label) -> ChoiceChip(label, category == slug) { onCategory(slug) } }
             }
         }
         val list = items
@@ -481,55 +494,103 @@ private fun InstalledPane(
     isProtected: (Addon) -> Boolean,
     onOpen: (Addon) -> Unit,
     onMove: (Addon, Int) -> Unit,
+    disabled: Set<String> = emptySet(),
+    onToggle: (Addon, Boolean) -> Unit = { _, _ -> },
     nuvio: Boolean = false,
     origin: @Composable (Addon) -> Unit = {},
 ) {
     val uri = LocalUriHandler.current
-    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            Text(
-                if (nuvio) "From your Nuvio profile. Addons higher in the list answer first."
-                else if (signedIn) "Synced with your Stremio account. Addons higher in the list answer first."
-                else "On this device. Sign in to Stremio in Settings to use your account's addons.",
-                color = HarborColors.InkSubtle,
-                fontSize = 12.5.sp,
-                modifier = Modifier.padding(vertical = 4.dp),
-            )
+    // Harbor PC's Installed tab: numbered cards with an on/off switch, Manage and Installed;
+    // two columns when there's room, and Reorder shows the arrows.
+    var reorder by rememberSaveable { mutableStateOf(false) }
+    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+        columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(minSize = 420.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (nuvio) "From your Nuvio profile. Addons higher in the list answer first."
+                    else if (signedIn) "Synced with your Stremio account. Addons higher in the list answer first. Off is only on this device."
+                    else "On this device. Sign in to Stremio in Settings to use your account's addons.",
+                    color = HarborColors.InkSubtle,
+                    fontSize = 12.5.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(50))
+                        .background(if (reorder) HarborColors.Elevated else Color.Transparent)
+                        .clickable { reorder = !reorder }.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Rounded.SwapVert, null, tint = HarborColors.InkMuted, modifier = Modifier.size(15.dp))
+                    Text(if (reorder) "DONE" else "REORDER", color = HarborColors.InkMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                }
+            }
         }
-        itemsIndexed(addons, key = { _, a -> a.transportUrl }) { index, addon ->
+        gridItemsIndexed(addons, key = { _, a -> a.transportUrl }) { index, addon ->
+            val on = addon.transportUrl !in disabled
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(HarborColors.Surface)
-                    .clickable { onOpen(addon) }.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                    .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(16.dp))
+                    .clickable { onOpen(addon) }.padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                AddonLogo(addon.manifest, 44)
-                Column(Modifier.weight(1f)) {
+                Text("${index + 1}", color = HarborColors.InkSubtle, fontSize = 14.sp, modifier = Modifier.widthIn(min = 16.dp))
+                Box(Modifier.graphicsLayer { alpha = if (on) 1f else 0.45f }) { AddonLogo(addon.manifest, 36) }
+                Column(Modifier.weight(1f).graphicsLayer { alpha = if (on) 1f else 0.55f }) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(addon.manifest.name, color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         origin(addon)
                     }
                     Text(
-                        listOfNotNull(addon.manifest.version.takeIf { it.isNotBlank() }?.let { "v$it" }, resourceSummary(addon.manifest), if (isProtected(addon)) "Protected" else null)
-                            .joinToString("  ·  "),
+                        if (on) addon.manifest.description?.takeIf { it.isNotBlank() } ?: listOfNotNull(addon.manifest.version.takeIf { it.isNotBlank() }?.let { "v$it" }, resourceSummary(addon.manifest), if (isProtected(addon)) "Protected" else null).joinToString("  ·  ")
+                        else "Off · catalogs and streams hidden",
                         color = HarborColors.InkSubtle,
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (addon.manifest.configurable) {
-                    IconButton(onClick = { uri.openUri(AddonCatalog.configureUrl(addon.transportUrl)) }) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "Configure ${addon.manifest.name}", tint = HarborColors.InkMuted)
+                if (reorder) {
+                    Column {
+                        IconButton(onClick = { onMove(addon, -1) }, enabled = index > 0, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move up")
+                        }
+                        IconButton(onClick = { onMove(addon, 1) }, enabled = index < addons.lastIndex, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move down")
+                        }
                     }
-                }
-                Column {
-                    IconButton(onClick = { onMove(addon, -1) }, enabled = index > 0, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move up")
+                } else {
+                    // Harbor PC's switch: accent when on.
+                    androidx.compose.material3.Switch(
+                        checked = on,
+                        onCheckedChange = { onToggle(addon, it) },
+                        modifier = Modifier.semantics { contentDescription = if (on) "Turn ${addon.manifest.name} off" else "Turn ${addon.manifest.name} on" },
+                        colors = androidx.compose.material3.SwitchDefaults.colors(
+                            checkedThumbColor = Color.White, checkedTrackColor = HarborColors.Accent, checkedBorderColor = HarborColors.Accent,
+                            uncheckedThumbColor = Color.White, uncheckedTrackColor = HarborColors.Elevated, uncheckedBorderColor = HarborColors.EdgeSoft,
+                        ),
+                    )
+                    if (addon.manifest.configurable) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Elevated)
+                                .clickable { uri.openUri(AddonCatalog.configureUrl(addon.transportUrl)) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(Icons.Rounded.Tune, null, tint = HarborColors.InkMuted, modifier = Modifier.size(14.dp))
+                            Text("Manage", color = HarborColors.InkMuted, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
-                    IconButton(onClick = { onMove(addon, 1) }, enabled = index < addons.lastIndex, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move down")
-                    }
+                    Box(
+                        Modifier.clip(RoundedCornerShape(50)).background(HarborColors.Canvas)
+                            .clickable { onOpen(addon) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) { Text("Installed", color = HarborColors.Ink, fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
                 }
             }
         }

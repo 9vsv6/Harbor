@@ -21,6 +21,11 @@ object SubtitleNames {
     /** A release string worth showing: more than three characters, with letters or digits in it. */
     private fun meaningful(value: String?): String? = value?.trim()?.takeIf { it.length > 3 && Regex("""[a-z0-9]{2}""", RegexOption.IGNORE_CASE).containsMatchIn(it) }
 
+    /** SubSense's labels: "OpenSubtitles · [SRT] · The.Film.srt" (site, format, file). */
+    private val packedLabel = Regex("""^\s*(.+?)\s+·\s+\[(\w{2,6})]\s+·\s+(.+?)\s*$""")
+
+    private fun packed(sub: Subtitle) = sub.label?.let { packedLabel.find(it) }?.groupValues
+
     /** The release it was made for, when the source gives a real one (OpenSubtitles v3 often sends "i"). */
     fun release(sub: Subtitle): String? = meaningful(sub.release)
 
@@ -56,7 +61,7 @@ object SubtitleNames {
     fun provider(sub: Subtitle): String? {
         if (isOpenSubtitlesV3(sub)) return "OpenSubtitles"
         val from = sub.from
-        val up = sub.upstream
+        val up = sub.upstream ?: packed(sub)?.get(1)?.takeIf { it.length <= 40 }
         return when {
             up != null && from != null && !from.equals(up, true) -> "$up · $from"
             up != null -> up
@@ -71,6 +76,7 @@ object SubtitleNames {
         meaningful(sub.release)?.let { return it }
         // OpenSubtitles v3 gives no names: Harbor numbers them in each language.
         if (isOpenSubtitlesV3(sub)) return "OpenSubtitles V3" + if (sub.number > 0) " #${sub.number}" else ""
+        packed(sub)?.let { g -> return g[3].replace(Regex("""\.(srt|vtt|ass|ssa|sub)$""", RegexOption.IGNORE_CASE), "") }
         return fileName(sub.url)
             ?: sub.label?.takeUnless { looksLikeId(it) }
             ?: namedId(sub.id)
@@ -81,7 +87,7 @@ object SubtitleNames {
 
     /** "SubRip subtitle", "WebVTT subtitle", "ASS subtitle", as mpv names the format. */
     fun format(sub: Subtitle): String {
-        val ext = (sub.format ?: sub.url.substringBefore('?').substringAfterLast('.', "")).lowercase()
+        val ext = (sub.format ?: packed(sub)?.get(2) ?: sub.url.substringBefore('?').substringAfterLast('.', "")).lowercase()
         return when (ext) {
             "vtt", "webvtt" -> "WebVTT subtitle"
             "ass", "ssa" -> "ASS subtitle"

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package app.harbor.android.ui
 
 import androidx.compose.ui.focus.focusProperties
@@ -393,11 +395,13 @@ fun StreamsScreen(
             item(key = "facets") {
                 // facet-menu-row.tsx: a filter shows when it has two values to choose between, or one is chosen.
                 val visible = facetRows.filter { it.options.size >= 2 || it.value != null }
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    items(visible, key = { it.facet.name }) { row ->
-                        FacetChip(row) { v -> facets = if (v == null) facets - row.facet else facets + (row.facet to v) }
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    visible.forEach { row ->
+                        androidx.compose.runtime.key(row.facet.name) {
+                            FacetChip(row) { v -> facets = if (v == null) facets - row.facet else facets + (row.facet to v) }
+                        }
                     }
-                    if (facets.isNotEmpty()) item(key = "reset") {
+                    if (facets.isNotEmpty()) {
                         Text(
                             "Reset", color = HarborColors.InkSubtle, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clip(RoundedCornerShape(50)).clickable { facets = emptyMap() }.padding(horizontal = 10.dp, vertical = 8.dp),

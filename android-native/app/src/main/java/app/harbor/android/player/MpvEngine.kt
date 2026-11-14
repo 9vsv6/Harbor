@@ -338,6 +338,32 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 target.setFrameRate(fps, android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
             }
         }
+        // Once the screen has switched, check its rate.
+        main.removeCallbacks(lockToDisplay)
+        main.postDelayed(lockToDisplay, 1_500)
+    }
+
+    /**
+     * When the screen runs at an exact multiple of the video (48 Hz for 24 fps on screens with no 24 Hz
+     * mode), mpv times each frame to the screen's refreshes instead of the audio clock: timed to the
+     * audio, a frame near a refresh boundary slipped one refresh now and then (a 62 ms frame and a
+     * 20 ms one, a few times a second's worth per 15 s). Audio is resampled by a fraction of a percent
+     * to stay in step. Anything else, and Motion smoothing (its own mode), stays as it was.
+     */
+    private val lockToDisplay = Runnable {
+        if (settings.motionSmoothing) return@Runnable
+        val refresh = surface.display?.refreshRate ?: return@Runnable
+        val fps = videoFps * playSpeed
+        val ratio = if (fps > 0f) refresh / fps else 0f
+        val multiple = ratio >= 1.5f && kotlin.math.abs(ratio - kotlin.math.round(ratio)) < 0.01f * ratio
+        later {
+            if (multiple) {
+                runCatching { mpv.setPropertyDouble("display-fps-override", refresh.toDouble()) }
+                runCatching { mpv.setPropertyString("video-sync", "display-resample") }
+            } else {
+                runCatching { mpv.setPropertyString("video-sync", "audio") }
+            }
+        }
     }
 
     override fun eventProperty(property: String, value: Boolean) {

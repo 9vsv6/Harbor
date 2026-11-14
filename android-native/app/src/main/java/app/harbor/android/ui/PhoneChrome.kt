@@ -42,11 +42,12 @@ import app.harbor.android.data.Profile
 
 /** The phone's sections, in the bottom bar's order. */
 enum class PhoneSection(val label: String, val glyph: Int) {
+    // The tablet rail's order (Home, Discover, Library, Movies, Shows, Anime), without Library: it's in your picture's menu.
     Home("Home", R.drawable.nav_home),
+    Discover("Discover", R.drawable.nav_explore),
     Movies("Movies", R.drawable.nav_movies),
     Shows("Shows", R.drawable.nav_tv),
     Anime("Anime", R.drawable.nav_anime),
-    Discover("Discover", R.drawable.nav_explore),
 }
 
 /** The top bar's height under the status bar. */

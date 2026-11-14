@@ -267,7 +267,7 @@ internal fun StreamingCatalogs(settings: AppSettings, hasTmdb: Boolean, set: ((A
 /** stream-priority-card.tsx: addons higher in the list come first; arrows move them. */
 @Composable
 internal fun StreamPriority(repository: Repository, addonOrder: Boolean) {
-    val addons by repository.addons.collectAsState()
+    val addons by repository.allAddons.collectAsState()
     val scope = rememberCoroutineScope()
     val streaming = addons.filter { "stream" in it.manifest.resourceNames }
     Column(

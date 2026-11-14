@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package app.harbor.android.ui
 
 import androidx.compose.foundation.Image
@@ -9,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -214,10 +218,10 @@ private fun Header(tab: LibTab, tabs: List<LibTab>, onTab: (LibTab) -> Unit) {
         )
     }
     // The tab bar: icon and name, the open one underlined.
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 8.dp, end = 8.dp, top = 14.dp)) {
+    androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp)) {
         tabs.forEach { t ->
             val on = t == tab
-            Column(Modifier.clickable { onTab(t) }.padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.width(IntrinsicSize.Max).clickable { onTab(t) }.padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     val icon = tabIcon(t)
                     if (t == LibTab.TorBox || t.ordinal >= LibTab.Trakt.ordinal) Image(icon, null, Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)))
@@ -280,15 +284,13 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Segmented(listOf(Kind.All to "All ${entries.size}", Kind.Movies to "Movies $movies", Kind.Shows to "Shows ${entries.size - movies}"), kind) { kind = it }
                     // Only where most titles have a year: Stremio library items often come without one.
                     if (groupByYear && sort == Sort.Year && entries.count { it.meta.year != null } * 2 >= entries.size) Segmented(listOf(true to "Grouped", false to "One list"), grouped) { grouped = it }
                 }
                 // Stremio's orders on their own row, above the search.
-                Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    Segmented(Sort.entries.map { it to it.label }, sort) { sort = it }
-                }
+                Segmented(Sort.entries.map { it to it.label }, sort) { sort = it }
                 SearchBox(query) { query = it }
             }
         }
@@ -331,7 +333,8 @@ private fun GroupLabel(label: String, count: Int) {
 
 @Composable
 private fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onPick: (T) -> Unit) {
-    Row(Modifier.clip(CircleShape).background(HarborColors.Surface).padding(3.dp)) {
+    // Wraps onto more lines when the options don't fit, rather than scrolling sideways.
+    androidx.compose.foundation.layout.FlowRow(Modifier.clip(RoundedCornerShape(22.dp)).background(HarborColors.Surface).padding(3.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         options.forEach { (value, label) ->
             val on = value == selected
             Text(
@@ -357,7 +360,7 @@ private fun ListsTab(repository: Repository, onOpen: (Meta) -> Unit) {
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     if (shelves.lists.isEmpty()) { EmptyState("No lists yet", "Use Add to list on a title's page to start one."); return }
     val current = shelves.lists.firstOrNull { it.id == open } ?: shelves.lists.first()
-    Row(Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 14.dp)) {
+    Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp)) {
         Segmented(shelves.lists.map { it.id to "${it.name} ${it.items.size}" }, current.id) { open = it }
     }
     MetaTab(current.items.map { Entry(it, 0L) }, onOpen, inList = { repository.inMyList(it) }, groupByYear = false)

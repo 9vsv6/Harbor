@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package app.harbor.android.ui
 
 import androidx.compose.foundation.background
@@ -273,9 +275,9 @@ fun CollectionsScreen(repository: Repository, onBack: () -> Unit) {
             EmptyState("Collections need a TMDB key", "Add your free TMDB key in Settings > Metadata providers to browse franchises.")
             return
         }
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 12.dp)) {
-            item { CategoryChip("All", category == null) { category = null } }
-            items(Discover.collectionCategories) { c -> CategoryChip(c, category == c) { category = c } }
+        androidx.compose.foundation.layout.FlowRow(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CategoryChip("All", category == null) { category = null }
+            Discover.collectionCategories.forEach { c -> CategoryChip(c, category == c) { category = c } }
         }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 260.dp),

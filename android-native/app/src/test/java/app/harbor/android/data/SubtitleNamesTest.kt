@@ -17,4 +17,11 @@ class SubtitleNamesTest {
     @Test fun releaseIdIsAName() {
         assertEquals("Mao S01E23 1080p WEB", SubtitleNames.title(sub("Mao.S01E23.1080p.WEB")))
     }
+
+    @Test fun subsensePackedLabel() {
+        val s = Subtitle(url = "https://subsense.example/x/123", lang = "ara", label = "OpenSubtitles · [VTT] · The Odyssey (2026).ass", from = "SubSense")
+        assertEquals("The Odyssey (2026)", SubtitleNames.title(s))
+        assertEquals("OpenSubtitles · SubSense", SubtitleNames.provider(s))
+        assertEquals("WebVTT subtitle", SubtitleNames.format(s))
+    }
 }

@@ -179,7 +179,9 @@ fun HeroCarousel(
             // (10:9 of a sideways phone is taller than the screen).
             if (fullBleed && landscape) Modifier.fillMaxWidth().height(screenHeight * 0.8f).background(HarborColors.Surface)
             else if (fullBleed) Modifier.fillMaxWidth().aspectRatio(10f / 9f).background(HarborColors.Surface)
-            else Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(if (wide) 21f / 9f else 16f / 13f)
+            // A tablet held sideways: full width, half the screen tall (21:9 of its width filled the screen).
+            else Modifier.padding(horizontal = 16.dp).fillMaxWidth()
+                .then(if (wide && landscape) Modifier.height(screenHeight * 0.52f) else Modifier.aspectRatio(if (wide) 21f / 9f else 16f / 13f))
                 .clip(HeroShape).background(HarborColors.Surface)
                 .border(1.dp, HarborColors.EdgeSoft, HeroShape),
         ) {

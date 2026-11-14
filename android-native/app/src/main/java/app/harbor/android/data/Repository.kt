@@ -128,7 +128,27 @@ class Repository(private val context: Context) {
     val account: StateFlow<Account?> = _account.asStateFlow()
 
     private val _addons = MutableStateFlow<List<Addon>>(emptyList())
-    val addons: StateFlow<List<Addon>> = _addons.asStateFlow()
+    /** Every installed addon, on or off: for the Addons page and its order. */
+    val allAddons: StateFlow<List<Addon>> = _addons.asStateFlow()
+
+    /** Addons turned off on this device (by transport URL), as Harbor PC's disabled addons: kept installed, but asked for nothing. */
+    private val _disabledAddons = MutableStateFlow<Set<String>>(emptySet())
+    val disabledAddons: StateFlow<Set<String>> = _disabledAddons.asStateFlow()
+
+    /** The addons that are on: every catalog, stream and subtitle lookup goes through these. */
+    val addons: StateFlow<List<Addon>> = combine(_addons, _disabledAddons) { all, off ->
+        if (off.isEmpty()) all else all.filter { it.transportUrl !in off }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    fun setAddonEnabled(transportUrl: String, enabled: Boolean) {
+        val next = if (enabled) _disabledAddons.value - transportUrl else _disabledAddons.value + transportUrl
+        _disabledAddons.value = next
+        scope.launch {
+            context.store.edit { prefs ->
+                if (next.isEmpty()) prefs.remove(KEY_DISABLED_ADDONS) else prefs[KEY_DISABLED_ADDONS] = next.joinToString(" ")
+            }
+        }
+    }
 
     /** Cinemeta and Kitsu, always available for details and the Anime view, like Harbor's built-ins. */
     private val _builtins = MutableStateFlow<List<Addon>>(emptyList())
@@ -1072,6 +1092,7 @@ class Repository(private val context: Context) {
             applyDebridKeys(legacy + saved)
             _tmdbKey.value = prefs[KEY_TMDB]?.takeIf { it.isNotBlank() }
             _rpdbKey.value = prefs[KEY_RPDB]?.takeIf { it.isNotBlank() }
+            _disabledAddons.value = prefs[KEY_DISABLED_ADDONS]?.split(" ")?.filter { it.isNotBlank() }?.toSet().orEmpty()
             _omdbKey.value = prefs[KEY_OMDB]?.takeIf { it.isNotBlank() }
             _providerKeys.value = prefs[providerKeysPref]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
             val profiles = prefs[KEY_PROFILES]?.let { runCatching { Net.json.decodeFromString(profileList, it) }.getOrNull() }
@@ -1101,6 +1122,7 @@ class Repository(private val context: Context) {
         val KEY_PROFILES: Preferences.Key<String> = stringPreferencesKey("profiles")
         val KEY_TMDB: Preferences.Key<String> = stringPreferencesKey("tmdbKey")
         val KEY_RPDB: Preferences.Key<String> = stringPreferencesKey("rpdbKey")
+        val KEY_DISABLED_ADDONS: Preferences.Key<String> = stringPreferencesKey("disabledAddons")
         val KEY_OMDB: Preferences.Key<String> = stringPreferencesKey("omdbKey")
         val KEY_LOCAL_ADDONS: Preferences.Key<String> = stringPreferencesKey("localAddons")
         val KEY_ACTIVE_PROFILE: Preferences.Key<String> = stringPreferencesKey("activeProfile")
