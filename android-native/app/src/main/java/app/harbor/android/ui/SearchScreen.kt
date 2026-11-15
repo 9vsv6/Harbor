@@ -54,13 +54,15 @@ import kotlinx.coroutines.delay
 fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type: String, genre: String) -> Unit) {
     val addons by repository.addons.collectAsState()
     val builtins by repository.builtins.collectAsState()
-    var query by rememberSaveable { mutableStateOf("") }
-    // A search started from the top bar's panel (tablets) lands here.
+    // A search started from Home's bar lands here: taken before the first frame, so the page opens
+    // already searching for it instead of empty.
+    var query by rememberSaveable { mutableStateOf(SearchBridge.pending.value?.also { SearchBridge.pending.value = null } ?: "") }
     val pending by SearchBridge.pending.collectAsState()
     LaunchedEffect(pending) { pending?.let { query = it; SearchBridge.pending.value = null } }
     val searchContext = androidx.compose.ui.platform.LocalContext.current
-    var results by remember { mutableStateOf<List<Meta>?>(null) }
-    var loading by remember { mutableStateOf(false) }
+    // Back from a title: the last results show at once, without searching again.
+    var results by remember { mutableStateOf(SearchMemory.results(query)) }
+    var loading by remember { mutableStateOf(query.trim().length >= 2 && results == null) }
     val keyboard = LocalSoftwareKeyboardController.current
 
     // Harbor's AI search: on, a question goes to your model on Search (not on every keystroke).
@@ -99,9 +101,11 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
             if (q.length < 2) aiResults = null
             return@LaunchedEffect
         }
-        delay(350) // Wait for typing to pause.
+        SearchMemory.results(q)?.let { results = it; loading = false; return@LaunchedEffect }
+        // Wait for typing to pause; a search handed over from Home starts at once.
+        if (results != null || !loading) delay(350)
         loading = true
-        try { results = searchCatalogs(repository, q) } finally { loading = false }
+        try { results = searchCatalogs(repository, q).also { SearchMemory.put(q, it) } } finally { loading = false }
     }
 
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
@@ -190,6 +194,13 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
             }
         }
     }
+}
+
+/** The last search's results, kept while the app runs, so coming back from a title shows them again. */
+internal object SearchMemory {
+    private var last: Pair<String, List<Meta>>? = null
+    fun results(query: String): List<Meta>? = last?.takeIf { it.first == query.trim() && query.trim().length >= 2 }?.second
+    fun put(query: String, metas: List<Meta>) { last = query.trim() to metas }
 }
 
 /** 0: the title starts with the search, 1: has it as a word or part, 2: anything else (an alias or a description match). */

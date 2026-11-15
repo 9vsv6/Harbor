@@ -718,7 +718,7 @@ private fun Hero(
 
             AccoladePills(meta.id.substringBefore(':').takeIf { it.startsWith("tt") })
             if (!isSeries) details?.movieReleases?.let { MovieReleaseCountdowns(it) }
-            if (!wide || short) HeroAwards(awards, Modifier)
+            HeroAwards(awards, Modifier)
             HeroActions(
                 repository, meta, details, isSeries, wide,
                 playLabel = when {
@@ -732,7 +732,6 @@ private fun Hero(
                 download = download,
             )
         }
-        if (wide && !short) HeroAwards(awards, Modifier.align(Alignment.BottomEnd).padding(end = side, bottom = 120.dp))
     }
 }
 

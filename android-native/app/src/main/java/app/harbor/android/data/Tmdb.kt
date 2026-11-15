@@ -480,7 +480,8 @@ object Tmdb {
             val a = art[keyOf(hit)]
             meta.copy(
                 name = (if (titleLang != null) (t?.string("title") ?: t?.string("name"))?.takeIf { it.isNotBlank() } else null) ?: meta.name,
-                poster = a?.string("poster_path")?.let { "$IMAGES/w342$it" } ?: meta.poster,
+                poster = a?.string("poster_path")?.let { "$IMAGES/w342$it" } ?: meta.poster
+                    ?: hit.string("poster_path")?.let { "$IMAGES/w342$it" },
             )
         }
     }
