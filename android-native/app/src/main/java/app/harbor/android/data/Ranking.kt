@@ -185,6 +185,7 @@ object Ranking {
     fun badges(stream: Stream): List<String> {
         val t = traits(stream)
         return buildList {
+            if (libraryUnverified(stream)) add("Unverified")
             when (t.resolution) {
                 2160 -> add("4K")
                 0 -> {}
@@ -199,5 +200,11 @@ object Ranking {
             if (t.cached) add("Cached")
             if (t.cam) add("CAM")
         }
+    }
+
+    fun libraryUnverified(stream: Stream): Boolean {
+        val library = stream.library ?: return false
+        val t = traits(stream)
+        return library.unverified || t.resolution == 0 || (t.resolution >= 1080 && t.sizeBytes == null && !t.web && !t.bluray && !t.remux)
     }
 }

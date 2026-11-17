@@ -2,10 +2,14 @@ package app.harbor.android.data
 
 import android.net.Uri
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -32,6 +36,156 @@ data class DebridAccount(val service: DebridService, val apiKey: String)
  * so it doesn't fill the account's download slots.
  */
 object Debrid {
+    private val libraryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val listings = DebridLibraryCache(libraryScope, ::fetchLibrary)
+    private val libraryDetails = DebridLibraryCache(libraryScope, { key: Pair<DebridAccount, LibraryEntry> -> fetchLibraryFiles(key.first, key.second) })
+
+    internal suspend fun listLibrary(account: DebridAccount): List<LibraryEntry> =
+        if (account.service == DebridService.TorBox) fetchLibrary(account) else listings.get(account)
+
+    internal suspend fun libraryFiles(account: DebridAccount, entry: LibraryEntry): LibraryEntry = libraryDetails.get(account to entry)
+
+    private suspend fun pmGet(account: DebridAccount, path: String): JsonObject = pmCall(
+        Request.Builder().url(PM + path).header("Authorization", "Bearer ${account.apiKey}").build(),
+    )
+
+    private suspend fun dlLibrary(account: DebridAccount): List<JsonObject> {
+        val all = mutableListOf<JsonObject>()
+        for (page in 0 until 5) {
+            val body = Net.json.parseToJsonElement(Net.call(dlRequest(account, "/seedbox/list?perPage=50&page=$page").build())).jsonObject
+            if (body["success"]?.jsonPrimitive?.booleanOrNull != true) error("Debrid-Link library unavailable")
+            val rows = body["value"].arrayOrNull.orEmpty().map { it.jsonObject }
+            all += rows
+            if (rows.size < 50) break
+        }
+        return all
+    }
+
+    private suspend fun fetchLibrary(account: DebridAccount): List<LibraryEntry> = when (account.service) {
+        DebridService.TorBox -> TorboxCloud.list(account.apiKey).map { item ->
+            LibraryEntry(item.id.toString(), item.name, item.files.map { LibraryFile(it.id.toString(), it.name, it.size) }, item.hash, item.kind.path)
+        }
+        DebridService.RealDebrid -> {
+            val entries = mutableListOf<LibraryEntry>()
+            for (page in 1..5) {
+                val rows = Net.json.parseToJsonElement(Net.call(rdRequest(account, "/torrents?limit=100&page=$page").build())).jsonArray
+                entries += parseRdLibrary(rows)
+                if (rows.size < 100) break
+            }
+            entries
+        }
+        DebridService.AllDebrid -> parseAdLibrary(adPost(account, "/v4.1/magnet/status", emptyMap()))
+        // Transfer summaries have no hash. The cloud file API also covers manually uploaded files.
+        DebridService.Premiumize -> parsePmLibrary(pmGet(account, "/item/listall"))
+        DebridService.DebridLink -> parseDlLibrary(dlLibrary(account))
+    }
+
+    internal fun parseRdLibrary(rows: JsonArray): List<LibraryEntry> = rows.map { it.jsonObject }
+        .filter { it.string("status") == "downloaded" }.mapNotNull { item ->
+            item.string("id")?.let { LibraryEntry(it, item.string("filename").orEmpty(), hash = item.string("hash")) }
+        }
+
+    internal fun parseAdLibrary(data: JsonObject): List<LibraryEntry> = data["magnets"].arrayOrNull.orEmpty()
+        .map { it.jsonObject }.filter { it["statusCode"]?.jsonPrimitive?.intOrNull == 4 }.mapNotNull { item ->
+            item.string("id")?.let { LibraryEntry(it, item.string("filename") ?: item.string("filename_original").orEmpty(), hash = item.string("hash")) }
+        }
+
+    internal fun parsePmLibrary(data: JsonObject): List<LibraryEntry> = data["files"].arrayOrNull.orEmpty().map { it.jsonObject }
+        .groupBy { it.string("path").orEmpty().substringBeforeLast('/', "") }.flatMap { (folder, files) ->
+            val parsed = files.mapNotNull { item -> item.string("id")?.let {
+                LibraryFile(it, item.string("name").orEmpty(), item["size"]?.jsonPrimitive?.longOrNull ?: 0)
+            } }
+            if (folder.isNotBlank()) listOf(LibraryEntry(folder, folder.replace('/', ' '), parsed))
+            else parsed.map { LibraryEntry(it.id, it.name, listOf(it)) }
+        }
+
+    internal fun parseDlLibrary(rows: List<JsonObject>): List<LibraryEntry> = rows.filter {
+        it["status"]?.jsonPrimitive?.intOrNull == 6 || it["downloadPercent"]?.jsonPrimitive?.doubleOrNull == 100.0
+    }.mapNotNull { item -> item.string("id")?.let { id ->
+        LibraryEntry(id, item.string("name").orEmpty(), item["files"].arrayOrNull.orEmpty().mapIndexed { index, f ->
+            val file = f.jsonObject
+            LibraryFile(file.string("id") ?: index.toString(), file.string("name").orEmpty(), file["size"]?.jsonPrimitive?.longOrNull ?: 0)
+        }, item.string("hashString"))
+    } }
+
+    private suspend fun fetchLibraryFiles(account: DebridAccount, entry: LibraryEntry): LibraryEntry = when (account.service) {
+        DebridService.RealDebrid -> {
+            val info = rdGet(account, "/torrents/info/${Uri.encode(entry.id)}")
+            if (info.string("status") != "downloaded") error("Library download is no longer ready")
+            entry.copy(files = info["files"].arrayOrNull.orEmpty().map { it.jsonObject }
+                .filter { it["selected"]?.jsonPrimitive?.intOrNull == 1 }.mapNotNull { file -> file.string("id")?.let {
+                    LibraryFile(it, file.string("path").orEmpty().trimStart('/'), file["bytes"]?.jsonPrimitive?.longOrNull ?: 0)
+                } })
+        }
+        DebridService.AllDebrid -> entry.copy(files = adLibraryFiles(account, entry.id).map { it.first })
+        else -> entry
+    }
+
+    private suspend fun adLibraryFiles(account: DebridAccount, id: String): List<Pair<LibraryFile, String>> {
+        val tree = adPost(account, "/v4/magnet/files", mapOf("id[]" to id))["magnets"].arrayOrNull?.firstOrNull().objectOrNull?.get("files")
+        return flattenLibraryFiles(tree)
+    }
+
+    internal fun flattenLibraryFiles(tree: kotlinx.serialization.json.JsonElement?): List<Pair<LibraryFile, String>> {
+        val flat = mutableListOf<Pair<LibraryFile, String>>()
+        fun walk(node: kotlinx.serialization.json.JsonElement?, path: String) {
+            node.arrayOrNull.orEmpty().forEach { child ->
+                val file = child.objectOrNull ?: return@forEach
+                val name = path + file.string("n").orEmpty()
+                val link = file.string("l")
+                if (link != null) flat += LibraryFile(flat.size.toString(), name, file["s"]?.jsonPrimitive?.longOrNull ?: 0) to link
+                else walk(file["e"], "$name/")
+            }
+        }
+        walk(tree, "")
+        return flat
+    }
+
+    /** Resolve an existing cloud file without adding, selecting or deleting account downloads. */
+    suspend fun resolveLibrary(account: DebridAccount, stream: Stream): String {
+        val ref = stream.library ?: error("Not a library source")
+        require(account.service == ref.service) { "This source needs ${ref.service.label}." }
+        val name = stream.behaviorHints?.filename ?: stream.name
+        val url = when (account.service) {
+            DebridService.TorBox -> {
+                val kind = TorboxCloud.Kind.entries.firstOrNull { it.path == ref.kind } ?: error("Unknown TorBox library kind")
+                val item = TorboxCloud.list(account.apiKey).firstOrNull { it.kind == kind && it.id.toString() == ref.itemId }
+                    ?: error("This library file is no longer available")
+                val file = item.files.firstOrNull { it.id.toString() == ref.fileId && it.name == name }
+                    ?: error("This library file is no longer available")
+                TorboxCloud.link(account.apiKey, item, file)
+            }
+            DebridService.RealDebrid -> {
+                val info = rdGet(account, "/torrents/info/${Uri.encode(ref.itemId)}")
+                if (info.string("status") != "downloaded") error("Library download is no longer ready")
+                val selected = info["files"].arrayOrNull.orEmpty().map { it.jsonObject }.filter { it["selected"]?.jsonPrimitive?.intOrNull == 1 }
+                val index = selected.indexOfFirst { it.string("id") == ref.fileId && it.string("path")?.trimStart('/') == name }
+                val link = info["links"].arrayOrNull?.getOrNull(index)?.jsonPrimitive?.contentOrNull ?: error("This library file is no longer available")
+                Net.json.parseToJsonElement(rdPost(account, "/unrestrict/link", mapOf("link" to link))).jsonObject.string("download")
+            }
+            DebridService.AllDebrid -> {
+                val file = adLibraryFiles(account, ref.itemId).firstOrNull { it.first.name == name }
+                    ?: error("This library file is no longer available")
+                adGet(account, "/v4/link/unlock?link=${Uri.encode(file.second)}").string("link")
+            }
+            DebridService.Premiumize -> {
+                val file = pmGet(account, "/item/details?id=${Uri.encode(ref.fileId)}")
+                if (file.string("name") != name) error("This library file is no longer available")
+                file.string("link")
+            }
+            DebridService.DebridLink -> {
+                val item = dlLibrary(account).firstOrNull { it.string("id") == ref.itemId }
+                    ?: error("This library file is no longer available")
+                val file = item["files"].arrayOrNull.orEmpty().map { it.jsonObject }.firstOrNull { it.string("name") == name }
+                    ?: error("This library file is no longer available")
+                if ((file["downloadPercent"]?.jsonPrimitive?.doubleOrNull ?: item["downloadPercent"]?.jsonPrimitive?.doubleOrNull ?: 0.0) < 100 && item["status"]?.jsonPrimitive?.intOrNull != 6) error("Library download is no longer ready")
+                file.string("downloadUrl")
+            }
+        }
+        return url?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+            ?: error("${account.service.label} returned no playable library link")
+    }
+
     class NotCached(service: DebridService) :
         Exception("Not cached on ${service.label}. Pick a source marked Cached.")
 
@@ -213,8 +367,16 @@ object Debrid {
             .header("Authorization", "Bearer ${account.apiKey}")
 
     /** AllDebrid answers {status, data} or {status: "error", error: {message}}. */
-    private suspend fun adGet(account: DebridAccount, pathAndQuery: String): JsonObject {
-        val body = Net.json.parseToJsonElement(Net.call(adRequest(account, pathAndQuery).build())).jsonObject
+    private suspend fun adGet(account: DebridAccount, pathAndQuery: String): JsonObject =
+        adCall(adRequest(account, pathAndQuery).build())
+
+    private suspend fun adPost(account: DebridAccount, path: String, form: Map<String, String>): JsonObject {
+        val body = FormBody.Builder().apply { form.forEach { (key, value) -> add(key, value) } }.build()
+        return adCall(adRequest(account, path).post(body).build())
+    }
+
+    private suspend fun adCall(request: Request): JsonObject {
+        val body = Net.json.parseToJsonElement(Net.call(request)).jsonObject
         if (body.string("status") != "success") error(body["error"].objectOrNull?.string("message") ?: "AllDebrid refused the request")
         return body["data"].objectOrNull ?: JsonObject(emptyMap())
     }

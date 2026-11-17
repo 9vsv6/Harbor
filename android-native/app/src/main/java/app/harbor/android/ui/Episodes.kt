@@ -286,8 +286,8 @@ private suspend fun downloadSeason(context: android.content.Context, repository:
     val settings = repository.settings.value
     var queued = 0
     for (v in episodes) {
-        val ranked = runCatching { Playback.ranked(repository.addons.value, meta.type, v.id, debrid, settings, prefer = repository.preferredSource(meta.id)) }.getOrDefault(emptyList())
-        val ready = Playback.best(ranked, debrid) ?: continue
+        val ranked = runCatching { Playback.ranked(repository.addons.value, meta.type, v.id, debrid, settings, prefer = repository.preferredSource(meta.id), accounts = repository.debridAccounts()) }.getOrDefault(emptyList())
+        val ready = Playback.best(ranked, debrid, accounts = repository.debridAccounts()) ?: continue
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Downloads.enqueue(context, ready.url, meta.id, meta.type, v.id, "${meta.name} S${v.season}E${v.episode}", meta.poster,
             ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) } }.onSuccess { queued++ }
     }

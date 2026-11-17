@@ -813,6 +813,10 @@ class Repository(private val context: Context) {
         saveDebridKeys(if (service == null) emptyMap() else _debridKeys.value - service)
     }
 
+    fun debridAccounts(): List<DebridAccount> = DebridService.entries.mapNotNull { service ->
+        _debridKeys.value[service]?.takeIf { it.isNotBlank() }?.let { DebridAccount(service, it) }
+    }
+
     private suspend fun saveDebridKeys(keys: Map<DebridService, String>) {
         context.store.edit {
             it.remove(KEY_DEBRID_SERVICE)

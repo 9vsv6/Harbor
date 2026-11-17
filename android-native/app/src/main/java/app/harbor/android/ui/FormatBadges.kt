@@ -173,6 +173,14 @@ internal fun shownBadges(stream: Stream, settings: AppSettings): List<BadgeKind>
 
 internal fun badgeKind(id: String) = BadgeKind.entries.firstOrNull { it.id == id }
 
+@Composable
+internal fun LibraryVerificationBadge(stream: Stream, height: Dp) {
+    if (HarborDisplay.settings.showQualityBadge && Ranking.libraryUnverified(stream)) Text(
+        "Unverified", color = HarborColors.InkMuted, fontSize = (height.value * 0.46f).sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.clip(RoundedCornerShape(5.dp)).background(HarborColors.Raised).padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+}
+
 /** FormatBadge: the badge picture at a height, as wide as its art needs; art you picked wins. */
 @Composable
 internal fun FormatBadge(kind: BadgeKind, height: Dp, modifier: Modifier = Modifier, useOverride: Boolean = true) {

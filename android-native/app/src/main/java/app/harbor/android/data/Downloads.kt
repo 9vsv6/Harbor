@@ -133,8 +133,8 @@ object Downloads {
     /** Resolve a fresh link for retry; signed transport URLs and headers are never persisted. */
     suspend fun retry(context: Context, repository: Repository, item: SavedDownload): Long {
         val ranked = Playback.ranked(repository.addons.value, item.type, item.videoId, repository.debrid.value, repository.settings.value,
-            prefer = item.addonId?.let { it to item.sourceName })
-        val ready = Playback.best(ranked, repository.debrid.value) ?: error("No source is available for ${item.title}.")
+            prefer = item.addonId?.let { it to item.sourceName }, accounts = repository.debridAccounts())
+        val ready = Playback.best(ranked, repository.debrid.value, accounts = repository.debridAccounts()) ?: error("No source is available for ${item.title}.")
         require(canSave(Stream(url = ready.url))) { "This source cannot be saved as a file." }
         val replacement = enqueue(context, ready.url, item.metaId, item.type, item.videoId, item.title, item.poster,
             ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream))

@@ -3,6 +3,10 @@ package app.harbor.android.data
 import android.net.Uri
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -23,7 +27,9 @@ object TorboxCloud {
     }
 
     data class File(val id: Long, val name: String, val size: Long)
-    data class Item(val kind: Kind, val id: Long, val name: String, val size: Long, val files: List<File>)
+    data class Item(val kind: Kind, val id: Long, val name: String, val size: Long, val files: List<File>, val hash: String? = null)
+
+    private val listings = DebridLibraryCache(CoroutineScope(SupervisorJob() + Dispatchers.IO), ::fetchList)
 
     /** File extensions the players can open (src/lib/media-file.ts); playback still depends on the codecs. */
     private val video = Regex(
@@ -45,7 +51,12 @@ object TorboxCloud {
     }
 
     /** Every finished download of each kind; a kind that fails is skipped unless they all do. */
-    suspend fun list(key: String): List<Item> = coroutineScope {
+    suspend fun list(key: String, refresh: Boolean = false): List<Item> {
+        if (refresh) listings.invalidate(key)
+        return listings.get(key)
+    }
+
+    private suspend fun fetchList(key: String): List<Item> = coroutineScope {
         val results = Kind.entries.map { kind ->
             async {
                 runCatching {
@@ -63,14 +74,14 @@ object TorboxCloud {
                                     val file = f as? JsonObject ?: return@mapNotNull null
                                     val fileId = file.long("id") ?: return@mapNotNull null
                                     File(fileId, file.text("name")?.ifEmpty { null } ?: file.text("short_name")?.ifEmpty { null } ?: "File $fileId", file.long("size") ?: 0)
-                                },
+                                }, o.text("hash"),
                             )
                         }
                         if (page.size < 1000) break
                         offset += 1000
                     }
                     items.toList()
-                }
+                }.onFailure { if (it is CancellationException) throw it }
             }
         }.map { it.await() }
         if (results.none { it.isSuccess }) throw results.first().exceptionOrNull()!!

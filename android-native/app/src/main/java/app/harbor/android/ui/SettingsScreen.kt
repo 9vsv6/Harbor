@@ -1531,7 +1531,7 @@ private fun StreamingSection(repository: Repository, settings: AppSettings, set:
             ),
             settings.streamSort,
         ) { v -> set { it.copy(streamSort = v) } }
-        StreamPriority(repository, addonOrder = settings.streamSort == "addon")
+        StreamPriority(repository)
         HarborHeading(
             "Aggregator addons",
             "Using AIOStreams or another aggregator addon? Its own sorting and filtering happen inside the addon before Harbor ever sees the results, then Harbor applies the stream filter and result order above on top. If results look thinner than expected, keep one side permissive: either relax the addon's internal filters or set Harbor's stream filter to Balanced or Off.",

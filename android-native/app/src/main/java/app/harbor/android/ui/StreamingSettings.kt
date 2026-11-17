@@ -46,8 +46,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
@@ -266,7 +270,7 @@ internal fun StreamingCatalogs(settings: AppSettings, hasTmdb: Boolean, set: ((A
 
 /** stream-priority-card.tsx: addons higher in the list come first; arrows move them. */
 @Composable
-internal fun StreamPriority(repository: Repository, addonOrder: Boolean) {
+internal fun StreamPriority(repository: Repository) {
     val addons by repository.allAddons.collectAsState()
     val scope = rememberCoroutineScope()
     val streaming = addons.filter { "stream" in it.manifest.resourceNames }
@@ -276,13 +280,21 @@ internal fun StreamPriority(repository: Repository, addonOrder: Boolean) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Stream priority", color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(
-                if (addonOrder) "FOLLOWING ADDON ORDER" else "TIEBREAK", color = HarborColors.InkMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(HarborColors.Elevated).padding(horizontal = 8.dp, vertical = 4.dp),
-            )
+            Text("${streaming.size} ${if (streaming.size == 1) "addon" else "addons"}", color = HarborColors.InkSubtle, fontSize = 13.sp)
         }
+        Text(
+            "FOLLOWING ADDON ORDER", color = HarborColors.InkMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+            modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(HarborColors.Elevated).padding(horizontal = 8.dp, vertical = 4.dp),
+        )
         Text("Results from addons higher in this list come first. If one finds nothing, the next fills in.", color = HarborColors.InkSubtle, fontSize = 13.sp, lineHeight = 18.sp)
-        streaming.forEachIndexed { i, addon ->
+        if (streaming.size < 2) Text(
+            "Priority applies once you have two or more stream addons.", color = HarborColors.InkSubtle, fontSize = 14.sp, lineHeight = 20.sp,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(HarborColors.Canvas)
+                .drawBehind {
+                    drawRoundRect(HarborColors.Elevated, cornerRadius = CornerRadius(8.dp.toPx()),
+                        style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))))
+                }.padding(horizontal = 16.dp, vertical = 14.dp),
+        ) else streaming.forEachIndexed { i, addon ->
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(HarborColors.Canvas.copy(alpha = 0.5f)).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),

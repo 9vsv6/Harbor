@@ -601,7 +601,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val position = engine.positionMs.takeIf { it > 0 } ?: loadStartMs
             lifecycleScope.launch {
                 val ready = onlineUrl?.let { Ready(currentStream ?: app.harbor.android.data.Stream(url = it), it, currentAddonId) }
-                    ?: runCatching { Playback.best(rankedHere(state.videoId), repository.debrid.value) }.getOrNull()
+                    ?: runCatching { Playback.best(rankedHere(state.videoId), repository.debrid.value, accounts = repository.debridAccounts()) }.getOrNull()
                 if (attempt != playbackAttempt || isFinishing || isDestroyed) return@launch
                 if (ready == null) { showError("The saved file couldn't play and no streaming source is available."); return@launch }
                 switchTo(state.videoId, ready, position)
@@ -1710,8 +1710,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         lifecycleScope.launch {
             runCatching {
                 if (kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.states(this@PlayerActivity) }.any { it.item.videoId == next.id && !it.failed }) return@launch
-                val ranked = Playback.preferSource(Playback.ranked(repository.addons.value, kind, next.id, repository.debrid.value, state.settings), ref, repository.debrid.value != null)
-                val ready = Playback.best(ranked, repository.debrid.value) ?: return@launch
+                val ranked = Playback.preferSource(Playback.ranked(repository.addons.value, kind, next.id, repository.debrid.value, state.settings, accounts = repository.debridAccounts()), ref, repository.debrid.value != null)
+                val ready = Playback.best(ranked, repository.debrid.value, accounts = repository.debridAccounts()) ?: return@launch
                 if (!state.settings.autoDownloadNext || state.videoId != expectedVideo || app.harbor.android.data.AudioChoices.scope(repository) != scope) return@launch
                 if (app.harbor.android.data.Downloads.canSave(app.harbor.android.data.Stream(url = ready.url)))
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.enqueue(this@PlayerActivity, ready.url, show, kind, next.id,
@@ -1726,7 +1726,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             val item = app.harbor.android.data.SavedDownload(0, metaId, type, video.id, "${state.title} · ${episodeCode(video)}", meta?.poster, "", addonId = currentAddonId, sourceName = currentStreamKey)
             runCatching {
                 val ranked = Playback.preferSource(rankedHere(video.id), currentRef(), repository.debrid.value != null)
-                val ready = Playback.best(ranked, repository.debrid.value) ?: error("No source found")
+                val ready = Playback.best(ranked, repository.debrid.value, accounts = repository.debridAccounts()) ?: error("No source found")
                 require(app.harbor.android.data.Downloads.canSave(app.harbor.android.data.Stream(url = ready.url))) { "This source is a live playlist and cannot be downloaded." }
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.enqueue(this@PlayerActivity, ready.url, item.metaId, item.type, item.videoId, item.title, item.poster,
                     ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), ready.addonId, Playback.streamKey(ready.stream)) }
@@ -1760,10 +1760,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     switchTo(video.id, local, startAt = null)
                     return@launch
                 }
-                var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer)
+                var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer, accounts = repository.debridAccounts())
                 // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
                 if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
-                local ?: Playback.best(ranked, debrid)
+                local ?: Playback.best(ranked, debrid, accounts = repository.debridAccounts())
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1812,7 +1812,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     private suspend fun rankedHere(videoId: String): List<RankedStream> {
         val debrid = repository.debrid.value
-        return Playback.ranked(repository.addons.value, type, videoId, debrid, state.settings, media3 = engine is ExoEngine)
+        return Playback.ranked(repository.addons.value, type, videoId, debrid, state.settings, media3 = engine is ExoEngine, accounts = repository.debridAccounts())
             .filter { it.stream.playable(debrid != null) }
     }
 
@@ -1832,7 +1832,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.hint = "Switching source…"
         state.hintIcon = 0
         lifecycleScope.launch {
-            runCatching { Playback.resolve(source.stream, repository.debrid.value, source.addon.manifest.id) }
+            runCatching { Playback.resolve(source.stream, repository.debrid.value, source.addon.manifest.id, repository.debridAccounts()) }
                 .onSuccess { ready ->
                     val sources = state.sources
                     repository.rememberStream(metaId, source.addon.manifest.id, Playback.streamKey(source.stream))
@@ -1855,7 +1855,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 .filter { "${it.addon.manifest.id}|${Playback.streamKey(it.stream)}" !in stalledKeys }
             val debrid = repository.debrid.value
             for (candidate in candidates.take(3)) {
-                val ready = runCatching { Playback.resolve(candidate.stream, debrid, candidate.addon.manifest.id) }.getOrNull() ?: continue
+                val ready = runCatching { Playback.resolve(candidate.stream, debrid, candidate.addon.manifest.id, repository.debridAccounts()) }.getOrNull() ?: continue
                 if (state.videoId != videoId || !state.buffering) return@launch
                 val sources = state.sources
                 switchTo(videoId, ready, startAt = position)

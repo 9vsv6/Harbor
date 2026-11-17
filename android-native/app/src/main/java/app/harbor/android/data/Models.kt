@@ -159,12 +159,14 @@ data class Stream(
     val size: Long? = null,
     /** Torrent peers and trackers as "tracker:<url>" / "dht:<hash>". */
     val sources: List<String>? = null,
+    val library: LibrarySource? = null,
 ) {
     /** A direct HTTP(S) stream: plays without any help. */
     val direct: Boolean get() = url != null && (url.startsWith("http://") || url.startsWith("https://"))
 
     /** Direct streams always play; torrents play once a debrid account is set up. */
-    fun playable(debrid: Boolean): Boolean = direct || !ytId.isNullOrBlank() || (debrid && infoHash != null)
+    fun playable(debrid: Boolean): Boolean = direct || !ytId.isNullOrBlank() || (debrid && (infoHash != null || library != null))
+    val p2p: Boolean get() = infoHash != null && !direct && library == null
     val text: String get() = listOfNotNull(title, description).joinToString("\n").ifBlank { name ?: "Stream" }
 }
 

@@ -154,7 +154,7 @@ private fun facetValues(stream: Stream): Map<Facet, String?> {
         },
         // A torrent with no link is P2P; cached debrid sources say so; the rest go through debrid as they are.
         Facet.Availability to when {
-            stream.infoHash != null && !stream.direct && !t.cached -> "P2P"
+            stream.p2p && !t.cached -> "P2P"
             t.cached -> "Cached"
             else -> "Debrid"
         },
@@ -175,6 +175,7 @@ fun StreamsScreen(
 ) {
     val addons by repository.addons.collectAsState()
     val debrid by repository.debrid.collectAsState()
+    val debridKeys by repository.debridKeys.collectAsState()
     val downloadContext = androidx.compose.ui.platform.LocalContext.current
     val autoPlay by repository.autoPlay.collectAsState()
     val settings by repository.settings.collectAsState()
@@ -208,10 +209,10 @@ fun StreamsScreen(
         status = when {
             stream.direct -> null
             !stream.ytId.isNullOrBlank() -> "Loading YouTube video…"
-            else -> "Getting the link from ${debrid?.service?.label ?: "debrid"}…"
+            else -> "Getting the link from ${stream.library?.service?.label ?: debrid?.service?.label ?: "debrid"}…"
         }
         job = scope.launch {
-            val result = runCatching { Playback.resolve(stream, debrid, item.addon.manifest.id) }
+            val result = runCatching { Playback.resolve(stream, debrid, item.addon.manifest.id, repository.debridAccounts()) }
             // Cancelled (Cancel, or another source tapped meanwhile): not an error, and the newer
             // play's Connecting state is left alone.
             if (!isActive) return@launch
@@ -225,15 +226,14 @@ fun StreamsScreen(
         meta = runCatching { AddonClient.meta(repository.metaAddons(), type, metaId) }.getOrNull()
     }
 
-    LaunchedEffect(addons, type, videoId, debrid, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage, settings.animePreferImdbStreams) {
+    LaunchedEffect(addons, type, videoId, debridKeys, refreshKey, settings.streamFilter, settings.streamSort, settings.safetyFilter, settings.streamLanguages, settings.torrentsDisabled, settings.requireStreamLanguage, settings.animePreferImdbStreams) {
         if (!autoPlayed && settings.preferOfflineDownloads) {
             val local = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.harbor.android.data.Downloads.localReady(downloadContext, videoId) }
             if (local != null) { autoPlayed = true; loading = false; onPlay(local); return@LaunchedEffect }
         }
-        if (addons.isEmpty()) return@LaunchedEffect
         if (refreshKey > 0) ranked = null
         loading = true
-        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it }, onPartial = { ranked = it })
+        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it }, onPartial = { ranked = it }, accounts = repository.debridAccounts())
         loading = false
         ranked = list
         // Nothing that can play here: the empty list says so, without a "wouldn't open" error on top.
@@ -241,7 +241,7 @@ fun StreamsScreen(
             autoPlayed = true
             status = "Playing the best source…"
             job = scope.launch {
-                val best = Playback.best(list, debrid)
+                val best = Playback.best(list, debrid, accounts = repository.debridAccounts())
                 status = null
                 if (best != null) onPlay(best) else error = "None of the top sources would open. Pick one below."
             }
@@ -256,10 +256,10 @@ fun StreamsScreen(
     // The source mode and addon narrow first; the facets then work within them.
     val narrowed = remember(all, mode, addonFilter, debrid, settings.pickerLayout) {
         all.orEmpty().filter { item ->
-            val torrent = item.stream.infoHash != null && !item.stream.direct
+            val torrent = item.stream.p2p
             val modeOk = when (mode) {
                 SourceMode.Both -> true
-                SourceMode.Direct -> item.stream.direct || !item.stream.ytId.isNullOrBlank() || (torrent && debrid != null)
+                SourceMode.Direct -> item.stream.library != null || item.stream.direct || !item.stream.ytId.isNullOrBlank() || (torrent && debrid != null)
                 SourceMode.P2P -> torrent
             }
             // The Condensed drawer has its own addon pills.
@@ -678,9 +678,10 @@ private fun SourceCard(item: RankedStream, wide: Boolean, last: Boolean, setting
 @Composable
 private fun Badges(stream: Stream, settings: app.harbor.android.data.AppSettings) {
     val kinds = shownBadges(stream, settings)
-    if (kinds.isEmpty() && settings.badgeRules.none { it.enabled }) return
+    if (kinds.isEmpty() && settings.badgeRules.none { it.enabled } && !(settings.showQualityBadge && Ranking.libraryUnverified(stream))) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
         kinds.forEach { FormatBadge(it, 24.dp, Modifier.align(Alignment.CenterVertically)) }
+        LibraryVerificationBadge(stream, 24.dp)
         RuleBadges(stream, settings, 24.dp)
     }
 }
@@ -906,6 +907,7 @@ private fun TvSourceCard(item: RankedStream, last: Boolean, debrid: app.harbor.a
                     modifier = Modifier.align(Alignment.CenterVertically).widthIn(max = app.harbor.android.ui.tv.u(130f)),
                 )
                 shownBadges(stream, settings).forEach { FormatBadge(it, app.harbor.android.ui.tv.u(13f), Modifier.align(Alignment.CenterVertically)) }
+                LibraryVerificationBadge(stream, app.harbor.android.ui.tv.u(13f))
                 RuleBadges(stream, settings, app.harbor.android.ui.tv.u(13f))
             }
             Text((stream.name ?: stream.behaviorHints?.filename ?: item.addon.manifest.name).trim(), color = HarborColors.Ink, fontSize = app.harbor.android.ui.tv.s(10.5f), fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -933,7 +935,7 @@ private fun TvSourceCard(item: RankedStream, last: Boolean, debrid: app.harbor.a
                 // Harbor PC's bp-stream-row: "In TorBox" for your own library, "Cached on TorBox" else. The
                 // service is your debrid account's, or the one the addon names ([TB⚡], [RD+]…).
                 val text = "${stream.name.orEmpty()} ${stream.title.orEmpty()} ${stream.description.orEmpty()}"
-                val service = debrid?.service?.label ?: debridServiceIn(text)
+                val service = stream.library?.service?.label ?: debrid?.service?.label ?: debridServiceIn(text)
                 val label = when {
                     service == null -> "Cached"
                     app.harbor.android.data.Ranking.inLibrary(stream) -> "In $service"

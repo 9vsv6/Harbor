@@ -28,6 +28,7 @@ object Playback {
         onFailures: ((List<Pair<String, String>>) -> Unit)? = null,
         /** The list so far, each time another addon or plugin answers (on the caller's thread). */
         onPartial: ((List<RankedStream>) -> Unit)? = null,
+        accounts: List<DebridAccount> = listOfNotNull(debrid),
     ): List<RankedStream> {
         // An anime episode is asked for under its anime and IMDb ids, and must match its episode.
         val anime = AnimeStreams.request(id, settings)
@@ -41,7 +42,7 @@ object Playback {
                     arrived += groups
                     val snapshot = arrived.toList()
                     val ordered = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                        order(snapshot, addons, type, debrid, settings, media3, anime, prefer)
+                        order(snapshot, addons, type, debrid, settings, media3, anime, prefer, accounts)
                     }
                     kotlinx.coroutines.withContext(caller) { deliver(ordered) }
                 }
@@ -49,20 +50,33 @@ object Playback {
         }
         // Installed plugins (Settings → Plugins) are asked beside the addons, each a source group of its own.
         val groups = kotlinx.coroutines.coroutineScope {
+            val title = async {
+                if (accounts.isEmpty() && !app.harbor.android.data.plugins.Plugins.hasEnabled) null
+                else app.harbor.android.data.plugins.Plugins.titleFor(type, id)
+            }
+            val fromLibrary = async {
+                val name = title.await()
+                val query = (name?.name ?: anime?.titles?.firstOrNull())?.let {
+                    DebridLibrary.query(type, id, it, name?.year).let { q ->
+                        if (anime == null) q else q.copy(season = anime.season, episode = anime.episode)
+                    }
+                }
+                if (accounts.isEmpty() || query == null) emptyList()
+                else DebridLibrary.streams(accounts, query) { partial?.invoke(listOf(it)) }
+            }
             val fromPlugins = async {
                 if (!app.harbor.android.data.plugins.Plugins.hasEnabled) return@async emptyList<AddonClient.AddonStreams>()
                 runCatching {
-                    val title = app.harbor.android.data.plugins.Plugins.titleFor(type, id)
-                    app.harbor.android.data.plugins.Plugins.streams(type, id, title)
+                    app.harbor.android.data.plugins.Plugins.streams(type, id, title.await())
                 }.getOrDefault(emptyList()).also { if (it.isNotEmpty()) partial?.invoke(it) }
             }
             val each: (suspend (AddonClient.AddonStreams) -> Unit)? = partial?.let { p -> { group -> if (group.streams.isNotEmpty()) p(listOf(group)) } }
             val fromAddons = if (anime != null) AddonClient.streams(addons, each) { anime.idsFor(it, type) } else AddonClient.streams(addons, type, id, each)
-            fromAddons + fromPlugins.await()
+            fromAddons + fromPlugins.await() + fromLibrary.await()
         }
         onFailures?.invoke(groups.filter { it.error != null }.map { it.addon.manifest.name to it.error!! })
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            order(groups, addons, type, debrid, settings, media3, anime, prefer)
+            order(groups, addons, type, debrid, settings, media3, anime, prefer, accounts)
         }
     }
 
@@ -76,18 +90,21 @@ object Playback {
         media3: Boolean,
         anime: AnimeStreams.Request?,
         prefer: Pair<String, String?>?,
+        accounts: List<DebridAccount>,
     ): List<RankedStream> {
         val rank = addons.withIndex().associate { it.value to it.index }
         // An addon can list a source twice (asked under two ids for anime, say): one row each, as lists key on it.
         val all = groups.sortedBy { rank[it.addon] ?: Int.MAX_VALUE }.flatMap { group -> group.streams.map { RankedStream(group.addon, it) } }.distinctBy(::rowKey)
         val kept = all.filter { allowed(it.stream, settings) }
-        val playable = { s: Stream -> s.playable(debrid != null) }
+        val playable = { s: Stream -> s.playable(debrid != null || accounts.isNotEmpty()) }
         // Harbor's own core (the PC app's Rust ranking) when it's here; the Kotlin one otherwise.
-        val core = HarborCore.rank(kept, addons, type, settings, listOfNotNull(debrid?.service), anime)
+        val core = HarborCore.rank(kept, addons, type, settings, (accounts.map { it.service } + listOfNotNull(debrid?.service)).distinct(), anime)
         val ranked = if (core != null && core.order.isNotEmpty()) {
             // Indices from the core are checked: a bad one is skipped rather than crashing the sources list.
             val top = core.primary?.let { kept.getOrNull(it) }
-            val list = core.order.mapNotNull { kept.getOrNull(it) }
+            val scored = core.order.mapNotNull { kept.getOrNull(it) }
+            // Cloud references have no URL until Play. The core's transport gate cannot resolve them.
+            val list = scored + kept.filter { it.stream.library != null && it !in scored && core.rejected[kept.indexOf(it)] == "no-playable-source" }
             // The desktop opens on its top pick; then playable sources before ones that can't play here.
             (listOfNotNull(top) + (list - setOfNotNull(top))).sortedByDescending { playable(it.stream) }
         } else if (settings.streamSort == "addon") {
@@ -167,14 +184,14 @@ object Playback {
 
     /** One source's identity within a list. Unique in what `ranked` returns, so lists can key on it. */
     fun rowKey(item: RankedStream): String =
-        item.addon.manifest.id + "|" + (item.stream.url ?: item.stream.infoHash ?: item.stream.ytId) + "|" + item.stream.fileIdx + "|" + item.stream.name + "|" + item.stream.title
+        item.addon.manifest.id + "|" + (item.stream.library?.let { "${it.kind}:${it.itemId}:${it.fileId}" } ?: item.stream.url ?: item.stream.infoHash ?: item.stream.ytId) + "|" + item.stream.fileIdx + "|" + item.stream.name + "|" + item.stream.title
 
     /** What identifies a source between visits: its name line, which carries quality and service. */
     fun streamKey(stream: Stream): String = (stream.name ?: stream.title ?: "").replace('\n', ' ').trim().take(80)
 
     private fun allowed(stream: Stream, s: AppSettings): Boolean {
         val t = Ranking.traits(stream)
-        val torrent = stream.infoHash != null && !stream.direct
+        val torrent = stream.p2p
         if (s.torrentsDisabled && torrent) return false
         when (s.safetyFilter) {
             "balanced" -> if (t.cam) return false
@@ -207,7 +224,20 @@ object Playback {
         return true
     }
 
-    suspend fun resolve(stream: Stream, debrid: DebridAccount?, addonId: String? = null): Ready = when {
+    suspend fun resolve(stream: Stream, debrid: DebridAccount?, addonId: String? = null, accounts: List<DebridAccount> = listOfNotNull(debrid)): Ready = when {
+        stream.library != null -> {
+            val service = stream.library.service
+            val account = accounts.firstOrNull { it.service == service } ?: error("Connect ${service.label} in Streaming services to play this library file.")
+            val url = try {
+                Debrid.resolveLibrary(account, stream)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Account API errors and decoder messages can contain private provider URLs.
+                error("Couldn't get the link from ${service.label} Library. Check the account in Streaming services.")
+            }
+            Ready(stream, url, addonId)
+        }
         stream.direct -> Ready(stream, stream.url!!, addonId)
         !stream.ytId.isNullOrBlank() -> Ready(stream, Trailers.stream(stream.ytId)
             ?: error("Couldn't load this YouTube video. Try another source."), addonId)
@@ -220,11 +250,11 @@ object Playback {
      * The best stream that actually opens: tries the top few playable ones in rank
      * order, so one uncached torrent doesn't stop auto-play.
      */
-    suspend fun best(ranked: List<RankedStream>, debrid: DebridAccount?, attempts: Int = 3): Ready? {
-        for (candidate in ranked.filter { it.stream.playable(debrid != null) }.take(attempts)) {
+    suspend fun best(ranked: List<RankedStream>, debrid: DebridAccount?, attempts: Int = 3, accounts: List<DebridAccount> = listOfNotNull(debrid)): Ready? {
+        for (candidate in ranked.filter { it.stream.playable(debrid != null || accounts.isNotEmpty()) }.take(attempts)) {
             // Cancelled (you picked another source meanwhile): stop, rather than open the next candidate too.
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            runCatching { resolve(candidate.stream, debrid, candidate.addon.manifest.id) }
+            runCatching { resolve(candidate.stream, debrid, candidate.addon.manifest.id, accounts) }
                 .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 .getOrNull()?.let { return it }
         }

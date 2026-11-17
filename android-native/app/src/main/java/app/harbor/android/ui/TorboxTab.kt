@@ -92,7 +92,7 @@ internal fun TorboxTab(repository: Repository, onConnect: () -> Unit, onPlay: (u
         if (key.isEmpty()) { loading = false; return@LaunchedEffect }
         loading = true
         try {
-            items = TorboxCloud.list(key)
+            items = TorboxCloud.list(key, refresh = revision > 0)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
