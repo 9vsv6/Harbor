@@ -71,6 +71,7 @@ import app.harbor.android.R
 import app.harbor.android.data.AniListLibrary
 import app.harbor.android.data.CwItem
 import app.harbor.android.data.Letterboxd
+import app.harbor.android.data.LibraryTabs
 import app.harbor.android.data.ListEntry
 import app.harbor.android.data.MalLibrary
 import app.harbor.android.data.Meta
@@ -84,6 +85,8 @@ import kotlinx.coroutines.launch
 private enum class LibTab(val label: String) {
     Library("Library"), Watchlist("Watchlist"), History("History"), TorBox("TorBox"), Lists("My Lists"), Groups("My Groups"), Favorites("Favorites"),
     Trakt("Trakt"), AniList("AniList"), Simkl("Simkl"), Mal("MyAnimeList"), Letterboxd("Letterboxd"), PublicMetaDb("PMDB"),
+    ;
+    val id: String get() = name.lowercase(java.util.Locale.ROOT)
 }
 
 private enum class Kind { All, Movies, Shows }
@@ -148,7 +151,10 @@ fun LibraryScreen(
     }
 
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
-        Header(tab, tabs) { tab = it }
+        Header(tab, tabs, settings.libraryHiddenTabs, { hiddenTab ->
+            repository.updateSettings { it.copy(libraryHiddenTabs = LibraryTabs.toggle(it.libraryHiddenTabs, hiddenTab.id)) }
+            if (hiddenTab == tab && hiddenTab.id !in settings.libraryHiddenTabs) tab = LibTab.Library
+        }) { tab = it }
         when (tab) {
             LibTab.Library -> MetaTab(all, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.Watchlist -> MetaTab(all.filter { it.meta.id !in watchedIds }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
@@ -205,7 +211,8 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun Header(tab: LibTab, tabs: List<LibTab>, onTab: (LibTab) -> Unit) {
+private fun Header(tab: LibTab, tabs: List<LibTab>, hidden: Set<String>, onToggle: (LibTab) -> Unit, onTab: (LibTab) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
     Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("MY LIBRARY", color = HarborColors.InkSubtle, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
         Text(
@@ -216,10 +223,23 @@ private fun Header(tab: LibTab, tabs: List<LibTab>, onTab: (LibTab) -> Unit) {
             "Library is everything from Stremio and this device. Watchlist is only titles you haven't watched yet. History is what you've watched.",
             color = HarborColors.InkMuted, fontSize = 14.sp, lineHeight = 20.sp,
         )
+        Box {
+            HButton(onClick = { menu = true }) { Text("Tabs") }
+            DropdownMenu(menu, onDismissRequest = { menu = false }, containerColor = HarborColors.Elevated) {
+                Text("Show tabs", color = HarborColors.InkSubtle, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                tabs.filter { it != LibTab.Library }.forEach { t ->
+                    DropdownMenuItem(
+                        text = { Text(t.label) },
+                        trailingIcon = if (t.id !in hidden) ({ Icon(Icons.Rounded.Check, null) }) else null,
+                        onClick = { onToggle(t) },
+                    )
+                }
+            }
+        }
     }
     // The tab bar: icon and name, the open one underlined.
     androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 14.dp)) {
-        tabs.forEach { t ->
+        tabs.filter { LibraryTabs.shown(it.id, hidden, tab.id) }.forEach { t ->
             val on = t == tab
             Column(Modifier.width(IntrinsicSize.Max).clickable { onTab(t) }.padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {

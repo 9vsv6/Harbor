@@ -205,7 +205,11 @@ fun StreamsScreen(
         repository.rememberStream(metaId, item.addon.manifest.id, Playback.streamKey(stream))
         job?.cancel()
         error = null
-        status = if (stream.direct) null else "Getting the link from ${debrid?.service?.label ?: "debrid"}…"
+        status = when {
+            stream.direct -> null
+            !stream.ytId.isNullOrBlank() -> "Loading YouTube video…"
+            else -> "Getting the link from ${debrid?.service?.label ?: "debrid"}…"
+        }
         job = scope.launch {
             val result = runCatching { Playback.resolve(stream, debrid, item.addon.manifest.id) }
             // Cancelled (Cancel, or another source tapped meanwhile): not an error, and the newer
@@ -255,7 +259,7 @@ fun StreamsScreen(
             val torrent = item.stream.infoHash != null && !item.stream.direct
             val modeOk = when (mode) {
                 SourceMode.Both -> true
-                SourceMode.Direct -> item.stream.direct || (torrent && debrid != null)
+                SourceMode.Direct -> item.stream.direct || !item.stream.ytId.isNullOrBlank() || (torrent && debrid != null)
                 SourceMode.P2P -> torrent
             }
             // The Condensed drawer has its own addon pills.

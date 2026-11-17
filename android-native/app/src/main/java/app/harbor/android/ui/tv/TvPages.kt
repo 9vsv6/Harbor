@@ -105,6 +105,9 @@ internal fun TvPill(label: String, on: Boolean, count: Int? = null, icon: ImageV
 /** A wide card: the title's backdrop with its name over a fade (bp-result-card). */
 @Composable
 internal fun TvWideCard(meta: Meta, width: Dp, focus: FocusRequester? = null, onClick: () -> Unit) {
+    val service = app.harbor.android.ui.rememberServiceArtwork(meta, landscape = true)
+    var serviceFailed by remember(service) { mutableStateOf(false) }
+    val artwork = if (serviceFailed) meta.background ?: meta.poster else service ?: meta.background ?: meta.poster
     // Back from the title it opened, the ring comes back to this card (as on Home) instead of the top of the page.
     val requester = focus ?: remember { FocusRequester() }
     LaunchedEffect(meta.id) {
@@ -113,7 +116,7 @@ internal fun TvWideCard(meta: Meta, width: Dp, focus: FocusRequester? = null, on
         if (TvReturnFocus.consume(meta.id)) runCatching { requester.requestFocus() }
     }
     TvTileBox(width, 16f / 9f, u(6f), requester, onFocused = {}, onClick = { TvReturnFocus.mark(meta.id); onClick() }) { _ ->
-        (meta.background ?: meta.poster)?.let { AsyncImage(it, meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+        artwork?.let { AsyncImage(it, meta.name, contentScale = ContentScale.Crop, onError = { serviceFailed = true }, modifier = Modifier.fillMaxSize()) }
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Void.copy(alpha = 0.9f))))
         Text(
             meta.name, color = HarborColors.Ink, fontSize = s(9.5f), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -433,7 +436,7 @@ private fun Key(text: String, modifier: Modifier, focus: FocusRequester? = null,
 
 // ---------------- Library ----------------
 
-private enum class LibTab(val label: String) { Saved("Saved"), Watchlist("Watchlist"), History("History"), Favorites("Favorites") }
+private enum class LibTab(val label: String, val id: String) { Saved("Saved", "library"), Watchlist("Watchlist", "watchlist"), History("History", "history"), Favorites("Favorites", "favorites") }
 private enum class LibSort(val label: String) { Recent("Recent"), Az("A-Z"), Year("Year") }
 
 /**
@@ -447,7 +450,9 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     val shelves by repository.shelves.collectAsState()
     val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
     val continuing by repository.continueWatching.collectAsState()
+    val settings by repository.settings.collectAsState()
     var tab by rememberSaveable { mutableStateOf(LibTab.Saved) }
+    var showTabs by rememberSaveable { mutableStateOf(false) }
     var sort by rememberSaveable { mutableStateOf(LibSort.Recent) }
     val scope = rememberCoroutineScope()
     val first = remember { FocusRequester() }
@@ -481,9 +486,21 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     }
     Column(Modifier.fillMaxSize().padding(top = u(6f))) {
         Row(horizontalArrangement = Arrangement.spacedBy(u(5f)), verticalAlignment = Alignment.CenterVertically) {
-            LibTab.entries.forEachIndexed { i, t -> TvPill(t.label, tab == t, focus = if (i == 0) first else null) { tab = t } }
+            LibTab.entries.filter { app.harbor.android.data.LibraryTabs.shown(it.id, settings.libraryHiddenTabs, tab.id) }.forEachIndexed { i, t ->
+                TvPill(t.label, tab == t, focus = if (i == 0) first else null) { tab = t }
+            }
+            TvPill("Tabs", showTabs) { showTabs = !showTabs }
             Spacer(Modifier.weight(1f))
             Text("${sorted.size} TITLES", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+        }
+        if (showTabs) Row(Modifier.padding(top = u(6f)), horizontalArrangement = Arrangement.spacedBy(u(5f)), verticalAlignment = Alignment.CenterVertically) {
+            Text("Show tabs", color = HarborColors.InkMuted, fontSize = s(7f))
+            LibTab.entries.filter { it != LibTab.Saved }.forEach { t ->
+                TvPill(t.label, t.id !in settings.libraryHiddenTabs) {
+                    repository.updateSettings { it.copy(libraryHiddenTabs = app.harbor.android.data.LibraryTabs.toggle(it.libraryHiddenTabs, t.id)) }
+                    if (tab == t && t.id !in settings.libraryHiddenTabs) tab = LibTab.Saved
+                }
+            }
         }
         Row(Modifier.padding(top = u(6f), bottom = u(8f)), horizontalArrangement = Arrangement.spacedBy(u(5f))) {
             TvPill("All · ${sort.label}", true, icon = Icons.Rounded.Sort) { sort = LibSort.entries[(sort.ordinal + 1) % LibSort.entries.size] }

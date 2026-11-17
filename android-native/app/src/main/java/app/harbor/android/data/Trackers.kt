@@ -145,28 +145,40 @@ object Trakt {
     /** Paused titles on Trakt, for Continue watching ("Paused on Trakt" in Harbor). */
     suspend fun playback(auth: TrackerAuth): List<CwItem> {
         val list = Net.json.parseToJsonElement(Net.call(request(auth, "/sync/playback?limit=30").build())) as? JsonArray ?: return emptyList()
-        return list.mapNotNull { element ->
+        return parsePlayback(list)
+    }
+
+    internal fun parsePlayback(list: JsonArray): List<CwItem> = list.mapNotNull { element ->
             val item = element.jsonObject
             val progress = (item["progress"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null) / 100.0
             val paused = item.string("paused_at")?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0
             when (item.string("type")) {
                 "movie" -> {
                     val movie = item["movie"].objectOrNull ?: return@mapNotNull null
-                    val imdb = movie["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
-                    CwItem(metahubMeta(imdb, "movie", movie.string("title").orEmpty()), imdb, 0, 0, null, null, paused, progress.toFloat(), "Trakt")
+                    val ids = playbackIds(movie["ids"].objectOrNull, "movie")
+                    val id = ids.firstOrNull() ?: return@mapNotNull null
+                    CwItem(playbackMeta(id, "movie", movie.string("title").orEmpty()), id, 0, 0, null, null, paused, progress.toFloat(), "Trakt", altIds = ids - id)
                 }
                 "episode" -> {
                     val show = item["show"].objectOrNull ?: return@mapNotNull null
                     val episode = item["episode"].objectOrNull ?: return@mapNotNull null
-                    val imdb = show["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
+                    val ids = playbackIds(show["ids"].objectOrNull, "tv")
+                    val id = ids.firstOrNull() ?: return@mapNotNull null
                     val season = episode["season"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
                     val number = episode["number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-                    CwItem(metahubMeta(imdb, "series", show.string("title").orEmpty()), "$imdb:$season:$number", 0, 0, season, number, paused, progress.toFloat(), "Trakt")
+                    CwItem(playbackMeta(id, "series", show.string("title").orEmpty()), "$id:$season:$number", 0, 0, season, number, paused, progress.toFloat(), "Trakt", altIds = ids - id)
                 }
                 else -> null
             }
-        }
     }
+
+    private fun playbackIds(ids: JsonObject?, kind: String): Set<String> = setOfNotNull(
+        ids?.string("imdb")?.trim()?.lowercase(java.util.Locale.ROOT)?.takeIf { Regex("^tt\\d+$").matches(it) },
+        ids?.get("tmdb")?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { "tmdb:$kind:$it" },
+    )
+
+    private fun playbackMeta(id: String, type: String, name: String) =
+        if (id.startsWith("tt")) metahubMeta(id, type, name) else Meta(id, type, name)
 
     /** The profile picture on Trakt, for "Use my Trakt avatar". */
     suspend fun avatar(auth: TrackerAuth): String? = runCatching {

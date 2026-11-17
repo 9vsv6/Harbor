@@ -7,6 +7,9 @@ object WhisperNative {
     fun requestCancel() { if (loaded) cancel() }
     @JvmStatic external fun open(model: String): Long
     @JvmStatic external fun transcribe(handle: Long, pcm: FloatArray, language: String, threads: Int): ByteArray
+    @JvmStatic external fun openVad(model: String): Long
+    @JvmStatic external fun vad(handle: Long, pcm: FloatArray): FloatArray
+    @JvmStatic external fun closeVad(handle: Long)
 
     /** Two on TVs and low-end phones (playback stays smooth); up to four where cores are free. */
     val threads: Int get() = if (app.harbor.android.perf.Perf.isTv || app.harbor.android.perf.Perf.tier == app.harbor.android.perf.DeviceTier.LOW) 2

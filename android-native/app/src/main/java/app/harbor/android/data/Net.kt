@@ -70,7 +70,7 @@ object Net {
         })
     }
 
-    suspend fun get(url: String): String {
+    suspend fun get(url: String, client: OkHttpClient = this.client): String {
         val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
         return client.newCall(request).await { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")

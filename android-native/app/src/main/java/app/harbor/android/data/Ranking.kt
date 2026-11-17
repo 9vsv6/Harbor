@@ -29,7 +29,9 @@ object Ranking {
         Regex("""\b720p\b""", RegexOption.IGNORE_CASE) to 720,
         Regex("""\b(576p|480p|sd)\b""", RegexOption.IGNORE_CASE) to 480,
     )
-    private val sizePattern = Regex("""(\d+(?:[.,]\d+)?)\s*(TB|GB|MB)\b""", RegexOption.IGNORE_CASE)
+    private val sizePattern = Regex("""((?<!\d)\d{1,3}(?:\.\d{3})+,\d{1,2}|(?<!\d)\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<!\d)\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:\.\d+|,\d{1,2})?)\s*(TB|GB|MB|TiB|GiB|MiB)\b""", RegexOption.IGNORE_CASE)
+    private val markedSizePattern = Regex("💾\\s*${sizePattern.pattern}", RegexOption.IGNORE_CASE)
+    private val seedersPattern = Regex("""(?:👥|👤|S:|seeds?:?|\bS\s*=\s*)\s*(\d+)""", RegexOption.IGNORE_CASE)
 
     // ⚡ ✅ / ⬇ ⏳ ⌛ ⏬ 🔽 ☁, as in Harbor PC (escapes, so the source stays plain ASCII).
     private val cachedMarker = Regex("[⚡✅]")
@@ -59,7 +61,7 @@ object Ranking {
             uncached = uncachedMarker.containsMatchIn(text.libraryCloudRemoved()),
             cached = !uncachedMarker.containsMatchIn(text.libraryCloudRemoved()) &&
                 (cachedMarker.containsMatchIn(text) || has("""\[(realdebrid|real-debrid|torbox|alldebrid|all-debrid|premiumize|debridlink|debrid-link|easydebrid|offcloud|rd|ad|pm|dl|tb|trb|oc|ed|putio)\+""") || has("""\bcached\b""")),
-            sizeBytes = stream.behaviorHints?.videoSize ?: parseSize(text),
+            sizeBytes = size(stream),
         )
     }
 
@@ -71,16 +73,48 @@ object Ranking {
         return (cachedMarker.containsMatchIn(text) && text.contains("☁")) || text.contains("library", ignoreCase = true)
     }
 
-    private fun parseSize(text: String): Long? {
-        val match = sizePattern.find(text) ?: return null
-        val value = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-        val unit = when (match.groupValues[2].uppercase()) {
-            "TB" -> 1L shl 40
-            "GB" -> 1L shl 30
+    internal fun parseSize(text: String): Long? {
+        val match = markedSizePattern.find(text) ?: sizePattern.find(text) ?: return null
+        val raw = match.groupValues[1].replace(Regex("[ \u00a0\u202f]"), "")
+        val number = when {
+            raw.contains('.') && raw.lastIndexOf(',') > raw.indexOf('.') -> raw.replace(".", "").replace(',', '.')
+            Regex(""",\d{3}""").containsMatchIn(raw) -> raw.replace(",", "")
+            else -> raw.replace(',', '.')
+        }
+        val value = number.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: return null
+        val unit = when (match.groupValues[2].first().uppercaseChar()) {
+            'T' -> 1L shl 40
+            'G' -> 1L shl 30
             else -> 1L shl 20
         }
-        return (value * unit).toLong()
+        return kotlin.math.round(value * unit).toLong()
     }
+
+    internal fun size(stream: Stream): Long? = stream.behaviorHints?.videoSize?.takeIf { it > 0 }
+        ?: stream.size?.takeIf { it > 0 }
+        ?: parseSize(listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" "))
+
+    internal fun seeders(stream: Stream): Long? = seedersPattern.find(
+        listOfNotNull(stream.title, stream.description, stream.name).joinToString(" "),
+    )?.groupValues?.get(1)?.toLongOrNull()
+
+    /** Stable across addons; unknown sizes and seeder counts always go last. */
+    fun sourceOrder(streams: List<RankedStream>, order: String): List<RankedStream> {
+        if (order !in sourceSorts) return streams
+        val values = streams.associateWith { if (order == "seeders-desc") seeders(it.stream) else size(it.stream) }
+        return streams.sortedWith { a, b ->
+            val av = values[a]
+            val bv = values[b]
+            when {
+                av == null -> if (bv == null) 0 else 1
+                bv == null -> -1
+                order == "size-asc" -> av.compareTo(bv)
+                else -> bv.compareTo(av)
+            }
+        }
+    }
+
+    val sourceSorts = mapOf("size-desc" to "Largest first", "size-asc" to "Smallest first", "seeders-desc" to "Most seeders")
 
     /** Higher is better. Playability on this device outweighs everything else. */
     fun score(stream: Stream, playableNow: Boolean, hi10pPenalty: Double = 500.0, languages: List<String> = emptyList()): Double {

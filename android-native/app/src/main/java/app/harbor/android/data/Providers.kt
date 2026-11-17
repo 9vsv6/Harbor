@@ -225,8 +225,10 @@ object PosterService {
         }
     }
 
-    private fun template(template: String, ids: Ids): String? {
+    private fun template(template: String, ids: Ids, landscape: Boolean, language: String): String? {
         var out = template
+        val usesShape = "{shape}" in out
+        val usesLang = "{lang}" in out
         fun sub(token: String, value: String?): Boolean {
             if (token !in out) return true
             if (value == null) return false
@@ -234,6 +236,8 @@ object PosterService {
             return true
         }
         val idToken = ids.imdb ?: ids.tmdb?.let { "${ids.type}-$it" } ?: return null
+        sub("{shape}", if (landscape) "landscape" else "poster")
+        if (!sub("{lang}", language.ifBlank { null })) return null
         if (!sub("{imdbId}", ids.imdb) || !sub("{imdb_id}", ids.imdb)) return null
         if (!sub("{tmdbId}", ids.tmdb) || !sub("{tmdb_id}", ids.tmdb)) return null
         // Pictorium's copied template takes whichever id the title has.
@@ -241,30 +245,52 @@ object PosterService {
         sub("{type}", ids.type)
         sub("{mediaType}", ids.type)
         if (!sub("{id}", idToken)) return null
+        if (landscape && !usesShape && shapeAware(out)) out = withQuery(out, "shape", "landscape")
+        if (!usesLang && language.isNotBlank() && (shapeAware(out) || out.contains("btttr.cc", true))) out = withQuery(out, "lang", language)
         return out
     }
 
-    /** The poster to show for `meta`, or null to keep the addon's. */
-    fun poster(meta: Meta, rpdbKey: String?, custom: String?): String? {
-        val ids = parse(meta) ?: return null
-        val base = custom?.trim()?.trimEnd('/')
-        if (!base.isNullOrEmpty()) {
-            if ('{' in base) return template(base, ids)
-            val host = base.lowercase()
-            return when {
-                "btttr.cc" in host -> ids.imdb?.let { "$base/poster/imdb/poster-default/$it.jpg" }
-                ("postersplus" in host || "elfhosted" in host) && ids.imdb != null && ids.tmdb != null ->
-                    "${base.removeSuffix("/poster")}/poster?tmdb_id=${ids.tmdb}&imdb_id=${ids.imdb}&type=${ids.type}"
-                "ratingposterdb.com" in host && rpdbKey != null -> rpdb(base, rpdbKey, ids)
-                else -> null
-            }
-        }
-        return rpdbKey?.let { rpdb("https://api.ratingposterdb.com", it, ids) }
+    private fun shapeAware(url: String): Boolean = url.contains("pictorium", true) || url.contains("postersplus", true) ||
+        url.contains("/api/poster/", true) || (url.contains("/poster?", true) && Regex("[?&]tmdb_id=", RegexOption.IGNORE_CASE).containsMatchIn(url))
+
+    private fun withQuery(url: String, name: String, value: String): String {
+        val root = url.substringBefore('#')
+        val hash = url.substringAfter('#', "").let { if (it.isEmpty()) "" else "#$it" }
+        val pattern = Regex("([?&])$name=[^&#]*", RegexOption.IGNORE_CASE)
+        return (if (pattern.containsMatchIn(root)) root.replace(pattern) { "${it.groupValues[1]}$name=$value" }
+        else root + (if ('?' in root) "&" else "?") + "$name=$value") + hash
     }
 
-    private fun rpdb(base: String, key: String, ids: Ids): String? = when {
-        ids.imdb != null -> "$base/$key/imdb/poster-default/${ids.imdb}.jpg?fallback=true"
-        ids.tmdb != null -> "$base/$key/tmdb/poster-default/${ids.type}-${ids.tmdb}.jpg?fallback=true"
+    internal fun language(settings: AppSettings, device: String = java.util.Locale.getDefault().language): String =
+        listOf(settings.imageLanguage.takeUnless { it == "null" || it == "original" }.orEmpty(), settings.metadataLanguage, settings.appLanguage, device)
+            .firstOrNull { it.isNotBlank() && it != "system" }?.let { LanguageCodes.code(it).substringBefore('-').lowercase() }.orEmpty()
+
+    /** The poster to show for `meta`, or null to keep the addon's. */
+    fun poster(meta: Meta, rpdbKey: String?, custom: String?, landscape: Boolean = false, language: String = "", altId: String? = null): String? {
+        val primary = parse(meta) ?: return null
+        val alt = altId?.let { parse(meta.copy(id = it)) }
+        val ids = primary.copy(imdb = primary.imdb ?: alt?.imdb, tmdb = primary.tmdb ?: alt?.tmdb)
+        val base = custom?.trim()?.trimEnd('/')
+        fun lang(url: String?) = url?.let { if (language.isBlank()) it else withQuery(it, "lang", language) }
+        if (!base.isNullOrEmpty()) {
+            // Better Posters has no wide renderer: TV cards keep their metadata backdrop.
+            if (landscape && base.contains("btttr.cc", true)) return null
+            if ('{' in base) return template(base, ids, landscape, language)
+            val host = base.lowercase()
+            return when {
+                "btttr.cc" in host -> lang(ids.imdb?.let { "$base/poster/imdb/poster-default/$it.jpg" })
+                "pictorium" in host -> null // Its per-space template is required.
+                "postersplus" in host || "elfhosted" in host -> if (ids.imdb != null && ids.tmdb != null)
+                    lang("${base.removeSuffix("/poster")}/poster?tmdb_id=${ids.tmdb}&imdb_id=${ids.imdb}&type=${ids.type}" + if (landscape) "&shape=landscape" else "") else null
+                else -> rpdbKey?.let { lang(rpdb(base, it, ids, landscape)) }
+            }
+        }
+        return rpdbKey?.let { lang(rpdb("https://api.ratingposterdb.com", it, ids, landscape)) }
+    }
+
+    private fun rpdb(base: String, key: String, ids: Ids, landscape: Boolean): String? = when {
+        ids.imdb != null -> "$base/$key/imdb/${if (landscape) "backdrop" else "poster"}-default/${ids.imdb}.jpg?fallback=true"
+        ids.tmdb != null -> "$base/$key/tmdb/${if (landscape) "backdrop" else "poster"}-default/${ids.type}-${ids.tmdb}.jpg?fallback=true"
         else -> null
     }
 }

@@ -1,10 +1,13 @@
 whisper.cpp v1.9.5, including its ggml CPU backend
 https://github.com/ggml-org/whisper.cpp/tree/v1.9.5
 Optional ggml-tiny model: https://huggingface.co/ggerganov/whisper.cpp
+Optional Silero VAD v5.1.2 model (ggml conversion): https://huggingface.co/ggml-org/whisper-vad
+Silero VAD: https://github.com/snakers4/silero-vad
 
 MIT License
 
 Copyright (c) 2023-2026 The ggml authors
+Copyright (c) 2020-present Silero Team
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

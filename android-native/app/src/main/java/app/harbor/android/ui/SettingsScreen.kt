@@ -1519,12 +1519,15 @@ private fun StreamingSection(repository: Repository, settings: AppSettings, set:
     Part("Sorting") {
         HarborHeading(
             "Result order",
-            "Harbor ranking puts the best-scoring sources first. Addon order keeps each addon's results in the order it returned them, like the Stremio and Vidi apps. Stream priority below decides which addon leads, in both modes.",
+            "Harbor ranking puts the best-scoring sources first. Addon order keeps each addon's results in the order it returned them, like the Stremio and Vidi apps. File size and seeder orders compare sources across addons; unknown values stay last.",
         )
         CheckList(
             listOf(
                 Triple("harbor", "Harbor ranking", "Default. Harbor parses and scores every source and surfaces the best quality first."),
                 Triple("addon", "Addon order", "Show each addon's results in the order it returned them, grouped by your addon list. Matches the Stremio and Vidi apps."),
+                Triple("size-desc", "Largest first", "Order sources across addons by file size, largest first. Unknown sizes stay last."),
+                Triple("size-asc", "Smallest first", "Order sources across addons by file size, smallest first. Unknown sizes stay last."),
+                Triple("seeders-desc", "Most seeders", "Order sources across addons by torrent seeders. Unknown counts stay last."),
             ),
             settings.streamSort,
         ) { v -> set { it.copy(streamSort = v) } }
@@ -1598,7 +1601,7 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         ToggleRow("Show DUB badge on anime cards", "Anime with an English dub airing now (from AniSchedule).", settings.showDubBadge) { v -> set { it.copy(showDubBadge = v) } }
         ToggleRow("Watched badge", "A check on the posters of titles you have watched.", settings.watchedBadge) { v -> set { it.copy(watchedBadge = v) } }
         ToggleRow("Watchlist bookmark", "A bookmark on the posters of titles in your list.", settings.watchlistBookmark) { v -> set { it.copy(watchlistBookmark = v) } }
-        ToggleRow("Hide titles under posters", null, settings.hidePosterTitles) { v -> set { it.copy(hidePosterTitles = v) } }
+        ToggleRow("Hide titles under posters", "Cleaner grid when your poster service already prints the title on the artwork.", settings.hidePosterTitles) { v -> set { it.copy(hidePosterTitles = v) } }
     }
     // ---- Detail pages ----
     Part("Detail pages") {
@@ -1666,6 +1669,14 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
     }
     // ---- Library ----
     Part("Library") {
+        val trackers by repository.trackers.collectAsState()
+        val pmdb by repository.accounts.pmdb.collectAsState()
+        HarborHeading("Show tabs", null)
+        app.harbor.android.data.LibraryTabs.available(trackers, settings, pmdb != null).forEach { (id, label) ->
+            ToggleRow(label, null, id !in settings.libraryHiddenTabs) { shown ->
+                set { it.copy(libraryHiddenTabs = if (shown) it.libraryHiddenTabs - id else it.libraryHiddenTabs + id) }
+            }
+        }
         HarborHeading("Content filters", "What Harbor shows at all.")
         ToggleRow("Hide anime", "Removes the Anime view and anime rows.", settings.hideAnime) { v -> set { it.copy(hideAnime = v) } }
         HarborHeading("Downloads", "Files you saved for offline play.")
@@ -1717,7 +1728,7 @@ private fun ProvidersSection(repository: Repository) {
             repository.rpdbKey.collectAsState().value, "RPDB API key", "https://ratingposterdb.com",
         ) { repository.setRpdbKey(it) },
         Provider(
-            "Custom poster service", null, "Swap in Better Posters, PostersPlus, or your own URL template with {imdbId}, {tmdbId} or {type}.",
+            "Custom poster service", null, "Swap in Better Posters, PostersPlus, or your own URL template with {imdbId}, {tmdbId}, {type}, {shape} or {lang}. TV cards use 16:9 art when the service supports it. Language follows Poster language in Languages & subtitles.",
             keys[ProviderKey.POSTERS], "Poster URL or template", "https://btttr.cc",
         ) { repository.setProviderKey(ProviderKey.POSTERS, it) },
     )

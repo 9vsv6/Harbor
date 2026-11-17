@@ -405,6 +405,24 @@ object Tmdb {
         return get(key, "$path/external_ids").string("imdb_id")?.takeIf { it.startsWith("tt") }
     }
 
+    private val posterIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** Templates can need both IMDb and TMDB; only look up the missing id when needed. */
+    suspend fun posterAltId(key: String, meta: Meta): String? {
+        val cacheKey = "${meta.type}:${meta.id}"
+        posterIds[cacheKey]?.let { return it }
+        val alt = if (meta.id.startsWith("tt")) {
+            val id = cachedDetails(meta.id, meta.type)?.tmdbId ?: run {
+                val found = get(key, "/find/${meta.id.substringBefore(':')}", mapOf("external_source" to "imdb_id"))
+                val results = if (meta.type == "movie") "movie_results" else "tv_results"
+                found[results].arrayOrNull?.firstOrNull().objectOrNull?.get("id")?.jsonPrimitive?.intOrNull
+            }
+            id?.let { "tmdb:${if (meta.type == "movie") "movie" else "tv"}:$it" }
+        } else imdbId(key, meta)
+        if (alt != null) posterIds[cacheKey] = alt
+        return alt
+    }
+
     /** Keep the language code, including when the title was opened under its TMDB ID. */
     suspend fun originalAudioLanguage(key: String, meta: Meta): String? {
         tmdbPath(meta)?.let { return get(key, it).string("original_language") }

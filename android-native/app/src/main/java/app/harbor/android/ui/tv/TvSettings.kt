@@ -142,7 +142,6 @@ private fun <T> toggle(values: Set<T>, value: T) = if (value in values) values -
 fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> Unit) {
     val settings by repository.settings.collectAsState()
     val prefs by repository.playerPrefs.collectAsState()
-    val speechModel by app.harbor.android.data.WhisperModel.state.collectAsState()
     val autoPlay by repository.autoPlay.collectAsState()
     val tmdb by repository.tmdbKey.collectAsState()
     val account by repository.account.collectAsState()
@@ -168,7 +167,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             BackHandler { pane = null }
             Column(Modifier.fillMaxSize().padding(u(24f)).verticalScroll(rememberScrollState())) {
                 androidx.compose.material3.TextButton(onClick = { pane = null }) { Text("Back") }
-                app.harbor.android.ui.WhisperModelPanel(requestFocus = true)
+                app.harbor.android.ui.AutoSyncModelsPanel(requestFocus = true)
             }
             return@CompositionLocalProvider
         }
@@ -195,13 +194,9 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val update = app.harbor.android.data.AppUpdate.status
         val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
         // Only once a category is open: on the list, every focus move would build options nobody sees.
-        val controls = if (depth != 2) emptyList() else remember(active, settings, prefs, autoPlay, connected, update, speechModel) {
+        val controls = if (depth != 2) emptyList() else remember(active, settings, prefs, autoPlay, connected, update) {
             controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.Subtitles && settings.autoSyncExperimental) listOf(
-                Control.Push("whisper", "Whisper Tiny speech model", when {
-                    speechModel.downloading -> "Downloading… ${(speechModel.received * 100 / app.harbor.android.data.WhisperModel.BYTES)}%"
-                    speechModel.installed -> "Installed locally · 74.1 MB"
-                    else -> "Download model · 74.1 MB"
-                })) else emptyList()) + if (active == Cat.Setup) listOfNotNull(
+                Control.Push("whisper", "Speech models", "Whisper Tiny and Silero speech detector")) else emptyList()) + if (active == Cat.Setup) listOfNotNull(
                 Control.Push("updates", "Updates", updateLine(version, update)),
             ) else emptyList()
         }
@@ -406,7 +401,8 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
         Control.Options("keepSource", "Keep same addon on next episode", onOff(s.keepSourceNextEpisode), OnOff),
         Control.Options("switchStalled", "Automatically switch stalled sources", onOff(s.autoNextStreamOnStall), OnOff),
     ) + (if (s.autoNextStreamOnStall) listOf(Control.Options("stallWait", "Buffering time before switching", s.stallSec.toString(), secondsOptions(listOf(5, 10, 15, 30), s.stallSec))) else emptyList()) + listOf(
-        Control.Options("streamSort", "Source order", s.streamSort, listOf(Opt("addon", "Addon order"), Opt("harbor", "Harbor ranking"))),
+        Control.Options("streamSort", "Source order", s.streamSort, listOf(Opt("addon", "Addon order"), Opt("harbor", "Harbor ranking")) + app.harbor.android.data.Ranking.sourceSorts.map { Opt(it.key, it.value) }),
+        Control.Options("animeImdb", "Prefer IMDb IDs for anime", onOff(s.animePreferImdbStreams), OnOff),
         // What tops the list: what this TV plays without stopping (its screen size, its connection's
         // measured speed), or the best quality whatever it costs (4K first, even on a 1080p screen).
         Control.Options("smoothFirst", "Put first", onOff(s.smoothSourcesFirst), listOf(Opt("on", "Smooth on this TV"), Opt("off", "Best quality"))),
@@ -421,9 +417,14 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
         Control.Action("resetFilters", "Reset source filters"),
     )
     Cat.Home -> listOf(
+        Control.Options("cardTags", "Show tags on cards", onOff(s.showCardBadges), OnOff),
+        Control.Options("hidePosterTitles", "Hide titles under posters", onOff(s.hidePosterTitles), OnOff),
         Control.Options("heroRotate", "Rotate the top title", onOff(s.heroAutoRotate), OnOff),
         Control.Options("hideWatched", "Hide watched in catalogs", onOff(s.hideWatched), OnOff),
         Control.Options("top10", "Top 10 row", onOff(s.showTop10), OnOff),
+        Control.Options("libraryTab:watchlist", "Show tabs · Watchlist", onOff("watchlist" !in s.libraryHiddenTabs), OnOff),
+        Control.Options("libraryTab:history", "Show tabs · History", onOff("history" !in s.libraryHiddenTabs), OnOff),
+        Control.Options("libraryTab:favorites", "Show tabs · Favorites", onOff("favorites" !in s.libraryHiddenTabs), OnOff),
         Control.Options("navSide", "Menu position", s.tvNavSide, listOf(Opt("top", "Top bar"), Opt("left", "Left side"))),
     )
     Cat.Services -> listOf(
@@ -440,6 +441,11 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
 }
 
 private fun commit(repository: Repository, id: String, value: String) {
+    if (id.startsWith("libraryTab:")) {
+        val tab = id.substringAfter(':')
+        repository.updateSettings { it.copy(libraryHiddenTabs = if (value == "on") it.libraryHiddenTabs - tab else it.libraryHiddenTabs + tab) }
+        return
+    }
     when (id) {
         "overscan" -> repository.updateSettings { it.copy(tvOverscan = value.toFloat()) }
         "detailsLanguage" -> repository.updateSettings { it.copy(metadataLanguage = value, translateOverviews = true) }
@@ -514,6 +520,7 @@ private fun commit(repository: Repository, id: String, value: String) {
         "switchStalled" -> repository.updateSettings { it.copy(autoNextStreamOnStall = value == "on") }
         "stallWait" -> repository.updateSettings { it.copy(stallSec = value.toInt()) }
         "streamSort" -> repository.updateSettings { it.copy(streamSort = value) }
+        "animeImdb" -> repository.updateSettings { it.copy(animePreferImdbStreams = value == "on") }
         "smoothFirst" -> repository.updateSettings { it.copy(smoothSourcesFirst = value == "on") }
         "filterResolution" -> repository.updateSettings { s -> s.copy(streamFilter = s.streamFilter.copy(resolutions = if (value.isEmpty()) emptySet() else toggle(s.streamFilter.resolutions, value.toInt()))) }
         "filterSource" -> repository.updateSettings { s -> s.copy(streamFilter = s.streamFilter.copy(sources = if (value.isEmpty()) emptySet() else toggle(s.streamFilter.sources, value))) }
@@ -525,6 +532,8 @@ private fun commit(repository: Repository, id: String, value: String) {
         "safetyFilter" -> repository.updateSettings { it.copy(safetyFilter = value) }
         "showFilename" -> repository.updateSettings { it.copy(showFilename = value == "on") }
         "heroRotate" -> repository.updateSettings { it.copy(heroAutoRotate = value == "on") }
+        "cardTags" -> repository.updateSettings { it.copy(showCardBadges = value == "on") }
+        "hidePosterTitles" -> repository.updateSettings { it.copy(hidePosterTitles = value == "on") }
         "hideWatched" -> repository.updateSettings { it.copy(hideWatched = value == "on") }
         "top10" -> repository.updateSettings { it.copy(showTop10 = value == "on") }
         "navSide" -> repository.updateSettings { it.copy(tvNavSide = value) }
@@ -771,7 +780,7 @@ private fun SettingsPane(
                         "Skip credits" to if (s.autoSkipOutro) "On" else "Off",
                     )
                     Cat.Sources -> listOf(
-                        "Source order" to if (s.streamSort == "addon") "Addon order" else "Harbor ranking",
+                        "Source order" to (app.harbor.android.data.Ranking.sourceSorts[s.streamSort] ?: if (s.streamSort == "addon") "Addon order" else "Harbor ranking"),
                         "Put first" to if (s.smoothSourcesFirst) "Smooth on this TV" else "Best quality",
                         "Remember last source" to if (s.rememberLastStream) "On" else "Off",
                         "Switch stalled sources" to if (s.autoNextStreamOnStall) "After ${s.stallSec} s" else "Off",

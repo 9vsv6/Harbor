@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -65,6 +66,8 @@ data class CwItem(
     val fraction: Float? = null,
     /** Where the card came from when it isn't this device or Stremio: "Trakt". */
     val source: String? = null,
+    val altIds: Set<String> = emptySet(),
+    val members: List<CwItem> = emptyList(),
 )
 
 data class Account(val authKey: String, val email: String)
@@ -211,6 +214,7 @@ class Repository(private val context: Context) {
     private val stringSet = SetSerializer(String.serializer())
 
     /** Newest first; one card per title. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val continueWatching: StateFlow<List<CwItem>> = combine(_resume, _library, _dismissed, _traktCw, accounts.externalCw) { resume, library, dismissed, trakt, external ->
         val local = resume.mapNotNull { (videoId, r) ->
             val metaId = r.metaId ?: return@mapNotNull null
@@ -233,13 +237,15 @@ class Repository(private val context: Context) {
                 state.duration,
                 if (animeVideo) 1 else parts.getOrNull(parts.size - 2)?.toIntOrNull()?.takeIf { parts.size >= 3 },
                 parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 },
-                parseTime(state.lastWatched ?: item.mtime),
+                parseTime(state.lastWatched),
             )
         }
-        (local + remote + trakt + external).sortedByDescending { it.updatedAt }
-            .distinctBy { it.meta.id }
+        (local + remote + trakt + external)
             .filter { "${it.meta.id}@${it.videoId}" !in dismissed }
-            .take(60)
+    }.transformLatest { items ->
+        emit(ContinueWatching.merge(items))
+        val resolved = CwIdentities.resolve(items, _tmdbKey.value, accounts.pmdb.value)
+        emit(ContinueWatching.merge(resolved))
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private fun loadProfile(prefs: Preferences) {
@@ -254,7 +260,7 @@ class Repository(private val context: Context) {
         _dismissed.value = prefs[keyDismissed]?.let { runCatching { Net.json.decodeFromString(stringSet, it) }.getOrNull() } ?: emptySet()
         _trackers.value = prefs[keyTrackers]?.let { runCatching { Net.json.decodeFromString(TrackerSettings.serializer(), it) }.getOrNull() } ?: TrackerSettings()
         _traktCw.value = emptyList()
-        _settings.value = prefs[keySettings]?.let { runCatching { Net.json.decodeFromString(AppSettings.serializer(), it) }.getOrNull() }
+        _settings.value = prefs[keySettings]?.let { runCatching { savedSettings(it) }.getOrNull() }
             // Backups restored before names were turned into codes still hold "arabic" and the like.
             ?.let { it.copy(subtitleFallbacks = LanguageCodes.codes(it.subtitleFallbacks), audioLanguages = LanguageCodes.codes(it.audioLanguages), secondarySubLanguage = LanguageCodes.code(it.secondarySubLanguage)) }
             ?: AppSettings()
@@ -985,7 +991,7 @@ class Repository(private val context: Context) {
     }
 
     fun dismissContinueWatching(item: CwItem) {
-        val next = _dismissed.value + "${item.meta.id}@${item.videoId}"
+        val next = _dismissed.value + (item.members.ifEmpty { listOf(item) }).map { "${it.meta.id}@${it.videoId}" }
         _dismissed.value = next
         val key = keyDismissed
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringSet, next) }

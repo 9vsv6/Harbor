@@ -99,14 +99,15 @@ object Playback {
         }
         // A TV puts the sources it can play smoothly first (its screen size, its connection's speed).
         // The order within each part is kept: Harbor's ranking, or your addons' own order.
-        val ordered = if (!app.harbor.android.perf.Perf.isTv || !settings.smoothSourcesFirst) ranked
+        val ordered = if (settings.streamSort in Ranking.sourceSorts) Ranking.sourceOrder(ranked, settings.streamSort)
+        else if (!app.harbor.android.perf.Perf.isTv || !settings.smoothSourcesFirst) ranked
         else ranked.sortedWith(
             compareByDescending<RankedStream> { playable(it.stream) }
                 // The screen first: on a Full HD TV, 1080p before 4K whatever the connection reading says.
                 .thenByDescending { StreamFit.fitsScreen(it.stream) }
                 .thenByDescending { StreamFit.fitsNetwork(it.stream, type) },
         )
-        if (prefer == null) return ordered
+        if (prefer == null || settings.streamSort in Ranking.sourceSorts) return ordered
         val match = ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) && (prefer.second == null || streamKey(it.stream) == prefer.second) }
             ?: ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) }.takeIf { prefer.second == null }
             ?: return ordered
@@ -166,7 +167,7 @@ object Playback {
 
     /** One source's identity within a list. Unique in what `ranked` returns, so lists can key on it. */
     fun rowKey(item: RankedStream): String =
-        item.addon.manifest.id + "|" + (item.stream.url ?: item.stream.infoHash) + "|" + item.stream.fileIdx + "|" + item.stream.name + "|" + item.stream.title
+        item.addon.manifest.id + "|" + (item.stream.url ?: item.stream.infoHash ?: item.stream.ytId) + "|" + item.stream.fileIdx + "|" + item.stream.name + "|" + item.stream.title
 
     /** What identifies a source between visits: its name line, which carries quality and service. */
     fun streamKey(stream: Stream): String = (stream.name ?: stream.title ?: "").replace('\n', ' ').trim().take(80)
@@ -208,6 +209,8 @@ object Playback {
 
     suspend fun resolve(stream: Stream, debrid: DebridAccount?, addonId: String? = null): Ready = when {
         stream.direct -> Ready(stream, stream.url!!, addonId)
+        !stream.ytId.isNullOrBlank() -> Ready(stream, Trailers.stream(stream.ytId)
+            ?: error("Couldn't load this YouTube video. Try another source."), addonId)
         stream.infoHash != null && debrid != null -> Ready(stream, Debrid.resolve(debrid, stream), addonId)
         stream.infoHash != null -> error("Torrents need a debrid account. Add one in Settings.")
         else -> error("Harbor can't play this kind of stream yet.")

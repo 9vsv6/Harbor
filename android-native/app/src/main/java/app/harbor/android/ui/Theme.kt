@@ -32,7 +32,9 @@ object HarborDisplay {
     var watchedIds by mutableStateOf<Set<String>>(emptySet())
 
     /** The poster as Harbor picks it: the custom service, else RPDB with a key, else the addon's. */
-    fun posterFor(meta: Meta): String? = PosterService.poster(meta, rpdbKey, customPosters) ?: meta.poster
+    fun posterFor(meta: Meta, landscape: Boolean = false, altId: String? = null): String? =
+        PosterService.poster(meta, rpdbKey, customPosters, landscape, PosterService.language(settings), altId)
+            ?: if (landscape) meta.background ?: meta.poster else meta.poster
 }
 
 /** Harbor's dark palette (`src/index.css` tokens, converted from OKLCH to sRGB). */

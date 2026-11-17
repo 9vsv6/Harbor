@@ -32,29 +32,53 @@ object AddonClient {
     /** How long a stream addon may take before it's skipped (Settings → Sources → Addon timeout). */
     @Volatile var streamTimeoutMs = 20_000L
 
+    private val manifestRequests = ManifestRequests(
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
+        fetch = { url ->
+            val request = okhttp3.Request.Builder().url(url).header("User-Agent", Net.USER_AGENT)
+                .header("Accept", "application/json").build()
+            with(Net) {
+                client.newCall(request).await { response ->
+                    if (response.code == 429) throw ManifestRequests.RateLimited(response.header("Retry-After"))
+                    if (!response.isSuccessful) throw java.io.IOException("Manifest fetch failed (HTTP ${response.code}). Check the URL.")
+                    response.body?.string().orEmpty()
+                }
+            }
+        },
+    )
+
+    // The coroutine enforces this addon's allowance, including settings longer than 60 seconds.
+    private val aioClient by lazy { Net.client.newBuilder().readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS).build() }
+
+    internal fun streamTimeout(addon: Addon): Long =
+        if (isAio(addon)) maxOf(60_000L, streamTimeoutMs) else streamTimeoutMs
+
+    private fun isAio(addon: Addon): Boolean = Regex("aiostreams|aio[\\s-]?streams", RegexOption.IGNORE_CASE)
+        .containsMatchIn("${addon.manifest.name} ${addon.manifest.id} ${addon.transportUrl}")
+
     /** The manifest exactly as the addon serves it, for saving into the collection. */
     suspend fun manifestJson(transportUrl: String): JsonObject =
-        Net.parseObject(Net.get(transportUrl.trim()))
+        Net.parseObject(manifestRequests.get(transportUrl))
 
     suspend fun manifest(transportUrl: String): Addon {
-        val body = Net.get(transportUrl)
+        val body = manifestRequests.get(transportUrl)
         val manifest = withContext(Net.parseDispatcher) { Net.json.decodeFromString(Manifest.serializer(), body) }
         return Addon(transportUrl, manifest)
     }
 
     private fun path(addon: Addon, resource: String, type: String, id: String, extra: Map<String, String> = emptyMap()): String {
         val extras = if (extra.isEmpty()) "" else "/" + extra.entries.joinToString("&") { (k, v) -> "$k=${Uri.encode(v)}" }
-        return "${addon.baseUrl}/$resource/$type/${Uri.encode(id)}$extras.json"
+        return addon.resourceUrl("$resource/$type/${Uri.encode(id)}$extras.json")
     }
 
     /** One retry: the first request on a fresh connection sometimes fails on mobile networks. */
-    private suspend fun fetch(url: String): JsonObject {
+    private suspend fun fetch(url: String, client: okhttp3.OkHttpClient = Net.client): JsonObject {
         val body = try {
-            Net.get(url)
+            Net.get(url, client)
         } catch (e: java.io.IOException) {
             if (e.message?.startsWith("HTTP 4") == true) throw e
             kotlinx.coroutines.delay(400)
-            Net.get(url)
+            Net.get(url, client)
         }
         return Net.parseObject(body)
     }
@@ -111,7 +135,7 @@ object AddonClient {
     ): List<AddonStreams> = withContext(Dispatchers.Default) {
         addons.map { it to pick(it) }.filter { it.second.isNotEmpty() }.map { (addon, ids) ->
             async {
-                val result = withTimeoutOrNull(streamTimeoutMs) {
+                val result = withTimeoutOrNull(streamTimeout(addon)) {
                     runCatching {
                         // Its own scope: one failed id fails this addon alone, not the others.
                         coroutineScope {
@@ -120,7 +144,7 @@ object AddonClient {
                                     val url = path(addon, "stream", type, id)
                                     val now = System.currentTimeMillis()
                                     streamCache[url]?.takeIf { now - it.at < STREAM_CACHE_MS }?.let { return@async it.streams }
-                                    val list = fetch(url)["streams"].arrayOrNull?.mapNotNull {
+                                    val list = fetch(url, if (isAio(addon)) aioClient else Net.client)["streams"].arrayOrNull?.mapNotNull {
                                         runCatching { Net.json.decodeFromJsonElement(Stream.serializer(), it) }.getOrNull()
                                     } ?: emptyList()
                                     // Only answers worth keeping; an empty one may be an addon still warming up.

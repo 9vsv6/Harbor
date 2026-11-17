@@ -1,6 +1,15 @@
 package app.harbor.android.data
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
+/** Old saves omitted false defaults. Keep those choices; new profiles use AppSettings(). */
+internal fun savedSettings(value: String): AppSettings {
+    val saved = Net.json.parseToJsonElement(value) as JsonObject
+    val defaults = mapOf("keepSourceNextEpisode" to JsonPrimitive(false), "animePreferImdbStreams" to JsonPrimitive(false))
+    return Net.json.decodeFromJsonElement(AppSettings.serializer(), JsonObject(defaults + saved))
+}
 
 /**
  * A stream filter, as Harbor's saved stream filters (`src/lib/streams/custom-filters.ts`):
@@ -144,7 +153,9 @@ data class AppSettings(
     // ---- Playback: sources ----
     val autoNextStreamOnStall: Boolean = false,
     val stallSec: Int = 10,
-    val keepSourceNextEpisode: Boolean = false,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault
+    val keepSourceNextEpisode: Boolean = true,
     val rememberLastStream: Boolean = true,
 
     // ---- mpv ----
@@ -196,7 +207,7 @@ data class AppSettings(
     val titleLanguage: String = "",
 
     // ---- Sources ----
-    /** "harbor" (ranked best first) or "addon" (each addon's own order, addons in your order). */
+    /** "harbor", "addon", "size-desc", "size-asc" or "seeders-desc" across addons. */
     val streamSort: String = "addon",
     /** TV: sources this TV can play smoothly (its screen, its connection) first, else quality order only. */
     val smoothSourcesFirst: Boolean = true,
@@ -210,7 +221,9 @@ data class AppSettings(
     val showFilename: Boolean = false,
     val addonTimeoutSec: Int = 30,
     /** Harbor's "Prefer IMDb IDs for anime": ask addons under the episode's verified IMDb mapping. */
-    val animePreferImdbStreams: Boolean = false,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault
+    val animePreferImdbStreams: Boolean = true,
 
     // ---- Library and cards ----
     val showRatingBadge: Boolean = true,
@@ -264,6 +277,7 @@ data class AppSettings(
     val animeRoomOnly: Boolean = true,
     /** Drop titles you have watched from catalog rows. */
     val hideWatched: Boolean = false,
+    val libraryHiddenTabs: Set<String> = emptySet(),
     /** A check on the posters of titles you have watched. */
     val watchedBadge: Boolean = true,
     /** A bookmark on the posters of titles in your list. */

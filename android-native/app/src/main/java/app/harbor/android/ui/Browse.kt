@@ -377,7 +377,7 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
         ?: meta.id.substringBefore(':').takeIf { it.startsWith("tt") }?.let { "https://images.metahub.space/poster/medium/$it/img" }
     val title = local?.first ?: meta.name
     // RPDB or your poster service first; otherwise the poster in your language.
-    val rpdb = HarborDisplay.posterFor(meta).let { if (it == meta.poster) ownPoster else it }
+    val rpdb = rememberServiceArtwork(meta) ?: ownPoster
     // RPDB has no poster for some titles: fall back to the addon's.
     var rpdbFailed by remember(rpdb) { mutableStateOf(false) }
     val poster = if (rpdbFailed) ownPoster else rpdb

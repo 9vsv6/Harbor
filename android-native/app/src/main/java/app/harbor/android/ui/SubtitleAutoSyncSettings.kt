@@ -11,6 +11,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harbor.android.data.Repository
 import app.harbor.android.data.WhisperModel
+import app.harbor.android.data.SileroModel
+import app.harbor.android.data.SpeechModel
 import app.harbor.android.i18n.Text
 
 @Composable
@@ -32,33 +34,43 @@ fun SubtitleAutoSyncSettings(repository: Repository) {
     if (settings.subtitleAutoSyncAsr) ToggleRow("Always use the speech model", "Skip the quick speech-timing check and match the words right away. Slower, more accurate.", settings.autoSyncAlwaysSpeech) {
         repository.updateSettings { s -> s.copy(autoSyncAlwaysSpeech = it) }
     }
-    WhisperModelPanel()
+    AutoSyncModelsPanel()
 }
 
 @Composable
-fun WhisperModelPanel(requestFocus: Boolean = false) {
+fun AutoSyncModelsPanel(requestFocus: Boolean = false) {
+    SpeechModelPanel(WhisperModel, "Whisper Tiny speech model",
+        "Installed locally. Used for difficult subtitle sync attempts.",
+        "Optional download for speech recognition. Analysis runs locally; older TVs may take longer.", requestFocus)
+    SpeechModelPanel(SileroModel, "Silero speech detector",
+        "Installed locally. Used to improve speech timing during auto sync.",
+        "Optional download to distinguish speech from music and noise. Runs locally without the Whisper Tiny model.")
+}
+
+@Composable
+private fun SpeechModelPanel(store: SpeechModel, title: String, installed: String, description: String, requestFocus: Boolean = false) {
     val context = LocalContext.current
-    val model by WhisperModel.state.collectAsState()
+    val model by store.state.collectAsState()
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) {
-        WhisperModel.init(context)
+        store.init(context)
         if (requestFocus) { withFrameNanos { }; runCatching { first.requestFocus() } }
     }
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        HarborHeading("Whisper Tiny speech model", when {
-            model.installed -> "Installed locally. Used for difficult subtitle sync attempts."
+        HarborHeading(title, when {
+            model.installed -> installed
             model.downloading -> "Downloading the speech model…"
-            else -> "Optional download for speech recognition. Analysis runs locally; older TVs may take longer."
+            else -> description
         })
-        Text(if (model.installed) "Installed size: ${WhisperModel.size()}" else if (model.downloading)
-            "${WhisperModel.size(model.received)} of ${WhisperModel.size()}" else "Download size: ${WhisperModel.size()}", color = HarborColors.InkMuted, fontSize = 14.sp)
-        if (model.downloading) LinearProgressIndicator(progress = { (model.received.toFloat() / WhisperModel.BYTES).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+        Text(if (model.installed) "Installed size: ${store.size()}" else if (model.downloading)
+            "${store.size(model.received)} of ${store.size()}" else "Download size: ${store.size()}", color = HarborColors.InkMuted, fontSize = 14.sp)
+        if (model.downloading) LinearProgressIndicator(progress = { (model.received.toFloat() / store.BYTES).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
         model.error?.let { Text(it, color = HarborColors.InkMuted, fontSize = 14.sp) }
         HButton(enabled = !model.inUse, modifier = Modifier.focusRequester(first), onClick = {
             when {
-                model.downloading -> WhisperModel.cancelDownload()
-                model.installed -> WhisperModel.remove()
-                else -> WhisperModel.download(context)
+                model.downloading -> store.cancelDownload()
+                model.installed -> store.remove()
+                else -> store.download(context)
             }
         }) { Text(when {
             model.inUse -> "Model in use"

@@ -38,14 +38,21 @@ object LibraryGroups {
     /** The group Home's My Groups row asked the library to open. */
     val openRequest = MutableStateFlow<String?>(null)
 
-    private val part = Regex("^[a-zA-Z0-9_-]+$")
+    private val part = Regex("^[\\p{L}\\p{M}\\p{N}._~-]+$")
     private val digits = Regex("^\\d+$")
 
     /** The https URL's path parts when it's on one of `hosts`, with no user, password or port. */
     private fun parts(value: String, hosts: Set<String>): List<String>? {
         val uri = runCatching { java.net.URI(value.trim()) }.getOrNull() ?: return null
         if (uri.scheme != "https" || uri.host?.lowercase() !in hosts || uri.rawUserInfo != null || uri.port != -1) return null
-        return uri.path.orEmpty().split('/').filter { it.isNotEmpty() }.takeIf { p -> p.all { part.matches(it) } }
+        // Split before decoding so an encoded slash cannot create another API path segment.
+        return uri.rawPath.orEmpty().split('/').filter { it.isNotEmpty() }.map { raw ->
+            runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrNull() ?: return null
+        }.takeIf { p -> p.all { it != "." && it != ".." && part.matches(it) } }
+    }
+
+    private fun path(parts: List<String>) = parts.joinToString("/") {
+        java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20").replace("%7E", "~")
     }
 
     /** mdblist.com/lists/{user}/{slug} or mdblist.com/lists/{id}. */
@@ -53,7 +60,7 @@ object LibraryGroups {
         val p = parts(value, setOf("mdblist.com", "www.mdblist.com")) ?: return null
         if (p.firstOrNull() != "lists" || p.size !in 2..3) return null
         if (p.size == 2 && !digits.matches(p[1])) return null
-        val path = p.joinToString("/")
+        val path = path(p)
         return ListUrl("https://mdblist.com/$path", path, Source.MdbList)
     }
 
@@ -64,7 +71,7 @@ object LibraryGroups {
         val personal = p.size == 4 && p[0] == "users" && p[2] == "lists"
         val global = p.size == 2 && p[0] == "lists" && digits.matches(p[1])
         if (!personal && !global) return null
-        val path = p.joinToString("/")
+        val path = path(p)
         return ListUrl("https://trakt.tv/$path", path, Source.Trakt)
     }
 

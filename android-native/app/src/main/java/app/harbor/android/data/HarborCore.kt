@@ -55,6 +55,7 @@ object HarborCore {
         val input = buildJsonArray {
             streams.forEachIndexed { i, r ->
                 val s = r.stream
+                val size = Ranking.size(s)
                 val addonId = r.addon.manifest.id
                 add(buildJsonObject {
                     put("nativeIndex", i)
@@ -69,8 +70,10 @@ object HarborCore {
                     s.infoHash?.let { put("infoHash", it) }
                     s.fileIdx?.let { put("fileIdx", it) }
                     s.ytId?.let { put("ytId", it) }
+                    size?.let { put("size", it) }
                     s.externalUrl?.let { put("externalUrl", it) }
-                    s.behaviorHints?.let { put("behaviorHints", Net.json.encodeToJsonElement(StreamHints.serializer(), it)) }
+                    put("behaviorHints", Net.json.encodeToJsonElement(StreamHints.serializer(),
+                        (s.behaviorHints ?: StreamHints()).copy(videoSize = size)))
                     s.sources?.let { list -> putJsonArray("sources") { list.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } } }
                 })
             }

@@ -70,7 +70,16 @@ data class ExtraDef(val name: String, val isRequired: Boolean = false, val optio
 
 @Serializable
 data class Addon(val transportUrl: String, val manifest: Manifest) {
-    val baseUrl: String get() = transportUrl.removeSuffix("/manifest.json").trimEnd('/')
+    val baseUrl: String
+        get() {
+            val url = java.net.URI(transportUrl.trim())
+            val path = url.rawPath.replace(Regex("/manifest\\.json/?$", RegexOption.IGNORE_CASE), "").trimEnd('/')
+            return "${url.scheme}://${url.rawAuthority}$path" + (url.rawQuery?.let { "?$it" } ?: "")
+        }
+
+    /** Resource paths belong before the manifest's configuration query. */
+    fun resourceUrl(path: String): String = baseUrl.substringBefore('?') + "/" + path.trimStart('/') +
+        baseUrl.substringAfter('?', "").let { if (it.isEmpty()) "" else "?$it" }
 }
 
 @Serializable
@@ -147,6 +156,7 @@ data class Stream(
     val title: String? = null,
     val description: String? = null,
     val behaviorHints: StreamHints? = null,
+    val size: Long? = null,
     /** Torrent peers and trackers as "tracker:<url>" / "dht:<hash>". */
     val sources: List<String>? = null,
 ) {
@@ -154,7 +164,7 @@ data class Stream(
     val direct: Boolean get() = url != null && (url.startsWith("http://") || url.startsWith("https://"))
 
     /** Direct streams always play; torrents play once a debrid account is set up. */
-    fun playable(debrid: Boolean): Boolean = direct || (debrid && infoHash != null)
+    fun playable(debrid: Boolean): Boolean = direct || !ytId.isNullOrBlank() || (debrid && infoHash != null)
     val text: String get() = listOfNotNull(title, description).joinToString("\n").ifBlank { name ?: "Stream" }
 }
 

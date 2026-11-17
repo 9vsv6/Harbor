@@ -419,6 +419,7 @@ object PublicMetaDb {
                 if (episode) p.season else null, if (episode) p.episode else null,
                 p.updated?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0,
                 source = SOURCE,
+                altIds = setOf("tmdb:${if (movie) "movie" else "tv"}:${p.tmdbId}") - id,
             )
         }
     }

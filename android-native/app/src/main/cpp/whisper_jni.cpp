@@ -2,6 +2,7 @@
 #include <whisper.h>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <vector>
 
@@ -35,6 +36,50 @@ Java_app_harbor_android_player_WhisperNative_open(JNIEnv *env, jclass, jstring m
 extern "C" JNIEXPORT void JNICALL
 Java_app_harbor_android_player_WhisperNative_close(JNIEnv *, jclass, jlong handle) {
     if (handle) whisper_free(reinterpret_cast<whisper_context *>(handle));
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_harbor_android_player_WhisperNative_openVad(JNIEnv *env, jclass, jstring model) {
+    cancelled.store(false);
+    whisper_log_set(quiet_log, nullptr);
+    const char *path = env->GetStringUTFChars(model, nullptr);
+    if (!path) return 0;
+    auto params = whisper_vad_default_context_params();
+    params.use_gpu = false;
+    params.n_threads = 1;
+    auto *ctx = whisper_vad_init_from_file_with_params(path, params);
+    env->ReleaseStringUTFChars(model, path);
+    if (!ctx) fail(env, "Couldn't load the Silero speech detector. Remove it and download it again.");
+    return reinterpret_cast<jlong>(ctx);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_harbor_android_player_WhisperNative_closeVad(JNIEnv *, jclass, jlong handle) {
+    if (handle) whisper_vad_free(reinterpret_cast<whisper_vad_context *>(handle));
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_harbor_android_player_WhisperNative_vad(JNIEnv *env, jclass, jlong handle, jfloatArray samples) {
+    auto *ctx = reinterpret_cast<whisper_vad_context *>(handle);
+    if (!ctx || !samples) { fail(env, "The speech detector isn't ready."); return nullptr; }
+    const auto count = env->GetArrayLength(samples);
+    if (count < 512 || count > 16000 * 65) { fail(env, "Invalid audio window."); return nullptr; }
+    std::vector<float> pcm(count);
+    env->GetFloatArrayRegion(samples, 0, count, pcm.data());
+    if (env->ExceptionCheck()) return nullptr;
+    if (std::any_of(pcm.begin(), pcm.end(), [](float v) { return !std::isfinite(v); })) {
+        fail(env, "Invalid audio samples."); return nullptr;
+    }
+    // Reset recurrent state for each independent clip, as PC does.
+    if (cancelled.load() || !whisper_vad_detect_speech(ctx, pcm.data(), count) || cancelled.load()) {
+        fail(env, cancelled.load() ? "Sync cancelled" : "Couldn't detect speech in this audio window.");
+        return nullptr;
+    }
+    // PC only scores complete 512-sample frames; whisper.cpp also pads a final frame.
+    const auto size = std::min(whisper_vad_n_probs(ctx), count / 512);
+    auto result = env->NewFloatArray(size);
+    if (result) env->SetFloatArrayRegion(result, 0, size, whisper_vad_probs(ctx));
+    return result;
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL

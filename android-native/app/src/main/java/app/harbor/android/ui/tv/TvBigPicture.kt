@@ -614,7 +614,10 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
             local = runCatching { Tmdb.localized(tmdbKey, id, meta.type) }.getOrNull()
         }
     }
-    val poster = local?.second ?: meta.poster
+    val ownPoster = local?.second ?: meta.poster
+    val service = app.harbor.android.ui.rememberServiceArtwork(meta)
+    var serviceFailed by remember(service) { mutableStateOf(false) }
+    val poster = if (serviceFailed) ownPoster else service ?: ownPoster
     val title = local?.first ?: meta.name
     // The card's grey shows only until its poster arrives: under a loaded poster it would be one more
     // full-card pass for the TV's GPU on every frame.
@@ -625,11 +628,12 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
         val request = remember(poster) { poster?.let { ImageRequest.Builder(context).data(it).size(Perf.posterWidthPx, (Perf.posterWidthPx * 1.5f).toInt()).build() } }
         if (request != null) AsyncImage(
             request, title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+            onError = { serviceFailed = true },
             placeholder = PanelPainter, error = PanelPainter, fallback = PanelPainter,
         )
         CardTag(meta, Modifier.align(Alignment.TopStart))
         // The title shows on the focused card (or a card with no art), over a fade (bp-tile).
-        if (focused || poster == null) {
+        if (poster == null || focused && !HarborDisplay.settings.hidePosterTitles) {
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.5f to Color.Transparent, 1f to Void)))
             Text(
                 title, color = HarborColors.Ink, fontSize = s(9f), fontWeight = FontWeight.Bold, lineHeight = s(11f),
@@ -657,10 +661,14 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
     }
     // The card's art: the title's backdrop once the details know it.
     val artwork = app.harbor.android.ui.rememberContinueWatchingArtwork(item.meta)
-    val art = artwork.image
+    val service = app.harbor.android.ui.rememberServiceArtwork(artwork.meta, landscape = true)
+    var serviceFailed by remember(service) { mutableStateOf(false) }
+    val art = if (serviceFailed) artwork.image else service ?: artwork.image
     TvTileBox(u(221f), 16f / 9f, u(4f), requester, onFocused, onClick = { TvReturnFocus.mark(item.meta.id); onClick() }) {
         val request = remember(art) { art?.let { ImageRequest.Builder(context).data(it).size(640, 360).precision(Precision.INEXACT).build() } }
-        if (request != null) AsyncImage(request, null, contentScale = ContentScale.Crop, onError = { artwork.onError(it.result.request.data as? String) }, modifier = Modifier.fillMaxSize())
+        if (request != null) AsyncImage(request, null, contentScale = ContentScale.Crop, onError = {
+            if (art == service) serviceFailed = true else artwork.onError(it.result.request.data as? String)
+        }, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.4f to Color.Transparent, 1f to Void.copy(alpha = 0.92f))))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(u(9f)), verticalArrangement = Arrangement.spacedBy(u(4f))) {
             val logo = artwork.meta.logoUrl

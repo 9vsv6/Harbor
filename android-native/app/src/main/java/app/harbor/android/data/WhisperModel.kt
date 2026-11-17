@@ -16,11 +16,17 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** Optional multilingual Tiny model, downloaded only when the user presses Download model. */
-object WhisperModel {
-    const val BYTES = 77_691_713L
-    const val SHA256 = "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
-    private val urls = listOf("https://harborcommunity.site/models/ggml-tiny.bin",
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin")
+object WhisperModel : SpeechModel(77_691_713L,
+    "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", "ggml-tiny.bin",
+    listOf("https://harborcommunity.site/models/ggml-tiny.bin",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"))
+
+/** Silero uses the existing whisper.cpp runtime, including on 32-bit TVs. */
+object SileroModel : SpeechModel(885_098L,
+    "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf", "ggml-silero-v5.1.2.bin",
+    listOf("https://huggingface.co/ggml-org/whisper-vad/resolve/e5614ed76a5dd4b03fad5068c89efcd2617a9d1e/ggml-silero-v5.1.2.bin"))
+
+open class SpeechModel(val BYTES: Long, val SHA256: String, private val filename: String, private val urls: List<String>) {
     data class State(val installed: Boolean = false, val received: Long = 0, val downloading: Boolean = false,
         val inUse: Boolean = false, val error: String? = null)
     private val _state = MutableStateFlow(State())
@@ -32,8 +38,8 @@ object WhisperModel {
     @Synchronized fun init(context: Context) {
         if (destination != null) return
         // Model weights are replaceable and would exceed Android's app-backup quota.
-        destination = File(context.applicationContext.noBackupFilesDir, "asr/ggml-tiny.bin")
-        val stale = destination?.parentFile?.listFiles()?.filter { it.name.startsWith("ggml-tiny.") && it.name.endsWith(".part") }.orEmpty()
+        destination = File(context.applicationContext.noBackupFilesDir, "asr/$filename")
+        val stale = destination?.parentFile?.listFiles()?.filter { it.name.startsWith("${filename.substringBeforeLast('.')}.") && it.name.endsWith(".part") }.orEmpty()
         scope.launch { stale.forEach { it.delete() } }
         _state.value = State(installed = destination?.let { it.isFile && it.length() == BYTES } == true)
     }
@@ -58,7 +64,7 @@ object WhisperModel {
         _state.value = _state.value.copy(downloading = true, received = 0, error = null)
         job = scope.launch {
             val dest = destination!!
-            val part = File(dest.parentFile, "ggml-tiny.${System.nanoTime()}.part")
+            val part = File(dest.parentFile, "${filename.substringBeforeLast('.')}.${System.nanoTime()}.part")
             try {
                 dest.parentFile?.mkdirs()
                 check((dest.parentFile?.usableSpace ?: 0) >= BYTES + 10_000_000) { "Not enough storage for the speech model." }
@@ -71,7 +77,7 @@ object WhisperModel {
                 }
                 check(downloaded) { "Couldn't download a verified model. Check your connection and try again." }
                 currentCoroutineContext().ensureActive()
-                synchronized(WhisperModel) {
+                synchronized(this@SpeechModel) {
                     check(part.renameTo(dest)) { "Couldn't save the speech model." }
                     _state.value = State(installed = true, received = BYTES)
                 }
