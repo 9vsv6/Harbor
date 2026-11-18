@@ -25,7 +25,11 @@ import app.harbor.android.i18n.Text
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -55,6 +59,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+
+/** Stop page fetching while the player or another activity covers Home. */
+@Composable
+internal fun HomeLoadEffect(vararg keys: Any?, block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val current by rememberUpdatedState(block)
+    LaunchedEffect(lifecycle, *keys) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { current() }
+    }
+}
 
 /** A catalog row and what "See all" opens. */
 @kotlinx.serialization.Serializable
@@ -87,13 +101,13 @@ private val SHOW_GENRES = listOf("Drama", "Comedy", "Crime", "Sci-Fi", "Animatio
  * tablets from the side rail (Harbor's desktop sidebar), so it lives with the caller.
  */
 fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView: (BrowseView) -> Unit, showSwitcher: Boolean = true) {
-    val addons by repository.addons.collectAsState()
-    val builtins by repository.builtins.collectAsState()
-    val allCw by repository.continueWatching.collectAsState()
+    val addons by repository.addons.collectAsStateWithLifecycle()
+    val builtins by repository.builtins.collectAsStateWithLifecycle()
+    val allCw by repository.continueWatching.collectAsStateWithLifecycle()
     // Stremio's anime often carries IMDb ids; those are checked once (Harbor's anime-detect).
-    val detectedAnime by app.harbor.android.data.AnimeDetect.detected.collectAsState()
+    val detectedAnime by app.harbor.android.data.AnimeDetect.detected.collectAsStateWithLifecycle()
     val detectContext = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(allCw.map { it.meta.id }) { app.harbor.android.data.AnimeDetect.check(detectContext, allCw.map { it.meta }, repository.metaAddons()) }
+    HomeLoadEffect(allCw.map { it.meta.id }) { app.harbor.android.data.AnimeDetect.check(detectContext, allCw.map { it.meta }, repository.metaAddons()) }
     fun isAnimeCw(item: CwItem) = detectedAnime.let { app.harbor.android.data.AnimeDetect.isAnime(item.meta) }
     // Harbor's Anime page has its own Continue Watching, anime only; with "anime only in the
     // Anime room" (or anime hidden) Home leaves anime out of its row.
@@ -102,7 +116,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         HarborDisplay.settings.animeRoomOnly || HarborDisplay.settings.hideAnime -> allCw.filterNot { isAnimeCw(it) }
         else -> allCw
     }
-    val tmdbKey by repository.tmdbKey.collectAsState()
+    val tmdbKey by repository.tmdbKey.collectAsStateWithLifecycle()
     // Rebuilt from scratch when the TMDB key changes.
     val homeLanguages = HarborDisplay.settings.homeLanguages
     // Rows are fetched again when the title, description or poster language changes.
@@ -111,24 +125,25 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     val failed = remember(tmdbKey, homeLanguages, textLanguages) { mutableStateMapOf<BrowseView, Boolean>() }
 
     // Harbor's "New Episodes" row: what came out lately for the shows you follow.
-    val library by repository.library.collectAsState()
-    val myList by repository.myList.collectAsState()
+    val library by repository.library.collectAsStateWithLifecycle()
+    val myList by repository.myList.collectAsStateWithLifecycle()
     var newEpisodes by remember { mutableStateOf<List<app.harbor.android.data.CalendarItem>>(emptyList()) }
-    LaunchedEffect(addons, library.size, myList.size, HarborDisplay.settings.newEpisodesRow) {
-        if (addons.isEmpty() || !HarborDisplay.settings.newEpisodesRow) { newEpisodes = emptyList(); return@LaunchedEffect }
+    HomeLoadEffect(addons, library.size, myList.size, HarborDisplay.settings.newEpisodesRow) {
+        if (addons.isEmpty() || !HarborDisplay.settings.newEpisodesRow) { newEpisodes = emptyList(); return@HomeLoadEffect }
         val shows = library.filter { it.type == "series" && !it.removed && !it.temp }.map { it.toMeta() } + myList.filter { it.type == "series" }
-        if (shows.isEmpty()) return@LaunchedEffect
+        if (shows.isEmpty()) return@HomeLoadEffect
         newEpisodes = runCatching { app.harbor.android.data.Discover.recentEpisodes(shows, repository.metaAddons()) }.getOrDefault(emptyList())
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val cacheKey = HomeCache.key(view, tmdbKey != null, homeLanguages, textLanguages)
     // Last launch's rows show at once; fresh ones replace them when they're ready.
-    if (rows[view] == null) HomeCache.read(context, cacheKey)?.let { rows[view] = it }
+    if (rows[view] == null) HomeCache.cached(cacheKey)?.let { rows[view] = it }
     // Fresh rows are fetched at most every 15 minutes per row set, not on every return to Home.
     val refreshKey = "$cacheKey|${addons.joinToString(",") { it.manifest.id }}"
-    LaunchedEffect(view, addons, builtins, tmdbKey, homeLanguages, textLanguages) {
-        if (addons.isEmpty() || (rows[view] != null && HomeRefresh.isFresh(refreshKey))) return@LaunchedEffect
+    HomeLoadEffect(view, addons, builtins, tmdbKey, homeLanguages, textLanguages) {
+        if (rows[view] == null) HomeCache.read(context, cacheKey)?.let { rows[view] = it }
+        if (addons.isEmpty() || (rows[view] != null && HomeRefresh.isFresh(refreshKey))) return@HomeLoadEffect
         // With cached rows on screen, the fresh set is gathered aside and swapped in whole.
         val cached = rows[view] != null
         var fresh: List<CatalogRow>? = null
@@ -186,12 +201,13 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     }
 
     // Letterboxd, Simkl and MyAnimeList rows, loaded beside the catalogs.
-    val trackers by repository.trackers.collectAsState()
+    val trackers by repository.trackers.collectAsStateWithLifecycle()
     val trackerKey = TrackerRows.key(view, HarborDisplay.settings, trackers)
     val trackerFile = "trackers-${trackerKey.hashCode()}"
-    var trackerRows by remember(trackerKey) { mutableStateOf(TrackerRows.cached(trackerKey) ?: HomeCache.read(context, trackerFile).orEmpty()) }
-    LaunchedEffect(trackerKey) {
-        if (TrackerRows.cached(trackerKey) != null) return@LaunchedEffect
+    var trackerRows by remember(trackerKey) { mutableStateOf(TrackerRows.cached(trackerKey) ?: HomeCache.cached(trackerFile).orEmpty()) }
+    HomeLoadEffect(trackerKey) {
+        if (TrackerRows.cached(trackerKey) != null) return@HomeLoadEffect
+        HomeCache.read(context, trackerFile)?.let { trackerRows = it }
         val fresh = TrackerRows.load(trackerKey, view, HarborDisplay.settings, trackers)
         // An empty answer only replaces saved rows when no tracker has rows to give.
         val active = HarborDisplay.settings.let { s -> s.letterboxd.enabled || s.simklTrendingRail || (s.simklHomeRails && trackers.simkl?.accessToken != null) } || trackers.mal?.accessToken != null
@@ -423,7 +439,7 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
         // leave a ghost "Harbor" behind the bar.
         if (phone) {
             // Tapping the open section again in the bottom bar takes you back to its top.
-            val taps by PhoneTopTap.taps.collectAsState()
+            val taps by PhoneTopTap.taps.collectAsStateWithLifecycle()
             LaunchedEffect(taps) { if (taps > 0) listState.animateScrollToItem(0) }
             PhoneTopBar(solid = barSolid)
         } else if (!Perf.isTv) {
@@ -699,14 +715,16 @@ object HomeRefresh {
 /** Home rows as last loaded, kept on disk so the next launch shows them straight away. */
 object HomeCache {
     private val memory = java.util.concurrent.ConcurrentHashMap<String, List<CatalogRow>>()
+    private val diskReads = mutableSetOf<String>()
     private val serializer = kotlinx.serialization.builtins.ListSerializer(CatalogRow.serializer())
 
-    /** Reads every saved row set ahead of time, off the main thread, so Home only finds them in memory. */
+    /** Memory only: safe during composition, even while the startup warmup is still running. */
+    fun cached(key: String): List<CatalogRow>? = memory[key]
+
+    /** The app's warmup thread shares reads with on-demand loading instead of parsing twice. */
     fun preload(context: android.content.Context) {
-        java.io.File(context.filesDir, "home-rows").listFiles()?.forEach { f ->
-            val key = f.name.removeSuffix(".json")
-            if (!memory.containsKey(key)) runCatching { app.harbor.android.data.Net.json.decodeFromString(serializer, f.readText()) }.getOrNull()
-                ?.takeIf { it.isNotEmpty() }?.let { memory.putIfAbsent(key, it) }
+        java.io.File(context.filesDir, "home-rows").listFiles()?.filter { it.extension == "json" }?.forEach { f ->
+            readDisk(context, f.nameWithoutExtension)
         }
     }
 
@@ -715,9 +733,20 @@ object HomeCache {
 
     private fun file(context: android.content.Context, key: String) = java.io.File(java.io.File(context.filesDir, "home-rows").apply { mkdirs() }, "$key.json")
 
-    fun read(context: android.content.Context, key: String): List<CatalogRow>? = memory[key] ?: runCatching {
-        app.harbor.android.data.Net.json.decodeFromString(serializer, file(context, key).readText())
-    }.getOrNull()?.takeIf { it.isNotEmpty() }?.also { memory[key] = it }
+    suspend fun read(context: android.content.Context, key: String): List<CatalogRow>? = memory[key]
+        ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { readDisk(context, key) }
+
+    private fun readDisk(context: android.content.Context, key: String): List<CatalogRow>? = synchronized(diskReads) {
+        memory[key]?.let { return@synchronized it }
+        // Missing/corrupt files are tried once per process, not on every recomposition.
+        if (!diskReads.add(key)) return@synchronized null
+        val saved = runCatching {
+            app.harbor.android.data.Net.json.decodeFromString(serializer, file(context, key).readText())
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+        if (saved != null) memory.putIfAbsent(key, saved)
+        // A network refresh may have completed while the old disk file was being read.
+        memory[key]
+    }
 
     suspend fun write(context: android.content.Context, key: String, rows: List<CatalogRow>) {
         memory[key] = rows

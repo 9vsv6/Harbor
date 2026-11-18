@@ -47,7 +47,11 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -777,19 +781,26 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                         val subtitle = choice.subtitle
                         val (season, episode) = seasonEpisode()
                         val fetched = runCatching { SubtitleFile.fetch(subtitle.url, subtitle.lang, season, episode) }.getOrNull()
+                        ensureActive()
                         if (state.subChoice != choice) return@launch
+                        val request = coroutineContext.job
                         val text = fetched?.text
-                        subtitleFile = text?.let { runCatching { SubtitleFile.parse(it) }.getOrNull() }?.takeUnless { it.isEmpty }
+                        val parsed = text?.let {
+                            withContext(Dispatchers.Default) { runCatching { SubtitleFile.parse(it) }.getOrNull() }
+                        }
                         val source = when {
                             // Text of any format: a UTF-8 copy mpv reads (rare formats converted to SRT).
-                            text != null -> runCatching { utf8SubtitleCopy(SubtitleFile.forMpv(text), subtitle.url) }.getOrNull()
+                            text != null -> runCatching { utf8SubtitleCopy(withContext(Dispatchers.Default) { SubtitleFile.forMpv(text, parsed) }, subtitle.url) }.getOrNull()
                             // Pictures (PGS) unpacked from a .gz or .zip: the file itself.
                             fetched?.image != null && fetched.name != null -> runCatching { imageSubtitleCopy(fetched.image, fetched.name, subtitle.url) }.getOrNull()
                             else -> null
                         } ?: subtitle.url // Couldn't fetch it here, or a plain picture file: mpv opens the address itself.
+                        ensureActive()
+                        if (state.subChoice != choice) return@launch
+                        subtitleFile = parsed?.takeUnless { it.isEmpty }
                         engine.addExternalSubtitle(source, subtitle.lang, languageName(subtitle.lang)) { ok ->
                             runOnUiThread {
-                                if (state.subChoice != choice) return@runOnUiThread
+                                if (subtitleJob !== request || request.isCancelled || state.subChoice != choice) return@runOnUiThread
                                 state.subLoading = false
                                 if (!ok) {
                                     state.hint = "That subtitle didn't load"
@@ -864,6 +875,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         subtitleJob = lifecycleScope.launch {
             val (season, episode) = seasonEpisode()
             val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang, season, episode) }.getOrNull()
+            ensureActive()
             // Another subtitle was chosen meanwhile (which cancels this load): leave it be.
             if (state.subChoice != choice) return@launch
             state.subLoading = false
@@ -1610,7 +1622,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val session = state.liveSync ?: return
         if (!session.fromVideo) return
         val lines = engine.subtitleLines()
-        if (lines.size != session.lines.size) session.lines = lines
+        if (lines !== session.lines) session.lines = lines
     }
 
     override fun liveSyncAlign(line: SubtitleFile.Cue) {

@@ -88,7 +88,7 @@ interface Engine {
     /**
      * The lines of the selected embedded text subtitle the engine knows, by start, in subtitle time
      * (before any delay), for the live sync list. Media3 knows everything read ahead; mpv can't look
-     * ahead, so it has the lines shown so far.
+     * ahead, so it has the lines shown so far. Reuse the snapshot until the lines change.
      */
     fun subtitleLines(): List<SubtitleFile.Cue> = emptyList()
 

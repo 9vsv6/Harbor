@@ -6,6 +6,7 @@ import app.harbor.android.data.Tmdb
 import app.harbor.android.ui.HarborDisplay
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 
 class HarborApp : Application(), coil.ImageLoaderFactory {
     // Posters and backdrops stay on disk between launches: art at a given address never changes,
@@ -51,7 +52,7 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         // Look-and-feel settings reach every screen, the player's too, through HarborDisplay.
         val main = MainScope()
         main.launch {
-            repository.settings.collect {
+            repository.settings.collectLatest {
                 app.harbor.android.i18n.I18n.load(this@HarborApp, it.appLanguage)
                 Tmdb.languageOverride = it.metadataLanguage
                 Tmdb.imageLanguage = it.imageLanguage

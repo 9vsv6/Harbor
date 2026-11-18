@@ -75,7 +75,7 @@ class SubtitleFile(private val cues: List<Cue>) {
 
         suspend fun load(url: String, language: String = "", season: Int? = null, episode: Int? = null): SubtitleFile {
             val fetched = fetch(url, language, season, episode)
-            return parse(fetched.text ?: throw IOException("Image-based subtitles can't be drawn by Harbor"))
+            return withContext(Dispatchers.Default) { parse(fetched.text ?: throw IOException("Image-based subtitles can't be drawn by Harbor")) }
         }
 
         /**
@@ -156,10 +156,10 @@ class SubtitleFile(private val cues: List<Cue>) {
          * What mpv is given: SRT, WebVTT and ASS/SSA as they are (ASS keeps its styling); every other
          * text format (SAMI, TTML, MicroDVD, MPL2, SubViewer, SBV, TMPlayer) converted to SRT.
          */
-        fun forMpv(text: String): String {
+        fun forMpv(text: String, parsed: SubtitleFile? = null): String {
             if (isAss(text) || text.trimStart('\uFEFF', ' ', '\n', '\r').startsWith("WEBVTT") || looksLikeSrt(text)) return text
-            val parsed = parse(text)
-            return if (parsed.isEmpty) text else parsed.toSrt()
+            val file = parsed ?: parse(text)
+            return if (file.isEmpty) text else file.toSrt()
         }
 
         private fun isAss(text: String) = text.contains("[Script Info]", ignoreCase = true) ||

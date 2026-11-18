@@ -277,14 +277,17 @@ object Discover {
      * My library: this month's episodes of the shows in your library and list, and the saved
      * films released in it (Cinemeta's dates, as Harbor's calendar-library.ts).
      */
-    suspend fun libraryCalendar(shows: List<Meta>, metaAddons: List<Addon>, month: YearMonth, movies: List<Meta> = emptyList()): List<CalendarItem> = coroutineScope {
+    suspend fun libraryCalendar(shows: List<Meta>, metaAddons: List<Addon>, month: YearMonth, movies: List<Meta> = emptyList()): List<CalendarItem> =
+        calendarRange(shows, metaAddons, month.atDay(1), month.atEndOfMonth(), movies)
+
+    private suspend fun calendarRange(shows: List<Meta>, metaAddons: List<Addon>, from: LocalDate, to: LocalDate, movies: List<Meta> = emptyList()): List<CalendarItem> = coroutineScope {
         val episodes = shows.distinctBy { it.id }.take(60).map { show ->
             async {
                 gate.withPermit {
                     val meta = runCatching { AddonClient.meta(metaAddons, "series", show.id) }.getOrNull() ?: return@withPermit emptyList()
                     meta.videos.orEmpty().mapNotNull { v ->
                         val (date, time, at) = whenOf(v.released) ?: return@mapNotNull null
-                        if (YearMonth.from(date) != month || (v.season ?: 0) == 0) return@mapNotNull null
+                        if (date !in from..to || (v.season ?: 0) == 0) return@mapNotNull null
                         CalendarItem(date, meta.copy(videos = null), episodeLabel(v.season ?: 0, v.episode ?: 0, v.title), "episode", v.id, time, at, meta.description, meta.imdbRating?.toDoubleOrNull() ?: 0.0)
                     }
                 }
@@ -295,7 +298,7 @@ object Discover {
                 gate.withPermit {
                     val meta = runCatching { AddonClient.meta(metaAddons, "movie", film.id) }.getOrNull() ?: return@withPermit null
                     val (date, time, at) = whenOf(meta.released ?: meta.releaseDate) ?: return@withPermit null
-                    if (YearMonth.from(date) != month) return@withPermit null
+                    if (date !in from..to) return@withPermit null
                     CalendarItem(date, meta.copy(videos = null), "Release", "movie", null, time, at, meta.description, meta.imdbRating?.toDoubleOrNull() ?: 0.0)
                 }
             }
@@ -307,9 +310,7 @@ object Discover {
     suspend fun recentEpisodes(shows: List<Meta>, metaAddons: List<Addon>, days: Long = 14): List<CalendarItem> {
         val today = LocalDate.now()
         val from = today.minusDays(days)
-        val months = listOf(YearMonth.from(from), YearMonth.from(today)).distinct()
-        return months.flatMap { libraryCalendar(shows, metaAddons, it) }
-            .filter { it.date in from..today }
+        return calendarRange(shows, metaAddons, from, today)
             .sortedByDescending { it.date }
             .distinctBy { it.meta.id }
     }

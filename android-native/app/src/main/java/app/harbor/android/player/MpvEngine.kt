@@ -479,6 +479,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun load(url: String, headers: Map<String, String>, startMs: Long) {
         cover.visibility = View.VISIBLE
         seenLines.clear()
+        lineSnapshot.invalidate()
         awaitingStart = true
         loaded = false
         eof = false
@@ -556,7 +557,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
      */
     private val seenLines = java.util.concurrent.ConcurrentSkipListMap<Long, SubtitleFile.Cue>()
 
-    override fun subtitleLines(): List<SubtitleFile.Cue> = seenLines.values.toList()
+    private val lineSnapshot = SubtitleLineSnapshot { seenLines.values.toList() }
+
+    override fun subtitleLines(): List<SubtitleFile.Cue> = lineSnapshot.get()
 
     override val subtitleLinesAsPlayed get() = true
 
@@ -579,6 +582,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         // The same line seen again (a seek back) keeps one entry.
         if (seenLines.subMap(start - 300, start + 300).values.any { it.text == line }) return
         seenLines[start] = SubtitleFile.Cue(start, end, line)
+        lineSnapshot.invalidate()
     }
 
     override val videoSize get() = if (width > 0 && height > 0) width.toInt() to height.toInt() else null
@@ -642,6 +646,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun selectText(key: String?) {
         seenLines.clear()
+        lineSnapshot.invalidate()
         val language = key?.let { k -> tracks("sub").firstOrNull { it.key == k }?.language }
         subtitleWork.execute {
             if (key != null) rtlFont(isArabicLanguage(language))
@@ -653,6 +658,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun addExternalSubtitle(url: String, language: String, title: String, done: (Boolean) -> Unit): Boolean {
         seenLines.clear()
+        lineSnapshot.invalidate()
         subtitleWork.execute {
             dropExternalSubtitles()
             rtlFont(isArabicLanguage(language))
