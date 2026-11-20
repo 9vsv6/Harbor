@@ -47,6 +47,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.harbor.android.data.DownloadState
 import app.harbor.android.data.Downloads
 import app.harbor.android.data.SavedDownload
@@ -94,8 +97,18 @@ fun DownloadsScreen(onBack: (() -> Unit)?, onPlay: (SavedDownload) -> Unit) {
         }) { Text("Delete / cancel") } },
         dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) { Text("Back") } },
     )
-    // The system download manager has no callbacks for progress; read it every second.
-    LaunchedEffect(Unit) { while (true) { states = withContext(Dispatchers.IO) { Downloads.states(context) }; loading = false; delay(1_000) } }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // Poll while visible, less often when there are no active downloads.
+    LaunchedEffect(lifecycle, context) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                val refreshed = withContext(Dispatchers.IO) { Downloads.states(context) }
+                states = refreshed
+                loading = false
+                delay(if (refreshed.any { !it.finished && !it.failed }) 1_000 else 5_000)
+            }
+        }
+    }
     val active = states.count { !it.finished && !it.failed }
     val saved = states.filter { it.finished }.sumOf { it.total }
     val shown = states.filter {

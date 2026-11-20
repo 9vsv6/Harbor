@@ -60,7 +60,8 @@ object Downloads {
     @Synchronized
     fun enqueue(context: Context, url: String, metaId: String, type: String, videoId: String, title: String, poster: String?, headers: Map<String, String> = emptyMap(), addonId: String? = null, sourceName: String? = null): Long {
         require(Uri.parse(url).scheme in setOf("http", "https")) { "Only HTTP files can be downloaded." }
-        states(context).firstOrNull { it.item.videoId == videoId && !it.failed }?.let { return it.item.downloadId }
+        val items = saved(context)
+        states(context, items.filter { it.videoId == videoId }).firstOrNull { !it.failed }?.let { return it.item.downloadId }
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir
         val ext = Uri.parse(url).lastPathSegment.orEmpty().substringAfterLast('.', "")
             .takeIf { it.length in 2..4 && it.all(Char::isLetterOrDigit) }?.lowercase() ?: "mkv"
@@ -68,7 +69,8 @@ object Downloads {
         // Never the same file as another download (two episodes saved under one title, say).
         var target = File(dir, name)
         var n = 2
-        while (target.exists() || saved(context).any { it.file == target.absolutePath }) {
+        val reserved = items.mapTo(hashSetOf()) { it.file }
+        while (target.absolutePath in reserved || target.exists()) {
             target = File(dir, name.substringBeforeLast('.') + " ($n)." + ext)
             n++
         }
@@ -80,13 +82,14 @@ object Downloads {
             .setAllowedOverMetered(true)
         headers.forEach { (name, value) -> request.addRequestHeader(name, value) }
         val id = (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        synchronized(this) { store(context, saved(context) + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath, addonId = addonId, sourceName = sourceName)) }
+        store(context, items + SavedDownload(id, metaId, type, videoId, title, poster, target.absolutePath, addonId = addonId, sourceName = sourceName))
         return id
     }
 
     /** Every saved title with its system status and bytes. */
-    fun states(context: Context): List<DownloadState> {
-        val items = saved(context)
+    fun states(context: Context): List<DownloadState> = states(context, saved(context))
+
+    private fun states(context: Context, items: List<SavedDownload>): List<DownloadState> {
         if (items.isEmpty()) return emptyList()
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val byId = mutableMapOf<Long, Triple<Int, Long, Long>>()
@@ -113,21 +116,42 @@ object Downloads {
     }
 
     /** A finished download of this video, to play instead of streaming. */
-    fun local(context: Context, videoId: String): File? =
-        states(context).firstOrNull { it.item.videoId == videoId && it.finished }?.let { completedFile(it.status, File(it.item.file)) }
+    private fun localItem(context: Context, videoId: String): SavedDownload? {
+        val candidates = saved(context).filter { it.videoId == videoId && !it.playbackFailed }
+        if (candidates.isEmpty()) return null
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val query = DownloadManager.Query()
+            .setFilterById(*candidates.map { it.downloadId }.toLongArray())
+            .setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
+        val finished = mutableSetOf<Long>()
+        dm.query(query)?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            while (cursor.moveToNext()) finished += cursor.getLong(idColumn)
+        }
+        return candidates.sortedByDescending { it.addedAt }.firstOrNull {
+            it.downloadId in finished && completedFile(DownloadManager.STATUS_SUCCESSFUL, File(it.file)) != null
+        }
+    }
+
+    fun local(context: Context, videoId: String): File? = localItem(context, videoId)?.let { File(it.file) }
 
     internal fun completedFile(status: Int, file: File): File? = file.takeIf {
         status == DownloadManager.STATUS_SUCCESSFUL && it.isFile && it.length() > 0
     }
 
-    fun markUnplayable(context: Context, videoId: String) = synchronized(this) {
-        store(context, saved(context).map { if (it.videoId == videoId) it.copy(playbackFailed = true) else it })
+    fun markUnplayable(context: Context, videoId: String, path: String) = synchronized(this) {
+        val items = saved(context)
+        if (items.any { it.videoId == videoId && it.file == path && !it.playbackFailed }) {
+            store(context, items.map {
+                if (it.videoId == videoId && it.file == path) it.copy(playbackFailed = true) else it
+            })
+        }
     }
 
     fun localReady(context: Context, videoId: String): Ready? {
-        val file = local(context, videoId) ?: return null
-        val item = saved(context).firstOrNull { it.videoId == videoId && it.file == file.absolutePath } ?: return null
-        return Ready(Stream(url = Uri.fromFile(file).toString(), name = item.sourceName ?: "Saved download"), Uri.fromFile(file).toString(), item.addonId)
+        val item = localItem(context, videoId) ?: return null
+        val url = Uri.fromFile(File(item.file)).toString()
+        return Ready(Stream(url = url, name = item.sourceName ?: "Saved download"), url, item.addonId)
     }
 
     /** Resolve a fresh link for retry; signed transport URLs and headers are never persisted. */
