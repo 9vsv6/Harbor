@@ -27,6 +27,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import app.harbor.android.HarborApp
 import app.harbor.android.data.AdSkip
+import app.harbor.android.data.Downloads
 import app.harbor.android.data.AddonClient
 import app.harbor.android.data.Meta
 import app.harbor.android.data.Net
@@ -47,7 +48,11 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -212,11 +217,27 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         start(intent)
     }
 
+    private var startJob: Job? = null
+
     private fun start(intent: Intent) {
+        startJob?.cancel()
         val url = intent.getStringExtra(EXTRA_URL) ?: return finish()
+        val videoId = intent.getStringExtra(EXTRA_VIDEO) ?: intent.getStringExtra(EXTRA_META).orEmpty()
+        if (state.settings.preferOfflineDownloads && (url.startsWith("https://", true) || url.startsWith("http://", true))) {
+            startJob = lifecycleScope.launch {
+                val local = withContext(Dispatchers.IO) {
+                    runCatching { Downloads.local(this@PlayerActivity, videoId) }.getOrNull()
+                }
+                if (!isFinishing) startPlayback(intent, url, videoId, local)
+            }
+        } else {
+            startPlayback(intent, url, videoId)
+        }
+    }
+
+    private fun startPlayback(intent: Intent, url: String, videoId: String, local: java.io.File? = null) {
         type = intent.getStringExtra(EXTRA_TYPE).orEmpty()
         metaId = intent.getStringExtra(EXTRA_META).orEmpty()
-        val videoId = intent.getStringExtra(EXTRA_VIDEO) ?: metaId
         headers = intent.getStringExtra(EXTRA_HEADERS)
             ?.let { runCatching { Net.json.decodeFromString(headerSerializer, it) }.getOrNull() }
             .orEmpty()
@@ -234,7 +255,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         anime4kChosenHere = false
         meta = null
         updateAnime4KButton()
-        begin(videoId, url)
+        begin(videoId, url, local = local)
         val expectedMeta = metaId
         val expectedType = type
         lifecycleScope.launch {
@@ -265,7 +286,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     /** Starts `videoId` from `url`, resuming where this device or Stremio left off. */
-    private fun begin(videoId: String, url: String, startAt: Long? = null, keepEngine: Boolean = false, preferLocal: Boolean = true) {
+    private fun begin(videoId: String, url: String, startAt: Long? = null, keepEngine: Boolean = false, local: java.io.File? = null) {
         clearAppliedAutoSync()
         cancelAutoSync()
         lastSyncFailed = false
@@ -279,7 +300,6 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
             if (state.tv && engine is MpvEngine) replaceEngine(ExoEngine(this, engineSetup))
         }
         state.videoId = videoId
-        val local = if (preferLocal && state.settings.preferOfflineDownloads) app.harbor.android.data.Downloads.local(this, videoId) else null
         state.currentUrl = local?.let { android.net.Uri.fromFile(it).toString() } ?: url
         state.seekPreviewMs = null
         state.seekPreview = if (state.settings.seekPreviews) previews else null
@@ -596,7 +616,11 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         }
         if (state.currentUrl.startsWith("file:") && !offlineRecovery) {
             offlineRecovery = true
-            app.harbor.android.data.Downloads.markUnplayable(this, state.videoId)
+            val failedVideo = state.videoId
+            val failedPath = android.net.Uri.parse(state.currentUrl).path
+            if (failedPath != null) lifecycleScope.launch(Dispatchers.IO) {
+                Downloads.markUnplayable(this@PlayerActivity, failedVideo, failedPath)
+            }
             val attempt = playbackAttempt
             val position = engine.positionMs.takeIf { it > 0 } ?: loadStartMs
             lifecycleScope.launch {
@@ -777,19 +801,26 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                         val subtitle = choice.subtitle
                         val (season, episode) = seasonEpisode()
                         val fetched = runCatching { SubtitleFile.fetch(subtitle.url, subtitle.lang, season, episode) }.getOrNull()
+                        ensureActive()
                         if (state.subChoice != choice) return@launch
+                        val request = coroutineContext.job
                         val text = fetched?.text
-                        subtitleFile = text?.let { runCatching { SubtitleFile.parse(it) }.getOrNull() }?.takeUnless { it.isEmpty }
+                        val parsed = text?.let {
+                            withContext(Dispatchers.Default) { runCatching { SubtitleFile.parse(it) }.getOrNull() }
+                        }
                         val source = when {
                             // Text of any format: a UTF-8 copy mpv reads (rare formats converted to SRT).
-                            text != null -> runCatching { utf8SubtitleCopy(SubtitleFile.forMpv(text), subtitle.url) }.getOrNull()
+                            text != null -> runCatching { utf8SubtitleCopy(withContext(Dispatchers.Default) { SubtitleFile.forMpv(text, parsed) }, subtitle.url) }.getOrNull()
                             // Pictures (PGS) unpacked from a .gz or .zip: the file itself.
                             fetched?.image != null && fetched.name != null -> runCatching { imageSubtitleCopy(fetched.image, fetched.name, subtitle.url) }.getOrNull()
                             else -> null
                         } ?: subtitle.url // Couldn't fetch it here, or a plain picture file: mpv opens the address itself.
+                        ensureActive()
+                        if (state.subChoice != choice) return@launch
+                        subtitleFile = parsed?.takeUnless { it.isEmpty }
                         engine.addExternalSubtitle(source, subtitle.lang, languageName(subtitle.lang)) { ok ->
                             runOnUiThread {
-                                if (state.subChoice != choice) return@runOnUiThread
+                                if (subtitleJob !== request || request.isCancelled || state.subChoice != choice) return@runOnUiThread
                                 state.subLoading = false
                                 if (!ok) {
                                     state.hint = "That subtitle didn't load"
@@ -864,6 +895,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         subtitleJob = lifecycleScope.launch {
             val (season, episode) = seasonEpisode()
             val file = runCatching { SubtitleFile.load(choice.subtitle.url, choice.subtitle.lang, season, episode) }.getOrNull()
+            ensureActive()
             // Another subtitle was chosen meanwhile (which cancels this load): leave it be.
             if (state.subChoice != choice) return@launch
             state.subLoading = false
@@ -1610,7 +1642,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val session = state.liveSync ?: return
         if (!session.fromVideo) return
         val lines = engine.subtitleLines()
-        if (lines.size != session.lines.size) session.lines = lines
+        if (lines !== session.lines) session.lines = lines
     }
 
     override fun liveSyncAlign(line: SubtitleFile.Cue) {
@@ -1763,7 +1795,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                 var ranked = Playback.ranked(repository.addons.value, type, video.id, debrid, settings, media3 = engine is ExoEngine, prefer = prefer, accounts = repository.debridAccounts())
                 // Harbor keeps the addon, quality, release group and dub you chose (or switched to).
                 if (keep) ranked = Playback.preferSource(ranked, currentRef(), debrid != null)
-                local ?: Playback.best(ranked, debrid, accounts = repository.debridAccounts())
+                Playback.best(ranked, debrid, accounts = repository.debridAccounts())
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1807,7 +1839,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         // Another file: other subtitles are now the ones made for it.
         state.addonSubs?.let { state.addonSubs = ranked(it) }
         if (videoId != state.videoId) stalledKeys.clear()
-        begin(videoId, ready.url, startAt, preferLocal = videoId != state.videoId)
+        begin(videoId, ready.url, startAt)
     }
 
     private suspend fun rankedHere(videoId: String): List<RankedStream> {

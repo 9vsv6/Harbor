@@ -105,6 +105,7 @@ data class TimedCues(val startMs: Long, val endMs: Long, val cues: List<Cue>)
 /** Every cue the collector has read ahead for the selected track, by start time. */
 class CueStore {
     private val entries = ConcurrentSkipListMap<Long, TimedCues>()
+    private val lineSnapshot = SubtitleLineSnapshot(::buildLines)
     @Volatile var trackId: String? = null
         private set
     private var sequence = 0L
@@ -115,6 +116,7 @@ class CueStore {
         longestMs = 0L
         sequence = 0L
         this.trackId = trackId
+        lineSnapshot.invalidate()
     }
 
     fun add(entry: TimedCues) {
@@ -123,10 +125,13 @@ class CueStore {
         val base = entry.startMs * 64
         if (entries.subMap(base, base + 64).values.any { it == entry }) return
         entries[base + (sequence++ and 63)] = entry
+        lineSnapshot.invalidate()
     }
 
     /** Every event with text read so far, by start (the live sync list). */
-    fun lines(): List<SubtitleFile.Cue> {
+    fun lines(): List<SubtitleFile.Cue> = lineSnapshot.get()
+
+    private fun buildLines(): List<SubtitleFile.Cue> {
         val all = entries.values.toList()
         return all.mapIndexedNotNull { i, entry ->
             val text = entry.cues.mapNotNull { it.text?.toString()?.trim() }.filter { it.isNotEmpty() }.joinToString("\n")

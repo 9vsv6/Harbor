@@ -40,10 +40,28 @@ object Ranking {
         RegexOption.IGNORE_CASE,
     )
 
+    private val traitPatterns = listOf(
+        """\bhdr(10\+?)?\b""",
+        """\b(dv|dovi|dolby[ .]?vision)\b""",
+        """\b(hevc|x265|h\.?265)\b""",
+        """\bav1\b""",
+        """\b(hi10p?|10[- ]?bit)\b""",
+        """\b(hevc|x265|h\.?265|av1)\b""",
+        """\bremux\b""",
+        """\b(blu-?ray|bdrip|brrip)\b""",
+        """\bweb[- .]?(dl|rip)?\b""",
+        """\b(cam|camrip|hdcam|ts|telesync|hdts)\b""",
+        """\[(realdebrid|real-debrid|torbox|alldebrid|all-debrid|premiumize|debridlink|debrid-link|easydebrid|offcloud|rd|ad|pm|dl|tb|trb|oc|ed|putio)\+""",
+        """\bcached\b""",
+    ).associateWith { Regex(it, RegexOption.IGNORE_CASE) }
+    private val sizeSeparators = Regex("[ \u00a0\u202f]")
+    private val groupedComma = Regex(""",\d{3}""")
+
     fun traits(stream: Stream): Traits {
         val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename)
             .joinToString(" ")
-        fun has(pattern: String) = Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(text)
+        fun has(pattern: String) = traitPatterns.getValue(pattern).containsMatchIn(text)
+        val uncached = uncachedMarker.containsMatchIn(text.libraryCloudRemoved())
         return Traits(
             resolution = resolutions.firstOrNull { it.first.containsMatchIn(text) }?.second ?: 0,
             hdr = has("""\bhdr(10\+?)?\b"""),
@@ -58,10 +76,10 @@ object Ranking {
             // Harbor PC's markers (streams/cached.ts): [RD+] / ⚡ / ✅ cached; [RD download] / ⏳ ⌛ ⬇ ⏬ 🔽 ☁
             // / "uncached" / "not cached" not. A stream saying both is not cached.
             // ☁ beside ⚡ / ✅ is AIOStreams' "in your debrid library": cached, not a download to wait for.
-            uncached = uncachedMarker.containsMatchIn(text.libraryCloudRemoved()),
-            cached = !uncachedMarker.containsMatchIn(text.libraryCloudRemoved()) &&
+            uncached = uncached,
+            cached = !uncached &&
                 (cachedMarker.containsMatchIn(text) || has("""\[(realdebrid|real-debrid|torbox|alldebrid|all-debrid|premiumize|debridlink|debrid-link|easydebrid|offcloud|rd|ad|pm|dl|tb|trb|oc|ed|putio)\+""") || has("""\bcached\b""")),
-            sizeBytes = size(stream),
+            sizeBytes = size(stream, text),
         )
     }
 
@@ -75,10 +93,10 @@ object Ranking {
 
     internal fun parseSize(text: String): Long? {
         val match = markedSizePattern.find(text) ?: sizePattern.find(text) ?: return null
-        val raw = match.groupValues[1].replace(Regex("[ \u00a0\u202f]"), "")
+        val raw = match.groupValues[1].replace(sizeSeparators, "")
         val number = when {
             raw.contains('.') && raw.lastIndexOf(',') > raw.indexOf('.') -> raw.replace(".", "").replace(',', '.')
-            Regex(""",\d{3}""").containsMatchIn(raw) -> raw.replace(",", "")
+            groupedComma.containsMatchIn(raw) -> raw.replace(",", "")
             else -> raw.replace(',', '.')
         }
         val value = number.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 } ?: return null
@@ -90,9 +108,12 @@ object Ranking {
         return kotlin.math.round(value * unit).toLong()
     }
 
-    internal fun size(stream: Stream): Long? = stream.behaviorHints?.videoSize?.takeIf { it > 0 }
+    internal fun size(stream: Stream): Long? = size(stream,
+        listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" "))
+
+    private fun size(stream: Stream, text: String): Long? = stream.behaviorHints?.videoSize?.takeIf { it > 0 }
         ?: stream.size?.takeIf { it > 0 }
-        ?: parseSize(listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" "))
+        ?: parseSize(text)
 
     internal fun seeders(stream: Stream): Long? = seedersPattern.find(
         listOfNotNull(stream.title, stream.description, stream.name).joinToString(" "),
@@ -157,9 +178,14 @@ object Ranking {
     fun mentionsLanguage(stream: Stream, languages: List<String>): Boolean {
         val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" ")
         return languages.any { lang ->
-            val tags = languageTags[lang].orEmpty() + lang
-            tags.any { Regex("""(?<![A-Za-z])""" + Regex.escape(it) + """(?![A-Za-z])""", RegexOption.IGNORE_CASE).containsMatchIn(text) }
+            val patterns = languagePatterns[lang] ?: listOf(languagePattern(lang))
+            patterns.any { it.containsMatchIn(text) }
         }
+    }
+
+    private fun languagePattern(tag: String) = Regex("""(?<![A-Za-z])""" + Regex.escape(tag) + """(?![A-Za-z])""", RegexOption.IGNORE_CASE)
+    private val languagePatterns by lazy {
+        languageTags.mapValues { (language, tags) -> (tags + language).map(::languagePattern) }
     }
 
     private val languageTags = mapOf(

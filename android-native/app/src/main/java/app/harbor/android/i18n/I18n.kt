@@ -71,13 +71,24 @@ object I18n {
     }
     private val spaces = Regex("""\s+""")
 
-    fun load(context: Context, language: String) {
+    private val dictionaries = object : LinkedHashMap<String, Map<String, String>>(3, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Map<String, String>>) = size > 2
+    }
+
+    suspend fun load(context: Context, language: String) {
         if (language == code && (language == "en" || table.isNotEmpty())) return
-        val next = if (language == "en") emptyMap() else runCatching {
-            val text = context.assets.open("i18n/$language.json").bufferedReader().use { it.readText() }
-            (app.harbor.android.data.Net.json.parseToJsonElement(text) as JsonObject)
-                .mapValues { (_, v) -> (v as JsonPrimitive).content }
-        }.getOrDefault(emptyMap())
+        val next = if (language == "en") emptyMap() else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            synchronized(dictionaries) {
+                dictionaries.getOrPut(language) {
+                    runCatching {
+                        val text = context.assets.open("i18n/$language.json").bufferedReader().use { it.readText() }
+                        (app.harbor.android.data.Net.json.parseToJsonElement(text) as JsonObject)
+                            .mapValues { (_, v) -> (v as JsonPrimitive).content }
+                    }.getOrDefault(emptyMap())
+                }
+            }
+        }
+        // withContext checks cancellation before publishing an obsolete language.
         table = next
         code = language
     }

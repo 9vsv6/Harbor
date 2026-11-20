@@ -116,10 +116,21 @@ private enum class Facet(val label: String, val values: List<String>) {
     Availability("Availability", listOf("Cached", "Debrid", "P2P")),
 }
 
+private val facetPatterns = listOf(
+    """\bweb[- .]?rip\b""",
+    """\bhdtv\b""",
+    """\b(x264|h\.?264|avc)\b""",
+    """\batmos\b""",
+    """\btrue-?hd\b""",
+    """\bdts[- ]?(hd|ma|x)\b""",
+    """\bdts\b""",
+    """(\bdd\+|\bddp\b|\be-?ac-?3\b)""",
+    ).associateWith { Regex(it, RegexOption.IGNORE_CASE) }
+
 private fun facetValues(stream: Stream): Map<Facet, String?> {
     val t = Ranking.traits(stream)
     val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" ")
-    fun has(pattern: String) = Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(text)
+    fun has(pattern: String) = facetPatterns.getValue(pattern).containsMatchIn(text)
     return mapOf(
         Facet.Resolution to when {
             t.resolution >= 2160 -> "4K"
