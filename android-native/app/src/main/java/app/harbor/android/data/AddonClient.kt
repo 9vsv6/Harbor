@@ -92,16 +92,24 @@ object AddonClient {
         }
     }
 
+    /**
+     * Each addon's answer for a title, shared for two minutes: the title page, the player opened from
+     * it and the page shown again on the way back ask for the same (often large) entry within moments
+     * of each other, and one request now answers them all. Few are kept, as a long series' entry is big.
+     */
+    private val metaRequests = SharedRequests<String, Meta>(max = 8, ttlMs = 2 * 60_000L)
+
     /** Full metadata from the first addon that has it. */
     suspend fun meta(addons: List<Addon>, type: String, id: String): Meta? {
         for (addon in addons.filter { it.manifest.supports("meta", type, id) }) {
-            val meta = runCatching {
-                val body = fetch(path(addon, "meta", type, id))
+            val url = path(addon, "meta", type, id)
+            val meta = metaRequests.get(url) {
+                val body = fetch(url)
                 withContext(Net.parseDispatcher) {
                     // Episode lists key on the id: an addon that repeats one would crash the title page.
                     body["meta"]?.let { Net.json.decodeFromJsonElement(Meta.serializer(), it) }?.let { m -> m.copy(videos = m.videos?.distinctBy { v -> v.id }) }
                 }
-            }.getOrNull()
+            }
             if (meta != null) return meta
         }
         return null
