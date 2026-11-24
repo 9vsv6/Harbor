@@ -666,7 +666,7 @@ private fun ChatView(repository: Repository, conversationId: String, name: Strin
         while (true) {
             runCatching { repository.accounts.withHarbor { s -> HarborPeople.messages(conversationId, s.token) } }
                 .onSuccess { page ->
-                    val fresh = (messages.orEmpty().filter { m -> page.messages.none { it.id == m.id } } + page.messages).distinctBy { it.id }.sortedBy { it.at }
+                    val fresh = HarborPeople.mergeMessages(messages, page.messages)
                     if (fresh != messages) messages = fresh
                     if (older == null) older = page.next
                     runCatching { repository.accounts.withHarbor { s -> HarborPeople.markRead(conversationId, s.token) } }
@@ -766,7 +766,7 @@ private fun ChatView(repository: Repository, conversationId: String, name: Strin
                         sending = true
                         scope.launch {
                             runCatching { repository.accounts.withHarbor { s -> HarborPeople.send(conversationId, body, s.token) } }
-                                .onSuccess { sent -> draft = ""; sent?.let { messages = messages.orEmpty() + it } }
+                                .onSuccess { sent -> draft = ""; sent?.let { messages = HarborPeople.mergeMessages(messages, listOf(it)) } }
                                 .onFailure { Toast.makeText(context, it.message ?: "Couldn't send the message.", Toast.LENGTH_SHORT).show() }
                             sending = false
                         }

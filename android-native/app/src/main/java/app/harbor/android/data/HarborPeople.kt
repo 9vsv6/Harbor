@@ -61,6 +61,10 @@ object HarborPeople {
     )
     data class MessagePage(val messages: List<Message>, val next: String?)
 
+    /** [incoming] merged into the thread by id (the newer copy wins), oldest first: no message appears twice. */
+    fun mergeMessages(current: List<Message>?, incoming: List<Message>): List<Message> =
+        (current.orEmpty().filter { m -> incoming.none { it.id == m.id } } + incoming).distinctBy { it.id }.sortedBy { it.at }
+
     data class Invite(
         val id: String, val status: String, val incoming: Boolean, val roomCode: String, val title: String?,
         val mediaId: String?, val poster: String?, val from: HarborSocial.Author?, val to: HarborSocial.Author?,
