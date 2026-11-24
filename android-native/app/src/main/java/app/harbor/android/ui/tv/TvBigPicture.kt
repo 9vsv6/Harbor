@@ -663,6 +663,8 @@ private fun CwTile(item: CwItem, focus: FocusRequester?, onFocused: () -> Unit, 
         if (item.meta.id.startsWith("kitsu:")) "Ep ${item.episode}" else "S${item.season} E${item.episode}"
     } else null
     val left = when {
+        // As on phones and PC: a countdown on an anime episode that hasn't aired yet, else "Up next".
+        item.upNext -> item.airsAt?.let { app.harbor.android.ui.countdown(it) } ?: "Up next"
         item.source != null -> "Paused on ${item.source}"
         item.durationMs > 0 -> leftLabel(item.durationMs - item.positionMs)
         else -> null
