@@ -85,8 +85,9 @@ object Downloads {
     }
 
     /** Every saved title with its system status and bytes. */
-    fun states(context: Context): List<DownloadState> {
-        val items = saved(context)
+    fun states(context: Context): List<DownloadState> = states(context, saved(context))
+
+    private fun states(context: Context, items: List<SavedDownload>): List<DownloadState> {
         if (items.isEmpty()) return emptyList()
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val byId = mutableMapOf<Long, Triple<Int, Long, Long>>()
@@ -113,8 +114,10 @@ object Downloads {
     }
 
     /** A finished download of this video, to play instead of streaming. */
+    // Asked as the player opens each video: only this video's downloads go to the system's
+    // DownloadManager, and none at all (no query) when it has never been downloaded.
     fun local(context: Context, videoId: String): File? =
-        states(context).firstOrNull { it.item.videoId == videoId && it.finished }?.let { completedFile(it.status, File(it.item.file)) }
+        states(context, saved(context).filter { it.videoId == videoId }).firstOrNull { it.finished }?.let { completedFile(it.status, File(it.item.file)) }
 
     internal fun completedFile(status: Int, file: File): File? = file.takeIf {
         status == DownloadManager.STATUS_SUCCESSFUL && it.isFile && it.length() > 0
