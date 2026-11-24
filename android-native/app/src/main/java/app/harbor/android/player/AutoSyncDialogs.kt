@@ -26,7 +26,7 @@ internal fun AutoSyncDialogs(state: PlayerState, actions: PlayerActions) {
             confirmButton = { TextButton(onClick = { if (offer.applied) actions.dismissAutoSync() else actions.applyAutoSync() }) { Text(if (offer.applied) "Done" else "Apply correction") } },
             dismissButton = { TextButton(onClick = { if (offer.applied) actions.undoAutoSync() else actions.dismissAutoSync() }) { Text(if (offer.applied) "Undo" else "Keep current timing") } })
     }
-    state.autoSyncError?.let { message ->
+    state.autoSyncError?.let error@{ message ->
         // A Moonshine language without its model (PC's prompt): download just that language here.
         app.harbor.android.data.Moonshine.missingModelLanguage(message)?.let { language ->
             val context = LocalContext.current
@@ -64,7 +64,8 @@ internal fun AutoSyncDialogs(state: PlayerState, actions: PlayerActions) {
                     }) }
                 },
                 dismissButton = { TextButton(onClick = actions::dismissAutoSync) { Text("Close") } })
-            return@let
+            // Out of the whole error branch: the generic dialog mustn't open over this one.
+            return@error
         }
         val model by WhisperModel.state.collectAsState()
         // Speech recognition needs the model: download it right here instead of a trip to Settings.
@@ -99,7 +100,7 @@ internal fun AutoSyncDialogs(state: PlayerState, actions: PlayerActions) {
                     }) }
                 },
                 dismissButton = { TextButton(onClick = actions::dismissAutoSync) { Text("Close") } })
-            return@let
+            return@error
         }
         AlertDialog(onDismissRequest = actions::dismissAutoSync, title = { Text("Couldn't auto-sync") },
             text = { Text(message) },
