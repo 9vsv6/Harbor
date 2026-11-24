@@ -428,7 +428,7 @@ private fun sectionsFor(key: LibTab, load: suspend () -> List<Pair<String, List<
 }
 
 /** Each list on its own; an error only when every one of them failed (so one bad list doesn't hide the rest). */
-private suspend fun loadAll(lists: List<Pair<String, suspend () -> List<Meta>>>): List<Pair<String, List<Meta>>> {
+internal suspend fun loadAll(lists: List<Pair<String, suspend () -> List<Meta>>>): List<Pair<String, List<Meta>>> {
     val results = lists.map { (title, load) ->
         title to try { Result.success(load()) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
     }
