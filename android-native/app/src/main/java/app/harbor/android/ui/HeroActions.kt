@@ -76,6 +76,7 @@ import app.harbor.android.data.Meta
 import app.harbor.android.data.Repository
 import app.harbor.android.data.TmdbDetails
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 
 // Harbor's hero buttons (views/detail.tsx): bg-canvas/80 at rest, bg-ink/15 when on,
 // bg-accent/20 with accent ink for favourites and watched.
@@ -388,12 +389,31 @@ fun TvHeroActions(
     var rateOpen by remember { mutableStateOf(false) }
     var listOpen by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf("") }
+    var moreOpen by remember(meta.id) { mutableStateOf(false) }
+    val settings by repository.settings.collectAsState()
+    val saveScope = app.harbor.android.data.libraryScope(settings.libraryAddScope)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutine = androidx.compose.runtime.rememberCoroutineScope()
+    var saving by remember(meta.id) { mutableStateOf(false) }
     val poster = meta.poster ?: details?.posters?.firstOrNull()
     val h = app.harbor.android.ui.tv.u(33f)
     Column {
         Row(horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f)), verticalAlignment = Alignment.CenterVertically) {
             BpAction(h, playLabel = playLabel, progress = progress, requester = playFocus, onFocus = { hint = "" }, onClick = play)
-            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In library" else "Save to library", active = listed, onFocus = { hint = it }) { repository.toggleMyList(meta) }
+            // The phone's split button: saving goes through the library action (and your trackers, as
+            // chosen); once saved, OK opens the library menu: the removals and each tracker's status.
+            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In library" else "Save to library", active = listed, onFocus = { hint = it }) {
+                if (listed) moreOpen = true
+                else if (!saving) {
+                    saving = true
+                    coroutine.launch {
+                        try { android.widget.Toast.makeText(context, heroSummary(app.harbor.android.data.HeroTrackerActions.membership(repository, meta, true, saveScope)), android.widget.Toast.LENGTH_LONG).show() }
+                        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (_: Exception) { android.widget.Toast.makeText(context, I18n.tr("The action could not be completed."), android.widget.Toast.LENGTH_LONG).show() }
+                        finally { saving = false }
+                    }
+                }
+            }
             BpAction(h, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), label = if (favourite) "Remove from favorites" else "Add to favorites", active = favourite, onFocus = { hint = it }) { repository.toggleFavorite(meta) }
             BpAction(h, icon = painterResource(R.drawable.ui_rate), badge = rating?.toString(), label = if (rating != null) "Your rating: $rating" else "Rate this", active = rating != null, onFocus = { hint = it }) { rateOpen = true }
             BpAction(h, icon = painterResource(R.drawable.ui_list), label = "Add to list", onFocus = { hint = it }) { listOpen = true }
@@ -415,6 +435,7 @@ fun TvHeroActions(
         rateOpen = false
     }
     if (listOpen) AddToListDialog(repository, meta) { listOpen = false }
+    if (moreOpen) app.harbor.android.ui.tv.TvMoreActionsDialog(repository, meta) { moreOpen = false }
 }
 
 @Composable

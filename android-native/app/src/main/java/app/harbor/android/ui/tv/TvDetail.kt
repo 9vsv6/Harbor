@@ -51,6 +51,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -454,4 +459,87 @@ fun TvChoiceDialog(title: String, options: List<Triple<String, String?, Boolean>
     }
     // The dialog composes in its own window a frame later: ask until the row is there.
     LaunchedEffect(Unit) { repeat(15) { kotlinx.coroutines.delay(40); if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect } }
+}
+
+// ---- More actions (the phone's library menu and ⋯ tracker rows, as a Big Picture sheet) ----
+
+/**
+ * The title page's More: the phone's library split-button menu (Save to library, Add to all
+ * trackers, Remove from library, Remove from all trackers, which asks for a second OK) through
+ * HeroTrackerActions.membership, then each connected tracker's status for this title
+ * (HeroTrackerControls, the phone's ⋯ rows). Back or Close shuts it.
+ */
+@Composable
+fun TvMoreActionsDialog(repository: app.harbor.android.data.Repository, meta: Meta, onClose: () -> Unit) {
+    val first = remember { FocusRequester() }
+    val settings by repository.settings.collectAsState()
+    val trackers by repository.trackers.collectAsState()
+    val pmdb by repository.accounts.pmdb.collectAsState()
+    val myList by repository.myList.collectAsState()
+    val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
+    val listed = (if (repository.accounts.nuvioActive) nuvioLibrary else myList).any { it.id == meta.id }
+    val scope = app.harbor.android.data.libraryScope(settings.libraryAddScope)
+    val coroutine = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var confirmAll by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var version by remember { mutableIntStateOf(0) }
+    fun run(adding: Boolean, actionScope: String) {
+        if (busy) return
+        if (!adding && actionScope == "all" && !confirmAll) { confirmAll = true; return }
+        confirmAll = false
+        busy = true
+        message = null
+        coroutine.launch {
+            try {
+                message = app.harbor.android.ui.heroSummary(app.harbor.android.data.HeroTrackerActions.membership(repository, meta, adding, actionScope))
+                version++
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { message = app.harbor.android.i18n.I18n.tr("The action could not be completed.") }
+            finally { busy = false }
+        }
+    }
+    val anyTracker = listOf(trackers.trakt, trackers.simkl, trackers.anilist, trackers.mal).any { it?.accessToken != null } || pmdb != null
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Void.copy(alpha = 0.78f)), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier.width(u(300f)).heightIn(max = u(440f)).clip(RoundedCornerShape(u(12f))).background(Panel).padding(u(23f)),
+                verticalArrangement = Arrangement.spacedBy(u(10f)),
+            ) {
+                Text(
+                    meta.name, color = HarborColors.Ink, fontSize = s(16f), fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp,
+                    fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(u(5f)),
+                ) {
+                    MoreLabel(if (busy) "Library · working…" else if (listed) "Library · saved" else "Library")
+                    PickerRow(Modifier.focusRequester(first), "Save to library", null, picked = scope == "library") { run(true, "library") }
+                    PickerRow(Modifier, "Add to all trackers", null, picked = scope == "all") { run(true, "all") }
+                    PickerRow(Modifier, "Remove from library", null, picked = false) { run(false, "library") }
+                    PickerRow(Modifier, if (confirmAll) "Press OK again to remove" else "Remove from all trackers", null, picked = false) { run(false, "all") }
+                    if (confirmAll) Text(
+                        "This removes the title from every connected tracker. Simkl completed or watching titles stay unchanged; AniList and MyAnimeList list progress may be removed.",
+                        color = HarborColors.InkMuted, fontSize = s(8.5f), lineHeight = s(12f),
+                    )
+                    message?.let { Text(it, color = HarborColors.InkMuted, fontSize = s(8.5f), lineHeight = s(12f)) }
+                    if (anyTracker) {
+                        MoreLabel("Trackers")
+                        app.harbor.android.ui.HeroTrackerControls(repository, meta, version, asMenu = true) { version++ }
+                    }
+                }
+                PickerRow(Modifier, "Close", null, picked = false, centered = true, onClick = onClose)
+            }
+        }
+    }
+    // A removal asked for twice: the question goes away on its own after a few seconds.
+    LaunchedEffect(confirmAll) { if (confirmAll) { kotlinx.coroutines.delay(5000); confirmAll = false } }
+    // The dialog composes in its own window a frame later: ask until the row is there.
+    LaunchedEffect(Unit) { repeat(15) { kotlinx.coroutines.delay(40); if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect } }
+}
+
+@Composable
+private fun MoreLabel(text: String) {
+    Text(text.uppercase(), color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp, modifier = Modifier.padding(top = u(4f)))
 }

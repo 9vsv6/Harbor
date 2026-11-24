@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harbor.android.data.Meta
 import app.harbor.android.data.Repository
+import app.harbor.android.data.watched
 import app.harbor.android.ui.HarborColors
 import app.harbor.android.ui.HarborDisplay
 import app.harbor.android.ui.HarborFonts
@@ -436,12 +437,53 @@ private fun Key(text: String, modifier: Modifier, focus: FocusRequester? = null,
 
 // ---------------- Library ----------------
 
-private enum class LibTab(val label: String, val id: String) { Saved("Saved", "library"), Watchlist("Watchlist", "watchlist"), History("History", "history"), Favorites("Favorites", "favorites") }
+private enum class LibTab(val label: String, val id: String) {
+    Saved("Saved", "library"), Watchlist("Watchlist", "watchlist"), History("History", "history"), Favorites("Favorites", "favorites"),
+    // Big Picture's service tabs (bp-library.tsx), each only while that service is connected.
+    Trakt("Trakt", "trakt"), Simkl("Simkl", "simkl"), AniList("AniList", "anilist"), Mal("MyAnimeList", "mal"),
+    Letterboxd("Letterboxd", "letterboxd"), PublicMetaDb("PMDB", "publicmetadb"),
+    ;
+    val remote: Boolean get() = ordinal >= Trakt.ordinal
+}
 private enum class LibSort(val label: String) { Recent("Recent"), Az("A-Z"), Year("Year") }
 
+/** A service tab's lists ("Watchlist", "Watched"), or why they couldn't load. */
+private class RemoteSections(val sections: List<Pair<String, List<Meta>>>, val error: String? = null)
+
+/** The phone Library's calls for each service tab (LibraryScreen.kt), read-only on a TV. */
+private suspend fun loadRemoteTab(
+    repository: Repository, tab: LibTab, trackers: app.harbor.android.data.TrackerSettings, settings: app.harbor.android.data.AppSettings,
+    pmdb: app.harbor.android.data.PmdbSession?, pmdbListId: String?,
+): List<Pair<String, List<Meta>>> = when (tab) {
+    LibTab.Trakt -> if (trackers.trakt?.accessToken == null) emptyList() else app.harbor.android.ui.loadAll(listOf(
+        "Watchlist" to { repository.withTrakt { app.harbor.android.data.Trakt.watchlist(it) } },
+        "Watched" to { repository.withTrakt { app.harbor.android.data.Trakt.watched(it) } },
+    ))
+    LibTab.Simkl -> trackers.simkl?.let { auth ->
+        app.harbor.android.ui.loadAll(listOf("watching" to "Watching", "plantowatch" to "Plan to Watch", "completed" to "Completed").map { (status, title) ->
+            title to suspend { listOf("shows", "anime", "movies").flatMap { kind -> app.harbor.android.data.Simkl.list(auth, kind, status) } }
+        })
+    }.orEmpty()
+    LibTab.Letterboxd -> listOf("Watchlist" to app.harbor.android.data.Letterboxd.watchlist(settings.letterboxd, trackers.letterboxd))
+    LibTab.AniList -> trackers.anilist?.let { entrySections(app.harbor.android.data.AniListLibrary.entries(it), app.harbor.android.data.AniListLibrary.statuses) }.orEmpty()
+    LibTab.Mal -> trackers.mal?.let { entrySections(app.harbor.android.data.MalLibrary.entries(it), app.harbor.android.data.MalLibrary.statuses) }.orEmpty()
+    LibTab.PublicMetaDb -> pmdb?.let { session ->
+        app.harbor.android.data.PublicMetaDb.resolveList(session, pmdbListId)?.let { list ->
+            listOf(list.name to app.harbor.android.data.PublicMetaDb.listItems(session, list.id).map(app.harbor.android.data.PublicMetaDb::toMeta))
+        }
+    }.orEmpty()
+    else -> emptyList()
+}
+
+/** An anime list by status, then each custom list under its own name (anilist-tab.tsx). */
+private fun entrySections(entries: List<app.harbor.android.data.ListEntry>, statuses: List<Pair<String, String>>): List<Pair<String, List<Meta>>> =
+    statuses.map { (status, title) -> title to entries.filter { it.status == status }.map { it.meta } } +
+        entries.flatMap { it.customLists }.distinct().map { name -> name to entries.filter { name in it.customLists }.map { it.meta } }
+
 /**
- * Big Picture's Library: Saved, Watchlist, History and Favorites as chips, the sort and Refresh, and
- * the titles as a poster grid grouped by when you added or watched them.
+ * Big Picture's Library: Saved, Watchlist, History and Favorites as chips, then a chip for each
+ * connected service (Trakt, Simkl, AniList, MyAnimeList, Letterboxd, PMDB), the sort and Refresh,
+ * and the titles as a poster grid grouped by when you added or watched them (or by the service's lists).
  */
 @Composable
 fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
@@ -451,7 +493,32 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
     val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
     val continuing by repository.continueWatching.collectAsState()
     val settings by repository.settings.collectAsState()
+    val trackers by repository.trackers.collectAsState()
+    val pmdb by repository.accounts.pmdb.collectAsState()
+    val pmdbListId by repository.accounts.pmdbListId.collectAsState()
     var tab by rememberSaveable { mutableStateOf(LibTab.Saved) }
+    val available = app.harbor.android.data.LibraryTabs.available(trackers, settings, pmdb != null).map { it.first }
+    val tabs = LibTab.entries.filter { !it.remote || it.id in available }
+    if (tab !in tabs) tab = LibTab.Saved
+    var reload by remember { mutableStateOf(0) }
+    var remote by remember { mutableStateOf<RemoteSections?>(null) }
+    // Who is signed in to the open tab's service: a new sign-in loads it again, a refreshed token doesn't.
+    val remoteKey: Any? = when (tab) {
+        LibTab.Trakt -> trackers.trakt?.let { it.user to (it.accessToken != null) }
+        LibTab.Simkl -> trackers.simkl?.let { it.user to (it.accessToken != null) }
+        LibTab.AniList -> trackers.anilist?.let { it.user to (it.accessToken != null) }
+        LibTab.Mal -> trackers.mal?.let { it.user to (it.accessToken != null) }
+        LibTab.Letterboxd -> settings.letterboxd to trackers.letterboxd?.username
+        LibTab.PublicMetaDb -> pmdb to pmdbListId
+        else -> null
+    }
+    LaunchedEffect(tab, remoteKey, reload) {
+        remote = null
+        if (!tab.remote) return@LaunchedEffect
+        remote = try { RemoteSections(loadRemoteTab(repository, tab, trackers, settings, pmdb, pmdbListId)) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { RemoteSections(emptyList(), e.message ?: e.javaClass.simpleName) }
+    }
     var showTabs by rememberSaveable { mutableStateOf(false) }
     var sort by rememberSaveable { mutableStateOf(LibSort.Recent) }
     val scope = rememberCoroutineScope()
@@ -469,6 +536,7 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
                 library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
                     .map { it.toMeta() to time(it.state?.lastWatched ?: it.mtime) }).distinctBy { it.first.id }
             LibTab.Favorites -> shelves.favorites.map { it to 0L }
+            else -> emptyList()
         }
     }
     val sorted = when (sort) {
@@ -477,25 +545,36 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
         LibSort.Year -> entries.sortedByDescending { it.first.year ?: "" }
     }
     // Groups as Big Picture's: TODAY, then each year (by when you added it, or the title's year for A-Z and Year).
+    // A service tab: its own lists in its order, each sorted as chosen.
     val today = java.time.LocalDate.now()
-    val groups = sorted.groupBy { (meta, at) ->
+    val loaded = remote
+    val groups: List<Pair<String, List<Meta>>> = if (tab.remote) loaded?.sections.orEmpty().map { (title, metas) ->
+        title.uppercase() to metas.distinctBy { it.id }.let { list ->
+            when (sort) {
+                LibSort.Recent -> list
+                LibSort.Az -> list.sortedBy { it.name.lowercase() }
+                LibSort.Year -> list.sortedByDescending { it.year ?: "" }
+            }
+        }
+    }.filter { it.second.isNotEmpty() } else sorted.groupBy { (meta, at) ->
         if (sort == LibSort.Recent && at > 0) {
             val day = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
             if (day == today) "TODAY" else day.year.toString()
         } else if (sort == LibSort.Year) meta.year ?: "UNDATED" else if (sort == LibSort.Az) meta.name.firstOrNull()?.uppercaseChar()?.toString() ?: "#" else "EARLIER"
-    }
+    }.map { (label, list) -> label to list.map { it.first } }
+    val count = groups.sumOf { it.second.size }
     Column(Modifier.fillMaxSize().padding(top = u(6f))) {
         Row(horizontalArrangement = Arrangement.spacedBy(u(5f)), verticalAlignment = Alignment.CenterVertically) {
-            LibTab.entries.filter { app.harbor.android.data.LibraryTabs.shown(it.id, settings.libraryHiddenTabs, tab.id) }.forEachIndexed { i, t ->
+            tabs.filter { app.harbor.android.data.LibraryTabs.shown(it.id, settings.libraryHiddenTabs, tab.id) }.forEachIndexed { i, t ->
                 TvPill(t.label, tab == t, focus = if (i == 0) first else null) { tab = t }
             }
             TvPill("Tabs", showTabs) { showTabs = !showTabs }
             Spacer(Modifier.weight(1f))
-            Text("${sorted.size} TITLES", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+            Text("$count TITLES", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
         }
         if (showTabs) Row(Modifier.padding(top = u(6f)), horizontalArrangement = Arrangement.spacedBy(u(5f)), verticalAlignment = Alignment.CenterVertically) {
             Text("Show tabs", color = HarborColors.InkMuted, fontSize = s(7f))
-            LibTab.entries.filter { it != LibTab.Saved }.forEach { t ->
+            tabs.filter { it != LibTab.Saved }.forEach { t ->
                 TvPill(t.label, t.id !in settings.libraryHiddenTabs) {
                     repository.updateSettings { it.copy(libraryHiddenTabs = app.harbor.android.data.LibraryTabs.toggle(it.libraryHiddenTabs, t.id)) }
                     if (tab == t && t.id !in settings.libraryHiddenTabs) tab = LibTab.Saved
@@ -504,22 +583,31 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
         }
         Row(Modifier.padding(top = u(6f), bottom = u(8f)), horizontalArrangement = Arrangement.spacedBy(u(5f))) {
             TvPill("All · ${sort.label}", true, icon = Icons.Rounded.Sort) { sort = LibSort.entries[(sort.ordinal + 1) % LibSort.entries.size] }
-            TvPill("Refresh", false, icon = Icons.Rounded.Refresh) { scope.launch { repository.refresh() } }
+            TvPill("Refresh", false, icon = Icons.Rounded.Refresh) { reload++; scope.launch { repository.refresh() } }
         }
-        if (sorted.isEmpty()) Text("Nothing here yet.", color = HarborColors.InkMuted, fontSize = s(10f), modifier = Modifier.padding(top = u(20f)))
+        if (groups.isEmpty()) Text(
+            when {
+                !tab.remote -> "Nothing here yet."
+                loaded == null -> "Loading your ${tab.label} list…"
+                // The service's own words, as on phones: so a lapsed sign-in reads as one.
+                loaded.error != null -> "Couldn't reach ${tab.label}: ${loaded.error.take(160)}"
+                else -> "Your list on this service is empty."
+            },
+            color = HarborColors.InkMuted, fontSize = s(10f), modifier = Modifier.padding(top = u(20f)),
+        )
         LazyColumn(contentPadding = PaddingValues(bottom = u(50f)), verticalArrangement = Arrangement.spacedBy(u(8f))) {
-            groups.forEach { (label, list) ->
-                item(key = "h-$label") {
+            groups.forEachIndexed { g, (label, list) ->
+                item(key = "h-$g-$label") {
                     Row(horizontalArrangement = Arrangement.spacedBy(u(4f)), verticalAlignment = Alignment.CenterVertically) {
                         Text(label, color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
                         Text("${list.size}", color = HarborColors.InkSubtle.copy(alpha = 0.6f), fontSize = s(6.5f), fontWeight = FontWeight.Bold)
                     }
                 }
-                itemsIndexed(list.chunked(8), key = { i, _ -> "r-$label-$i" }) { _, row ->
+                itemsIndexed(list.chunked(8), key = { i, _ -> "r-$g-$label-$i" }) { _, row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(u(10f)), modifier = Modifier.padding(vertical = u(3f))) {
                         // Back from a title, its poster takes the ring again (as on Home).
                         CompositionLocalProvider(LocalHomeFocusRestore provides true) {
-                            row.forEach { (m, _) -> PosterTile(m, null, {}, width = u(97f), onClick = { onOpen(m) }) }
+                            row.forEach { m -> PosterTile(m, null, {}, width = u(97f), onClick = { onOpen(m) }) }
                         }
                     }
                 }
