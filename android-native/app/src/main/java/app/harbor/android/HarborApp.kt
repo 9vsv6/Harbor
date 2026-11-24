@@ -29,27 +29,28 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         app.harbor.android.data.CrashReport.install(this)
         // Before anything reads the device profile (Coil's loader is built on the first image).
         app.harbor.android.perf.Perf.init(this)
+        app.harbor.android.data.Curated.init(this)
+        // The curated lists and last launch's Home rows are parsed now, off the main thread, so the
+        // first Home frame doesn't wait on them; started before the rest of the setup below, so it
+        // has as long as possible to finish before Home first asks for them.
+        Thread({
+            app.harbor.android.ui.HomeCache.preload(this)
+            app.harbor.android.data.Curated.lists()
+        }, "harbor-warmup").apply { priority = Thread.NORM_PRIORITY - 1 }.start()
         app.harbor.android.data.StreamFit.init(this)
         repository = Repository(this)
         app.harbor.android.data.WhisperModel.init(this)
         app.harbor.android.data.SileroModel.init(this)
         app.harbor.android.data.MoonshineModels.init(this)
-        app.harbor.android.data.AnimeIdentity.init(this)
+        // AnimeIdentity (a SQLite database, when installed) opens in Repository's background load.
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
         app.harbor.android.data.Awards.init(this)
         app.harbor.android.data.AwardHistory.init(this)
         app.harbor.android.ui.HarborFonts.assets = assets
-        app.harbor.android.data.Curated.init(this)
         app.harbor.android.data.PlayQueue.init(this)
         app.harbor.android.data.StremioSync.init(this)
         app.harbor.android.data.TitleSubs.init(this)
-        // The curated lists and last launch's Home rows are parsed now, off the main thread,
-        // so the first Home frame doesn't wait on them.
-        Thread({
-            app.harbor.android.ui.HomeCache.preload(this)
-            app.harbor.android.data.Curated.lists()
-        }, "harbor-warmup").apply { priority = Thread.NORM_PRIORITY - 1 }.start()
         // Look-and-feel settings reach every screen, the player's too, through HarborDisplay.
         val main = MainScope()
         main.launch {

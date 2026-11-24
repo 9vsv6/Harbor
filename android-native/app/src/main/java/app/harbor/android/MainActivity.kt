@@ -104,6 +104,12 @@ class MainActivity : ComponentActivity() {
         runCatching { (application as HarborApp).repository.refreshLibraryIfStale() }
     }
 
+    override fun onDestroy() {
+        // The extensions' toast host: a destroyed window (and everything it draws) isn't kept alive by it.
+        if (com.lagradost.cloudstream3.CommonActivity.activity === this) com.lagradost.cloudstream3.CommonActivity.activity = null
+        super.onDestroy()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) focusedAt = android.os.SystemClock.uptimeMillis()

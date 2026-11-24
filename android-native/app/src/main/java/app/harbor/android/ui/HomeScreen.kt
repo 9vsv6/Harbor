@@ -97,10 +97,16 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     fun isAnimeCw(item: CwItem) = detectedAnime.let { app.harbor.android.data.AnimeDetect.isAnime(item.meta) }
     // Harbor's Anime page has its own Continue Watching, anime only; with "anime only in the
     // Anime room" (or anime hidden) Home leaves anime out of its row.
-    val cw = when {
-        view == BrowseView.Anime -> allCw.filter { isAnimeCw(it) }
-        HarborDisplay.settings.animeRoomOnly || HarborDisplay.settings.hideAnime -> allCw.filterNot { isAnimeCw(it) }
-        else -> allCw
+    // Filtered once per change: a new list on every recomposition made Continue watching (and, on a
+    // TV, every Big Picture row built from it) recompose each time anything else on Home changed.
+    val animeRoomOnly = HarborDisplay.settings.animeRoomOnly
+    val hideAnime = HarborDisplay.settings.hideAnime
+    val cw = remember(allCw, view, detectedAnime, animeRoomOnly, hideAnime) {
+        when {
+            view == BrowseView.Anime -> allCw.filter { isAnimeCw(it) }
+            animeRoomOnly || hideAnime -> allCw.filterNot { isAnimeCw(it) }
+            else -> allCw
+        }
     }
     val tmdbKey by repository.tmdbKey.collectAsState()
     // Rebuilt from scratch when the TMDB key changes.
@@ -124,10 +130,13 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     val context = androidx.compose.ui.platform.LocalContext.current
     val cacheKey = HomeCache.key(view, tmdbKey != null, homeLanguages, textLanguages)
     // Last launch's rows show at once; fresh ones replace them when they're ready.
-    if (rows[view] == null) HomeCache.read(context, cacheKey)?.let { rows[view] = it }
+    // Composition only takes what is in memory (the launch warm-up has usually read it); a row set
+    // still on disk is read off the main thread first thing in the effect below.
+    if (rows[view] == null) HomeCache.peek(cacheKey)?.let { rows[view] = it }
     // Fresh rows are fetched at most every 15 minutes per row set, not on every return to Home.
     val refreshKey = "$cacheKey|${addons.joinToString(",") { it.manifest.id }}"
     LaunchedEffect(view, addons, builtins, tmdbKey, homeLanguages, textLanguages) {
+        if (rows[view] == null) HomeCache.load(context, cacheKey)?.let { if (rows[view] == null) rows[view] = it }
         if (addons.isEmpty() || (rows[view] != null && HomeRefresh.isFresh(refreshKey))) return@LaunchedEffect
         // With cached rows on screen, the fresh set is gathered aside and swapped in whole.
         val cached = rows[view] != null
@@ -189,9 +198,11 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
     val trackers by repository.trackers.collectAsState()
     val trackerKey = TrackerRows.key(view, HarborDisplay.settings, trackers)
     val trackerFile = "trackers-${trackerKey.hashCode()}"
-    var trackerRows by remember(trackerKey) { mutableStateOf(TrackerRows.cached(trackerKey) ?: HomeCache.read(context, trackerFile).orEmpty()) }
+    var trackerRows by remember(trackerKey) { mutableStateOf(TrackerRows.cached(trackerKey) ?: HomeCache.peek(trackerFile).orEmpty()) }
     LaunchedEffect(trackerKey) {
         if (TrackerRows.cached(trackerKey) != null) return@LaunchedEffect
+        // Saved rows not yet in memory are read off the main thread.
+        if (trackerRows.isEmpty()) HomeCache.load(context, trackerFile)?.let { saved -> if (trackerRows.isEmpty()) trackerRows = saved }
         val fresh = TrackerRows.load(trackerKey, view, HarborDisplay.settings, trackers)
         // An empty answer only replaces saved rows when no tracker has rows to give.
         val active = HarborDisplay.settings.let { s -> s.letterboxd.enabled || s.simklTrendingRail || (s.simklHomeRails && trackers.simkl?.accessToken != null) } || trackers.mal?.accessToken != null
@@ -701,23 +712,30 @@ object HomeCache {
     private val memory = java.util.concurrent.ConcurrentHashMap<String, List<CatalogRow>>()
     private val serializer = kotlinx.serialization.builtins.ListSerializer(CatalogRow.serializer())
 
+    /** One reader per row set: Home asking while the warm-up thread is reading it waits for that read. */
+    private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
     /** Reads every saved row set ahead of time, off the main thread, so Home only finds them in memory. */
     fun preload(context: android.content.Context) {
-        java.io.File(context.filesDir, "home-rows").listFiles()?.forEach { f ->
-            val key = f.name.removeSuffix(".json")
-            if (!memory.containsKey(key)) runCatching { app.harbor.android.data.Net.json.decodeFromString(serializer, f.readText()) }.getOrNull()
-                ?.takeIf { it.isNotEmpty() }?.let { memory.putIfAbsent(key, it) }
-        }
+        java.io.File(context.filesDir, "home-rows").listFiles()?.forEach { f -> readFile(f.name.removeSuffix(".json"), f) }
     }
+
+    private fun readFile(key: String, f: java.io.File): List<CatalogRow>? = memory[key] ?: synchronized(locks.getOrPut(key) { Any() }) {
+        memory[key] ?: runCatching { app.harbor.android.data.Net.json.decodeFromString(serializer, f.readText()) }.getOrNull()
+            ?.takeIf { it.isNotEmpty() }?.let { memory.putIfAbsent(key, it) ?: it }
+    }
+
+    /** What is already in memory, for composition (which must not read files). */
+    fun peek(key: String): List<CatalogRow>? = memory[key]
+
+    /** The saved row set, read from disk off the main thread when it isn't in memory yet. */
+    suspend fun load(context: android.content.Context, key: String): List<CatalogRow>? = memory[key]
+        ?: kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { readFile(key, file(context, key)) }
 
     fun key(view: BrowseView, tmdb: Boolean, languages: List<String>, language: String?) =
         "${view.name}-${if (tmdb) "tmdb" else "free"}-${(languages.joinToString(",") + "|" + language.orEmpty()).hashCode()}"
 
     private fun file(context: android.content.Context, key: String) = java.io.File(java.io.File(context.filesDir, "home-rows").apply { mkdirs() }, "$key.json")
-
-    fun read(context: android.content.Context, key: String): List<CatalogRow>? = memory[key] ?: runCatching {
-        app.harbor.android.data.Net.json.decodeFromString(serializer, file(context, key).readText())
-    }.getOrNull()?.takeIf { it.isNotEmpty() }?.also { memory[key] = it }
 
     suspend fun write(context: android.content.Context, key: String, rows: List<CatalogRow>) {
         memory[key] = rows
