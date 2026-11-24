@@ -68,14 +68,14 @@ internal fun HeroOverflowMenu(expanded: Boolean, onDismiss: () -> Unit, content:
 @Composable
 internal fun HeroMenuItem(
     label: String, active: Boolean = false, danger: Boolean = false, enabled: Boolean = true, logo: Int? = null,
-    icon: androidx.compose.ui.graphics.painter.Painter? = null, onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.painter.Painter? = null, height: androidx.compose.ui.unit.Dp = 36.dp, onClick: () -> Unit,
 ) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val ink = when { danger -> HeroActionDanger; active -> HarborColors.Accent; else -> HarborColors.Ink }
     val iconTint = when { danger -> HeroActionDanger; active -> HarborColors.Accent; else -> HarborColors.InkMuted }
     Row(
-        Modifier.fillMaxWidth().height(36.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+        Modifier.fillMaxWidth().height(height).clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
             .background(if (pressed) (if (danger) HeroActionDanger.copy(alpha = 0.10f) else HarborColors.Raised) else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(source, null, enabled = enabled, onClick = onClick).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),

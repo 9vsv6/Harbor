@@ -311,11 +311,13 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
             val episode = remember(state.meta, state.videoId) { state.meta?.videos?.firstOrNull { it.id == state.videoId } }
             app.harbor.android.ui.HarborConnecting(state.meta, episode, onCancel = { actions.back() })
         }
+        // Nothing of the player shows over a Connecting screen (PC's auto-play-transition), on TV or not.
+        val covered = connecting || state.tvCovered
         if (!connecting && state.buffering && !state.ended && state.error == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(56.dp), color = Color.White, strokeWidth = 3.dp)
         }
 
-        if (state.locked) {
+        if (covered) Unit else if (state.locked) {
             AnimatedVisibility(state.controlsVisible, enter = fadeIn(), exit = fadeOut()) {
                 Box(Modifier.fillMaxSize()) {
                     RoundIcon(
@@ -337,7 +339,7 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
         // TV: Big Picture's Connecting screen until the video has started; a failure shows there too.
         if (state.tvCovered) TvPlayerConnecting(state, actions)
 
-        Hint(state)
+        if (!covered) Hint(state)
         if (state.tv && !state.tvCovered) state.seekPreviewMs?.let { ms ->
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
                 val gutter = app.harbor.android.ui.tv.TvInsets.Gutter
@@ -350,9 +352,9 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 )
             }
         }
-        ContentAdvisoryLayer(state, actions)
-        if (!state.stillWatching && !state.tvCovered) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
-        if (!state.tvCovered) ResumePill(state, actions, Modifier.align(Alignment.BottomStart))
+        if (!covered) ContentAdvisoryLayer(state, actions)
+        if (!state.stillWatching && !covered) BottomPills(state, prefs, actions, Modifier.align(Alignment.BottomEnd))
+        if (!covered) ResumePill(state, actions, Modifier.align(Alignment.BottomStart))
 
         if (!state.tv) state.error?.let { ErrorCard(it, state, actions, Modifier.align(Alignment.Center)) }
 

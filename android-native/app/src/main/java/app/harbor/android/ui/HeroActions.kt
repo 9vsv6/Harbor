@@ -1,5 +1,6 @@
 package app.harbor.android.ui
 
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -115,7 +116,48 @@ fun HeroActions(
     var actionStage by remember(meta.id) { mutableIntStateOf(0) }
     val poster = meta.poster ?: details?.posters?.firstOrNull()
     val queued = queue.any { it.meta.id == meta.id && it.season == null }
-    HeroActionLayout(onStage = { actionStage = it }, play = {
+    if (!wide) {
+        // PC's phone title page (mobile-detail/actions.tsx): Play across the row and ⋯ beside it, on one
+        // level; everything else is in the ⋯ sheet.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).height(48.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = play),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(painterResource(R.drawable.ui_play_filled), null, tint = HarborColors.Canvas, modifier = Modifier.size(18.dp))
+                Text(playLabel, color = HarborColors.Canvas, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
+            Box(
+                Modifier.size(48.dp).clip(CircleShape).background(HarborColors.Surface)
+                    .border(1.dp, HarborColors.EdgeSoft, CircleShape)
+                    .semantics { contentDescription = I18n.tr("More actions") }.clickable { moreOpen = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.MoreHoriz, null, tint = HarborColors.Ink, modifier = Modifier.size(20.dp))
+                if (favourite) Box(Modifier.align(Alignment.TopEnd).padding(top = 11.dp, end = 11.dp).size(6.dp).clip(CircleShape).background(HarborColors.Accent))
+            }
+        }
+        if (moreOpen) PhoneActionSheet(meta.name, onDismiss = { moreOpen = false }) {
+            Row(Modifier.padding(horizontal = 4.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                LibrarySplitButton(repository, meta, listed) { trackerVersion++ }
+            }
+            var trackerRows by remember { mutableStateOf(false) }
+            Column(Modifier.onSizeChanged { trackerRows = it.height > 0 }) {
+                HeroTrackerControls(repository, meta, trackerVersion, asMenu = true) { trackerVersion++ }
+            }
+            if (trackerRows) HorizontalDivider(Modifier.padding(vertical = 4.dp), color = HarborColors.EdgeSoft)
+            val tall = 48.dp
+            HeroMenuItem(if (rating != null) "Your rating: $rating" else "Rate this", rating != null, icon = painterResource(R.drawable.ui_rate), height = tall) { moreOpen = false; rateOpen = true }
+            HeroMenuItem(if (favourite) "Favorited" else "Favorite", favourite, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), height = tall) { repository.toggleFavorite(meta) }
+            HeroMenuItem("Add to list", icon = painterResource(R.drawable.ui_list), height = tall) { moreOpen = false; listOpen = true }
+            HeroMenuItem(if (queued) "In your queue" else "Add to queue", queued, icon = rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), height = tall) { app.harbor.android.data.PlayQueue.toggle(meta) }
+            if (!isSeries) HeroMenuItem(if (watched) "Marked watched" else "Mark watched", watched, icon = painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched), height = tall) { repository.toggleWatched(meta) }
+            trailer?.let { HeroMenuItem("Watch trailer", icon = painterResource(R.drawable.ui_trailer), height = tall) { moreOpen = false; it() } }
+            if (!isSeries) HeroMenuItem("Download for offline", icon = rememberVectorPainter(Icons.Rounded.Download), height = tall) { moreOpen = false; download() }
+            HeroMenuItem("Send to a friend", icon = rememberVectorPainter(Icons.AutoMirrored.Rounded.Send), height = tall) { moreOpen = false; shareOpen = true }
+        }
+    } else HeroActionLayout(onStage = { actionStage = it }, play = {
         Row(
             Modifier.height(48.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = play).padding(horizontal = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -191,6 +233,22 @@ fun HeroActions(
     }
     if (listOpen) AddToListDialog(repository, meta) { listOpen = false }
     if (shareOpen) HeroShareDialog(repository, meta) { shareOpen = false }
+}
+
+/** PC's phone action sheet (mobile-detail/actions.tsx): slides up from the bottom, the title on top. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PhoneActionSheet(title: String, onDismiss: () -> Unit, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = HarborColors.Canvas,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = { Box(Modifier.padding(top = 12.dp, bottom = 6.dp).size(width = 36.dp, height = 4.dp).clip(CircleShape).background(HeroMenuEdge)) },
+    ) {
+        Text(title, color = HarborColors.Ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp))
+        Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 28.dp).navigationBarsPadding(), content = content)
+    }
 }
 
 @Composable

@@ -566,6 +566,7 @@ private fun HarborRoot(repository: Repository) {
                         app.harbor.android.ui.AccountItem("Library", R.drawable.nav_library) { nav.selectTab(Tab.MyStuff) },
                         app.harbor.android.ui.AccountItem("Downloads", R.drawable.nav_download, page("downloads")),
                         app.harbor.android.ui.AccountItem("Calendar", R.drawable.nav_calendar, page("calendar")),
+                        app.harbor.android.ui.AccountItem("Collections", R.drawable.nav_collections, page("collections")),
                         app.harbor.android.ui.AccountItem("Community", R.drawable.set_users, page("community")),
                         app.harbor.android.ui.AccountItem("Plugins", R.drawable.set_puzzle, page("plugins")).takeIf { plugins },
                         app.harbor.android.ui.AccountItem("Settings", R.drawable.nav_settings) { nav.selectTab(Tab.Profile) },

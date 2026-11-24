@@ -158,11 +158,9 @@ fun DiscoverScreen(
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         item(key = "header") {
-            PageHeader("Discover", onBack) {
-                HeaderChip("Calendar", Icons.Outlined.CalendarMonth) { open("calendar") }
-                HeaderChip("Collections", Icons.Outlined.CollectionsBookmark) { open("collections") }
-                HeaderChip("Awards", Icons.Outlined.EmojiEvents) { open(PeopleRoutes.AWARDS) }
-            }
+            // As PC: no page buttons here. Calendar and Collections are in the rail and the account
+            // menu; awards have their own row further down.
+            PageHeader("Discover", onBack)
         }
         shelves.forEachIndexed { i, shelf ->
             item(key = shelf.id) { ShelfRail(shelf, loaded[shelf.id], onOpen) }
@@ -175,7 +173,11 @@ fun DiscoverScreen(
                         item(key = "collections") { CollectionsRail(tmdbKey!!) { open("collection/${it.id}") } }
                     }
                 }
-                4 -> item(key = "canon") { CuratedShelf(Curated.shelf()) }
+                4 -> {
+                    // PC's Discover: "Browse by Award" after the fourth row (discover.tsx special:awards).
+                    item(key = "awards") { AwardTiles { open(PeopleRoutes.award(it)) } }
+                    item(key = "canon") { CuratedShelf(Curated.shelf()) }
+                }
                 5 -> registry?.let { item(key = "registry") { CuratedRow(it, onOpen) } }
             }
         }
@@ -208,6 +210,48 @@ private fun GenreTiles(onGenre: (String, String) -> Unit) {
         }
     }
 }
+
+/** PC's award tiles (components/award-tiles.tsx): each award, its name and what it honours. */
+private val AWARD_TILES = listOf(
+    "oscar" to ("Academy Awards" to "Best Picture and beyond"), "golden_globe" to ("Golden Globes" to "Film and television"),
+    "bafta" to ("BAFTA" to "The British Academy"), "emmy" to ("Emmys" to "Television's finest"),
+    "sag" to ("SAG Awards" to "Chosen by actors"), "critics_choice" to ("Critics' Choice" to "The critics' cut"),
+    "bafta_tv" to ("BAFTA Television" to "British TV's biggest night"), "annie" to ("Annie Awards" to "Animation's finest"),
+    "spirit" to ("Spirit Awards" to "Independent film"), "saturn" to ("Saturn Awards" to "Sci-fi, fantasy & horror"),
+    "cannes" to ("Cannes" to "Palme d'Or"), "venice" to ("Venice" to "Golden Lion"), "berlin" to ("Berlinale" to "Golden Bear"),
+    "cesar" to ("César Awards" to "French cinema"), "goya" to ("Goya Awards" to "Spanish cinema"),
+    "blue_dragon" to ("Blue Dragon" to "Korean cinema"), "baeksang" to ("Baeksang" to "Korean film & drama"),
+    "bifa" to ("BIFA" to "British independent film"),
+)
+
+@Composable
+private fun AwardTiles(onAward: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Browse by Award", color = HarborColors.Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(AWARD_TILES, key = { it.first }) { (key, text) ->
+                val tint = androidx.compose.ui.graphics.Color(app.harbor.android.data.AwardHistory.tint(key))
+                Box(
+                    Modifier.width(210.dp).aspectRatio(5f / 4f).clip(RoundedCornerShape(16.dp))
+                        .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(lerp(tint, androidx.compose.ui.graphics.Color.Black, 0.72f), lerp(tint, androidx.compose.ui.graphics.Color.Black, 0.9f))))
+                        .border(1.dp, HarborColors.EdgeSoft, RoundedCornerShape(16.dp))
+                        .clickable { onAward(key) },
+                ) {
+                    Text("🏆", fontSize = 40.sp, color = tint, modifier = Modifier.align(Alignment.TopCenter).padding(top = 34.dp))
+                    Row(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.Bottom) {
+                        Column(Modifier.weight(1f)) {
+                            Text(text.first, color = androidx.compose.ui.graphics.Color.White, fontSize = 19.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(text.second, color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.65f), fontSize = 11.5.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text("›", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f), fontSize = 18.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun lerp(a: androidx.compose.ui.graphics.Color, b: androidx.compose.ui.graphics.Color, t: Float) = androidx.compose.ui.graphics.lerp(a, b, t)
 
 @Composable
 private fun LanguageTiles(onPick: (String, String) -> Unit) {
