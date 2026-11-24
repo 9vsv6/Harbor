@@ -82,6 +82,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var loadStartMs = 0L
     private var preparingPlayback = false
     private var preparingSeekMs: Long? = null
+    /** The video whose file the engine was last given; progress is only saved for it. */
+    private var loadedVideoId = ""
+    /** Pause pressed while the next file was still being prepared: it starts paused. */
+    private var pauseRequestedWhilePreparing = false
     private val state = PlayerState()
     private val repository get() = (application as HarborApp).repository
     private val prefs: PlayerPrefs get() = repository.playerPrefs.value
@@ -320,6 +324,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         lastSyncFailed = false
         preparingPlayback = true
         preparingSeekMs = null
+        pauseRequestedWhilePreparing = false
         engine.pause()
         val sameVideo = state.videoId == videoId
         playbackAttempt++
@@ -411,11 +416,14 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val openingHeaders = headers
         lifecycleScope.launch {
             val remote = remoteResume?.await()
+            // Home pressed while this was preparing: the file loads (and plays) once the player is back.
+            lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
             if (attempt != playbackAttempt || state.videoId != videoId || metaId != openingMeta) return@launch
             val start = preparingSeekMs ?: remote ?: resume
             if (start > 0) pendingFraction = null
             loadStartMs = start
             state.resumedFromMs = if (startAt == null && settings.resumeNotice && start > 30_000) start else 0
+            loadedVideoId = videoId
             engine.load(openingUrl, openingHeaders, start)
             preparingPlayback = false
         }
@@ -620,6 +628,12 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
 
     override fun onPlayingChanged(playing: Boolean) {
         if (preparingPlayback) return
+        // A file that was loading when you paused, or when the player went to the background, doesn't start by itself.
+        if (playing && (pauseRequestedWhilePreparing || (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && state.castingTo == null))) {
+            pauseRequestedWhilePreparing = false
+            engine.pause()
+            return
+        }
         state.playing = playing
         if (playing) holdAudioFocus()
         // Playing means whatever error was showing no longer applies.
@@ -1427,6 +1441,13 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         if (waitingForTitle) return
         // Your own play or pause wins: auto sync won't resume a film you paused while it listened.
         heldForSync = false
+        // The next file isn't loaded yet: the engine still holds the last one, so remember the choice instead.
+        if (preparingPlayback) {
+            pauseRequestedWhilePreparing = !pauseRequestedWhilePreparing
+            state.playing = false
+            return
+        }
+        pauseRequestedWhilePreparing = false
         when {
             engine.ended -> {
                 seekNow(0)
@@ -2286,6 +2307,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.error = null
         state.buffering = true
         loadStartMs = position
+        loadedVideoId = state.videoId
+        preparingPlayback = false
         engine.load(state.currentUrl, headers, position)
     }
 
@@ -2539,6 +2562,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     }
 
     private fun saveResume() {
+        if (!ResumeGuard.canSave(preparingPlayback, waitingForTitle, loadedVideoId, state.videoId)) return
         val duration = engine.durationMs.takeIf { it > 0 } ?: return
         if (state.videoId.isNotEmpty()) {
             repository.saveResume(state.videoId, nowMs(), duration, meta, meta?.videos?.firstOrNull { it.id == state.videoId })
@@ -2553,6 +2577,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         val account = repository.account.value ?: return
         // In Nuvio mode, progress belongs to the Nuvio account instead.
         if (repository.accounts.shared.value.provider == "nuvio") return
+        if (!ResumeGuard.canSave(preparingPlayback, waitingForTitle, loadedVideoId, state.videoId)) return
         val duration = engine.durationMs.takeIf { it > 0 } ?: return
         if (state.videoId.isEmpty()) return
         stremioSyncedAt = System.currentTimeMillis()
