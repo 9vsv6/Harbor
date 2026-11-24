@@ -4,7 +4,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.ConcurrentHashMap
 
@@ -38,7 +37,9 @@ object CardIds {
         val value = gate.withPermit {
             runCatching {
                 val kind = if (type == "series") "series" else "movie"
-                val meta = Net.json.parseToJsonElement(Net.get("https://v3-cinemeta.strem.io/meta/$kind/$tt.json")).jsonObject["meta"] as? JsonObject
+                // A series' full entry (every episode) can be large: parsed off the main thread, which
+                // is where a poster tile's LaunchedEffect resumes.
+                val meta = Net.parseObject(Net.get("https://v3-cinemeta.strem.io/meta/$kind/$tt.json"))["meta"] as? JsonObject
                 meta?.get("imdbRating")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it != "0" }
             }.getOrNull()
         }

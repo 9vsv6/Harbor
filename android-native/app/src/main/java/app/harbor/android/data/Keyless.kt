@@ -1,5 +1,6 @@
 package app.harbor.android.data
 
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -75,11 +76,12 @@ object Keyless {
 
     /** TVMaze: the show with its cast embedded, by IMDb id. */
     private suspend fun show(meta: Meta, imdb: String): TmdbDetails? {
-        val lookup = runCatching { Net.json.parseToJsonElement(Net.get("https://api.tvmaze.com/lookup/shows?imdb=$imdb")).jsonObject }.getOrNull()
+        val lookup = runCatching { Net.parseObject(Net.get("https://api.tvmaze.com/lookup/shows?imdb=$imdb")) }.getOrNull()
             ?: return base(meta)
         val id = lookup["id"]?.jsonPrimitive?.intOrNull ?: return base(meta)
+        // Every episode is embedded (hundreds for a long show): parsed off the main thread.
         val show = runCatching {
-            Net.json.parseToJsonElement(Net.get("https://api.tvmaze.com/shows/$id?embed[]=cast&embed[]=seasons&embed[]=episodes")).jsonObject
+            Net.parseObject(Net.get("https://api.tvmaze.com/shows/$id?embed[]=cast&embed[]=seasons&embed[]=episodes"))
         }.getOrNull() ?: lookup
         val embedded = show["_embedded"].objectOrNull
         val cast = (embedded?.get("cast") as? JsonArray).orEmpty().map { it.jsonObject }.map { c ->
@@ -119,9 +121,12 @@ object Keyless {
     /** imdbapi.dev: the film's credits with photos and characters. */
     private suspend fun movie(meta: Meta, imdb: String): TmdbDetails {
         val base = base(meta)
-        val credits = runCatching {
-            Net.json.parseToJsonElement(Net.get("https://api.imdbapi.dev/titles/$imdb/credits?pageSize=50")).jsonObject
-        }.getOrNull()
+        // The credits and the title are independent: both asked at once, parsed off the main thread.
+        val (credits, title) = kotlinx.coroutines.coroutineScope {
+            val credits = async { runCatching { Net.parseObject(Net.get("https://api.imdbapi.dev/titles/$imdb/credits?pageSize=50")) }.getOrNull() }
+            val title = async { runCatching { Net.parseObject(Net.get("https://api.imdbapi.dev/titles/$imdb")) }.getOrNull() }
+            credits.await() to title.await()
+        }
         val cast = (credits?.get("credits") as? JsonArray).orEmpty().map { it.jsonObject }
             .filter { it.string("category") == "actor" || it.string("category") == "actress" }
             .mapNotNull { c ->
@@ -132,7 +137,6 @@ object Keyless {
                     name["primaryImage"].objectOrNull?.string("url"),
                 )
             }
-        val title = runCatching { Net.json.parseToJsonElement(Net.get("https://api.imdbapi.dev/titles/$imdb")).jsonObject }.getOrNull()
         val rating = title?.get("rating").objectOrNull
         return base.copy(
             cast = cast.ifEmpty { base.cast },

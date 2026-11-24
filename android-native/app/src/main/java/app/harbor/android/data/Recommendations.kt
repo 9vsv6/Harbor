@@ -69,9 +69,12 @@ object Recommendations {
     private suspend fun topInGenre(meta: Meta, type: String): List<Meta> {
         val genre = meta.genres?.firstOrNull() ?: return emptyList()
         val kind = if (type == "movie") "movie" else "series"
-        val json = Net.json.parseToJsonElement(Net.get("https://v3-cinemeta.strem.io/catalog/$kind/top/genre=${java.net.URLEncoder.encode(genre, "UTF-8").replace("+", "%20")}.json")).jsonObject
-        val metas = json["metas"] ?: return emptyList()
-        return Net.json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(Meta.serializer()), metas).filter { it.id != meta.id }.take(30)
+        val body = Net.get("https://v3-cinemeta.strem.io/catalog/$kind/top/genre=${java.net.URLEncoder.encode(genre, "UTF-8").replace("+", "%20")}.json")
+        // A catalog page is parsed and decoded off the main thread the player calls from.
+        return kotlinx.coroutines.withContext(Net.parseDispatcher) {
+            val metas = Net.json.parseToJsonElement(body).jsonObject["metas"] ?: return@withContext emptyList()
+            Net.json.decodeFromJsonElement(kotlinx.serialization.builtins.ListSerializer(Meta.serializer()), metas).filter { it.id != meta.id }.take(30)
+        }
     }
 
     /** Catalog art is served at medium sizes; the end screen asks for the largest (end-screen-art.ts). */

@@ -42,6 +42,10 @@ object Net {
     suspend fun parseObject(body: String): JsonObject =
         withContext(parseDispatcher) { json.parseToJsonElement(body).jsonObject }
 
+    /** Parses [body] (an object, an array, anything) on [parseDispatcher]. */
+    suspend fun parseElement(body: String): kotlinx.serialization.json.JsonElement =
+        withContext(parseDispatcher) { json.parseToJsonElement(body) }
+
     val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)

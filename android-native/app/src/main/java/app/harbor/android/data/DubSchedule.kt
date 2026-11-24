@@ -43,7 +43,9 @@ object DubSchedule {
         val now = System.currentTimeMillis()
         if (now - fetchedAt < 30 * 60_000 || now - attemptedAt < 5 * 60_000) return@withLock entries
         attemptedAt = now
-        val fresh = runCatching { (Net.json.parseToJsonElement(Net.get(URL)) as? JsonArray)?.mapNotNull { it as? JsonObject } }.getOrNull()
+        // The whole schedule (every dubbed show with its airing dates), first asked for by an anime
+        // tile's LaunchedEffect on the main thread: parsed off it.
+        val fresh = runCatching { (Net.parseElement(Net.get(URL)) as? JsonArray)?.mapNotNull { it as? JsonObject } }.getOrNull()
         if (fresh != null) {
             entries = fresh; fetchedAt = now
             _version.update { it + 1 }
