@@ -124,7 +124,12 @@ fun seasonItems(seasons: List<Int>, videos: List<Video>, details: TmdbDetails?, 
             .filter { it.isNotBlank() && EpisodeText.isDisplayableName(it) }
         // A provider's generic English fallback ("Season 4") must not replace a real title.
         val name = candidates.firstOrNull { !EpisodeText.isGenericSeasonName(it, n) } ?: candidates.firstOrNull() ?: if (n == 0) "Specials" else "Season $n"
-        SeasonItem(n, name, if (n == 0) name == "Specials" else EpisodeText.isGenericSeasonName(name, n), episodes.size, dates.firstOrNull(), dates.lastOrNull())
+        // One placeholder date on every episode (Cinemeta's The Office): TMDB's season date instead.
+        val placeholder = episodes.size > 1 && dates.size == episodes.size && dates.distinct().size == 1
+        val tmdbDate = details?.seasonList?.firstOrNull { it.number == n }?.airDate?.takeIf { it.length >= 10 }
+        val first = if (placeholder && tmdbDate != null) tmdbDate.take(10) else dates.firstOrNull()
+        val last = if (placeholder && tmdbDate != null) null else dates.lastOrNull()
+        SeasonItem(n, name, if (n == 0) name == "Specials" else EpisodeText.isGenericSeasonName(name, n), episodes.size, first, last)
     }
 
 /** Loads the explorer's catalog, names, the selected season's text and every season's artwork. */

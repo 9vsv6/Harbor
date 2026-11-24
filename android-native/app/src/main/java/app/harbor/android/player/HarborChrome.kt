@@ -11,6 +11,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -198,7 +199,8 @@ internal fun HarborControls(
         ) {
             val back = state.settings.seekBackSec
             val forward = state.settings.seekForwardSec
-            TransportButton(seekIcon(back, forward = false), "Back $back seconds", 40.dp) { onTouch(); actions.seekBy(-back * 1_000L) }
+            TransportButton(seekIcon(back, forward = false), "Back ${app.harbor.android.data.PlaybackSteps.label(back)} seconds", 40.dp,
+                onLongClick = { onTouch(); actions.seekBy(-(state.settings.seekBackLongSec * 1_000).toLong()) }) { onTouch(); actions.seekBy((-back * 1_000).toLong()) }
             if (!state.buffering || state.ended) {
                 // With a remote, the controls open on Play rather than the top corner.
                 val playFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -208,7 +210,8 @@ internal fun HarborControls(
                     actions.togglePlay()
                 }
             } else Spacer(Modifier.size(84.dp))
-            TransportButton(seekIcon(forward, forward = true), "Forward $forward seconds", 40.dp) { onTouch(); actions.seekBy(forward * 1_000L) }
+            TransportButton(seekIcon(forward, forward = true), "Forward ${app.harbor.android.data.PlaybackSteps.label(forward)} seconds", 40.dp,
+                onLongClick = { onTouch(); actions.seekBy((state.settings.seekForwardLongSec * 1_000).toLong()) }) { onTouch(); actions.seekBy((forward * 1_000).toLong()) }
         }
 
         // Bottom: time, seek bar, length; then the tools.
@@ -227,6 +230,7 @@ internal fun HarborControls(
                     if (state.next != null) ToolIcon(Icons.Rounded.SkipNext, "Next episode", false) { actions.playNext() }
                 }
                 Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    ToolIcon(Icons.Rounded.VideoLibrary, "Queue", state.queueOpen) { onTouch(); state.queueOpen = true }
                     ToolIcon(Icons.Rounded.SwapHoriz, "Sources", state.panel == Panel.Sources) {
                         onTouch()
                         toggle(state, Panel.Sources)
@@ -269,9 +273,10 @@ private fun toggle(state: PlayerState, panel: Panel) {
 }
 
 @Composable
-private fun TransportButton(icon: ImageVector, description: String, iconSize: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun TransportButton(icon: ImageVector, description: String, iconSize: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     Box(
-        modifier.size(iconSize + 28.dp).clip(CircleShape).background(Color(0x1F000000)).clickable(onClick = onClick),
+        modifier.size(iconSize + 28.dp).clip(CircleShape).background(Color(0x1F000000)).combinedClickable(onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = Color.White, modifier = Modifier.size(iconSize)) }
 }
@@ -309,15 +314,15 @@ private fun Anime4KPill(prefs: PlayerPrefs, open: Boolean, onClick: () -> Unit) 
     }
 }
 
-private fun seekIcon(seconds: Int, forward: Boolean): ImageVector = if (forward) when (seconds) {
-    5 -> Icons.Rounded.Forward5
-    10 -> Icons.Rounded.Forward10
-    30 -> Icons.Rounded.Forward30
+internal fun seekIcon(seconds: Float, forward: Boolean): ImageVector = if (forward) when (seconds) {
+    5f -> Icons.Rounded.Forward5
+    10f -> Icons.Rounded.Forward10
+    30f -> Icons.Rounded.Forward30
     else -> Icons.Rounded.FastForward
 } else when (seconds) {
-    5 -> Icons.Rounded.Replay5
-    10 -> Icons.Rounded.Replay10
-    30 -> Icons.Rounded.Replay30
+    5f -> Icons.Rounded.Replay5
+    10f -> Icons.Rounded.Replay10
+    30f -> Icons.Rounded.Replay30
     else -> Icons.Rounded.Replay
 }
 
@@ -526,7 +531,7 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
                     Panel.SubStyle -> {}
                     Panel.Picture -> ChoiceMenu(
                         "Aspect ratio",
-                        if (state.settings.engine == "media3") "Fixed shapes need the mpv engine. Pinch the video to fill or fit." else "Pinch the video to fill or fit. Harbor keeps your choice.",
+                        if (state.engineName != "mpv") "Fixed shapes need the mpv engine. Pinch the video to fill or fit." else "Pinch the video to fill or fit. Harbor keeps your choice.",
                         Fit.entries.map { fit ->
                             MenuChoice(fit.label, state.fit == fit, when (fit) { Fit.Fit -> "Whole picture"; Fit.Fill -> "No black bars"; Fit.Stretch -> "Fills by stretching"; else -> null }) {
                                 actions.setFit(fit)
@@ -535,7 +540,11 @@ internal fun HarborPopovers(state: PlayerState, prefs: PlayerPrefs, actions: Pla
                         },
                     )
                     Panel.Anime4K -> Anime4KMenu(state, prefs, actions)
-                    Panel.Speed -> ChoiceMenu("Speed", "How fast the video plays.", (state.settings.playbackSpeeds + 1f + state.speed).distinct().sorted().map { speed ->
+                    Panel.Speed -> ChoiceMenu("Speed", "How fast the video plays.", listOf(
+                        MenuChoice("Speed down", false, null) { actions.setSpeed(app.harbor.android.data.PlaybackSteps.step(state.speed, -state.settings.speedDownStep)) },
+                        MenuChoice("Speed up", false, null) { actions.setSpeed(app.harbor.android.data.PlaybackSteps.step(state.speed, state.settings.speedUpStep)) },
+                        MenuChoice("Toggle slow speed", state.speed == state.settings.slowSpeed, null) { actions.setSpeed(app.harbor.android.data.PlaybackSteps.toggleSlow(state.speed, state.settings.slowSpeed)) },
+                    ) + (state.settings.playbackSpeeds + 1f + state.speed).distinct().sorted().map { speed ->
                         MenuChoice(if (speed == 1f) "Normal" else speed.toString().removeSuffix(".0") + "×", state.speed == speed, if (speed == 1f) "Default" else null) { actions.setSpeed(speed) }
                     })
                     Panel.Sleep -> {
@@ -838,6 +847,8 @@ private enum class SubTab(val label: String) { All("All"), Embedded("Embedded"),
 
 @Composable
 private fun ColumnScope.SubtitlesPopover(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
+    var searching by remember { mutableStateOf(false) }
+    if (searching) ManualSubtitleSearch(state, actions) { searching = false }
     var tab by remember { mutableStateOf(SubTab.All) }
     var language by remember { mutableStateOf<String?>(null) }
     // Only your subtitle languages, as Harbor PC lists them (and what's on); every language when
@@ -864,6 +875,9 @@ private fun ColumnScope.SubtitlesPopover(state: PlayerState, prefs: PlayerPrefs,
         total.takeIf { it > 0 },
         onClose = { state.panel = null },
         actions = {
+            Box(Modifier.size(32.dp).clip(CircleShape).clickable { searching = true }, contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Search, "Find more", tint = Muted, modifier = Modifier.size(17.dp))
+            }
             if (state.subChoice != SubChoice.Off) SyncMenu(state, actions)
             Box(Modifier.size(32.dp).clip(CircleShape).clickable { state.panel = Panel.SubStyle }, contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.TextFields, "Subtitle style", tint = Muted, modifier = Modifier.size(17.dp))

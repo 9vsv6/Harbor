@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -408,7 +409,8 @@ fun PosterTile(meta: Meta, modifier: Modifier = Modifier, onClick: () -> Unit) {
                 Text(title, color = HarborColors.InkMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(8.dp))
             }
             // Harbor's score strip at the bottom right, IMDb · Simkl (card-score-stack.tsx), on every poster as on PC.
-            ScoreStack(meta, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+            if (Perf.isTv) app.harbor.android.ui.tv.TvScoreBadges(meta, Modifier.align(Alignment.BottomEnd).padding(6.dp))
+            else ScoreStack(meta, Modifier.align(Alignment.BottomEnd).padding(6.dp))
             CardBadges(meta, Modifier.align(Alignment.TopStart).fillMaxWidth(0.92f))
             // Harbor's watchlist bookmark (top right) and watched check (bottom left).
             if (display.watchlistBookmark && inMyList) {
@@ -481,10 +483,18 @@ fun RankRail(title: String, metas: List<Meta>, onOpen: (Meta) -> Unit) {
 }
 
 @Composable
-fun ContinueWatchingRow(items: List<CwItem>, onOpen: (CwItem) -> Unit, onDismiss: (CwItem) -> Unit, title: String = "Continue watching") {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun ContinueWatchingRow(
+    items: List<CwItem>, onOpen: (CwItem) -> Unit, onDismiss: (CwItem) -> Unit, title: String = "Continue watching",
+    /** Long-press the heading: "Copy CW" diagnostics (PC's right-click on the heading). */
+    onCopyDiagnostics: (() -> Unit)? = null,
+) {
     if (items.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        RailHeader(title, null)
+        if (onCopyDiagnostics == null) RailHeader(title, null)
+        else androidx.compose.foundation.layout.Box(
+            Modifier.combinedClickable(onClickLabel = null, onLongClickLabel = "Copy CW diagnostics", onClick = {}, onLongClick = onCopyDiagnostics),
+        ) { RailHeader(title, null) }
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.meta.id }) { item -> CwCard(item, { onOpen(item) }, { onDismiss(item) }) }
         }
@@ -499,6 +509,8 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
         if (item.meta.id.startsWith("kitsu:")) "Ep ${item.episode}" else "S${item.season} · E${item.episode}"
     } else null
     val remaining = when {
+        // PC's countdown on an anime episode that hasn't aired yet, else "Up next".
+        item.upNext -> item.airsAt?.let { countdown(it) } ?: "Up next"
         item.source != null -> "Paused on ${item.source}"
         item.durationMs > 0 -> remainingLabel(item.durationMs - item.positionMs)
         else -> null
@@ -569,7 +581,8 @@ private fun CwCard(item: CwItem, onOpen: () -> Unit, onDismiss: () -> Unit) {
 }
 
 private fun remainingLabel(ms: Long): String {
-    val minutes = (ms / 60_000).coerceAtLeast(0)
+    // Rounded up: the last seconds read "1m left", never "0m left".
+    val minutes = ((ms + 59_999) / 60_000).coerceAtLeast(1)
     if (minutes < 60) return "${minutes}m left"
     val hours = minutes / 60
     val rest = minutes % 60
@@ -682,5 +695,30 @@ private fun ScoreStack(meta: Meta, modifier: Modifier) {
             )
             Text(Math.round(value).toString(), color = HarborColors.Ink, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
         }
+    }
+}
+
+/** Copies the Continue watching snapshot to the clipboard and says so. */
+@Composable
+fun copyCwDiagnostics(repository: app.harbor.android.data.Repository): () -> Unit {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Harbor CW snapshot", repository.cwSnapshot()))
+        android.widget.Toast.makeText(context, app.harbor.android.i18n.I18n.tr("Copied CW diagnostics"), android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** "in 2d 4h", "in 3h 20m", "in 12m", "Airing now", as PC's Continue watching card; null once it has aired. */
+internal fun countdown(airsAt: Long, now: Long = System.currentTimeMillis()): String? {
+    val diff = airsAt - now
+    if (diff <= 0) return null
+    val days = diff / 86_400_000
+    val hours = diff % 86_400_000 / 3_600_000
+    val minutes = diff % 3_600_000 / 60_000
+    return when {
+        days > 0 -> "in ${days}d ${hours}h"
+        hours > 0 -> "in ${hours}h ${minutes}m"
+        else -> "in ${maxOf(1, minutes)}m"
     }
 }

@@ -60,6 +60,11 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     @Volatile private var width = 0L
     @Volatile private var height = 0L
     private var lastPlaying = false
+    private val output = AudioOutputCapabilities(context)
+    @Volatile private var passthrough = output.selection(settings).active
+    @Volatile private var requestedVolume = 1f
+    private val pcmFilters = mpv.getPropertyString("af").orEmpty()
+    private val pcmChannels = mpv.getPropertyString("audio-channels") ?: "auto-safe"
 
     companion object {
         private val STANDARD_RATES = listOf(23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 120.0)
@@ -85,6 +90,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
             opt("config", "no")
             opt("vo", "null")
             opt("gpu-context", "android")
+            val shaderCache = File(context.cacheDir, "mpv-shader-cache")
+            if (shaderCache.isDirectory || shaderCache.mkdirs()) opt("gpu-shader-cache-dir", shaderCache.absolutePath)
             opt("opengl-es", "yes")
             // Auto: hardware decoding straight into GPU textures (AImageReader), so shaders and
             // subtitles still apply; the copy-back path next, then software.
@@ -180,6 +187,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 val value = line.substringAfter('=', "yes").trim()
                 if (name.isNotEmpty() && runCatching { mpv.setOptionString(name, value) }.getOrDefault(-1) < 0) Log.w(TAG, "mpv rejected option $line")
             }
+            val selection = AudioOutputCapabilities.initialSelection(context, s)
+            opt("audio-spdif", selection.mpv.joinToString(","))
         }
 
         /** Harbor's loudness and sound profiles, as ffmpeg filters. */
@@ -232,6 +241,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     init {
+        output.onChanged = { updateAudioOutput() }
         mpv.addObserver(this)
         mpv.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
         mpv.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
@@ -244,8 +254,11 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.observeProperty("width", MPVLib.MpvFormat.MPV_FORMAT_INT64)
         mpv.observeProperty("height", MPVLib.MpvFormat.MPV_FORMAT_INT64)
         mpv.observeProperty("track-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
+        mpv.observeProperty("sid", MPVLib.MpvFormat.MPV_FORMAT_NONE)
+        mpv.observeProperty("sub-ass-extradata", MPVLib.MpvFormat.MPV_FORMAT_NONE)
         mpv.observeProperty("chapter-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
         mpv.observeProperty("sub-text", MPVLib.MpvFormat.MPV_FORMAT_STRING)
+        if (settings.audioPassthrough) mpv.observeProperty("audio-params/format", MPVLib.MpvFormat.MPV_FORMAT_STRING)
     }
 
     // ---- Surface ----
@@ -268,8 +281,14 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         pendingLoad?.let { pendingLoad = null; it() }
     }
 
+    private var surfaceSize = ""
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        mpv.setPropertyString("android-surface-size", "${width}x$height")
+        val size = "${width}x$height"
+        if (size != surfaceSize) {
+            surfaceSize = size
+            mpv.setPropertyString("android-surface-size", size)
+        }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -284,6 +303,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun eventProperty(property: String) {
         if (property == "track-list") main.post { listener?.onTracksChanged() }
+        if (property in setOf("track-list", "sid", "sub-ass-extradata")) later { refreshAssSize() }
         if (property == "chapter-list") main.post { listener?.onChaptersChanged() }
     }
 
@@ -382,6 +402,14 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     }
 
     override fun eventProperty(property: String, value: String) {
+        if (property == "audio-params/format") later {
+            // Read on our worker: a newer track or file may have overtaken this event.
+            val format = mpv.getPropertyString("audio-params/format")
+            if (format != null) {
+                val active = format.startsWith("spdif", ignoreCase = true)
+                if (active != passthrough) applyAudioProcessing(active)
+            }
+        }
         if (property == "sub-text") {
             if (value.any(::isArabic)) rtlFont(true) else if (value.any(Char::isLetter)) rtlFont(false)
             keepShownLine(value)
@@ -395,9 +423,25 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     @Volatile private var styleFontUploaded = false
     @Volatile private var arabicFont = false
     @Volatile private var styleScale = 1.0
+    @Volatile private var assSizeFactor: Double? = null
+    @Volatile private var matchAssSize = false
 
     /** Arabic faces are drawn small for their size (tall line metrics for the marks); a little larger matches Latin lines. */
-    private fun subScale() = styleScale * if (arabicFont) 1.25 else 1.0
+    private fun subScale() = (if (matchAssSize) assSizeFactor?.let { (it * styleScale * 32).coerceIn(0.2, 6.0) } else null)
+        ?: (styleScale * if (arabicFont) 1.25 else 1.0)
+
+    private fun refreshAssSize() {
+        assSizeFactor = null
+        if (matchAssSize) {
+            val sid = mpv.getPropertyString("sid")
+            val codec = mpv.getPropertyString("current-tracks/sub/codec")
+            if (sid != null && sid !in setOf("no", "auto") && codec in setOf("ass", "ssa")) {
+                val header = mpv.getPropertyString("sub-ass-extradata")
+                if (mpv.getPropertyString("sid") == sid) assSizeFactor = header?.let(AssHeader::factor)
+            }
+        }
+        mpv.setPropertyDouble("sub-scale", subScale())
+    }
 
     private fun isArabic(c: Char) = c.code in 0x0600..0x06FF || c.code in 0x0750..0x077F || c.code in 0xFB50..0xFDFF || c.code in 0xFE70..0xFEFC
 
@@ -492,6 +536,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         mpv.setPropertyString("http-header-fields", headers.filterKeys { !it.equals("User-Agent", true) }.entries.joinToString(",") { (k, v) -> "$k: ${v.replace(",", "\\,")}" })
         mpv.setPropertyString("start", if (startMs > 0) "%.3f".format(Locale.US, startMs / 1000.0) else "none")
         val start = {
+            applyAudioOutput(output.selection(settings))
             mpv.command(arrayOf("loadfile", NetRelay.forMpv(url), "replace"))
             mpv.setPropertyBoolean("pause", false)
         }
@@ -508,6 +553,36 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     private val calls = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "harbor-mpv").apply { isDaemon = true } }
     private fun later(change: () -> Unit) {
         runCatching { calls.execute { runCatching(change).onFailure { Log.w(TAG, "mpv change failed", it) } } }
+    }
+
+    private fun applyAudioOutput(selection: AudioPassthrough.Selection) {
+        mpv.setPropertyString("audio-spdif", selection.mpv.joinToString(","))
+        if (settings.audioPassthrough) applyAudioProcessing(selection.active)
+    }
+
+    private fun applyAudioProcessing(active: Boolean) {
+        passthrough = active
+        // Leave the decoder free to select a bitstream; restore the mix for decoded PCM tracks.
+        mpv.setPropertyString("af", if (active) "" else pcmFilters)
+        mpv.setPropertyString("audio-channels", if (active) "auto-safe" else pcmChannels)
+        mpv.setPropertyDouble("volume-max", maxVolume * 100.0)
+        applyVolume()
+    }
+
+    private fun updateAudioOutput() {
+        if (!settings.audioPassthrough) return
+        val selection = output.selection(settings)
+        later {
+            applyAudioOutput(selection)
+            // Reopen the decoder as well as the output after HDMI/headphone routing changes.
+            if (loaded) {
+                val aid = mpv.getPropertyString("aid")
+                if (aid != null && aid != "no") {
+                    mpv.setPropertyString("aid", "no")
+                    mpv.setPropertyString("aid", aid)
+                }
+            }
+        }
     }
 
     override fun play() {
@@ -624,6 +699,9 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
                 language = lang,
                 commentary = title?.contains("commentary", ignoreCase = true) == true,
                 external = b("external"),
+                title = title,
+                codec = codec,
+                channels = (track["demux-channel-count"] as? JsonPrimitive)?.intOrNull,
             )
         }
         return out
@@ -632,7 +710,10 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
     override fun audioTracks() = tracks("audio")
     override fun textTracks() = tracks("sub")
 
-    override fun selectAudio(key: String) = later { mpv.setPropertyString("aid", key.substringAfter(':')) }
+    override fun selectAudio(key: String) = later {
+        if (settings.audioPassthrough) applyAudioOutput(output.selection(settings))
+        mpv.setPropertyString("aid", key.substringAfter(':'))
+    }
 
     /**
      * Subtitle track changes, in order, off the main thread: mpv's sub-add downloads the whole file
@@ -646,6 +727,7 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         subtitleWork.execute {
             if (key != null) rtlFont(isArabicLanguage(language))
             mpv.setPropertyString("sid", key?.substringAfter(':') ?: "no")
+            later { refreshAssSize() }
         }
     }
 
@@ -677,7 +759,8 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
         fun argb(c: Long, alpha: Float = 1f) = "#%02X%06X".format(java.util.Locale.ROOT, (alpha * 255).toInt().coerceIn(0, 255), c and 0xFFFFFF)
         val color = argb(prefs.subColor, style.subOpacity.coerceIn(0.2f, 1f))
         styleScale = prefs.subScale.toDouble()
-        mpv.setPropertyDouble("sub-scale", subScale())
+        matchAssSize = style.assOverride == "scale"
+        refreshAssSize()
         mpv.setPropertyString("sub-color", color)
         mpv.setPropertyBoolean("sub-bold", style.subBold)
         val horizontal = subHorizontal(style)
@@ -730,10 +813,18 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override fun selectSecondaryText(key: String?) = later { mpv.setPropertyString("secondary-sid", key?.substringAfter(':') ?: "no") }
 
-    override val maxVolume get() = settings.volumeBoostMax.coerceIn(1, 3).toFloat()
+    override val maxVolume get() = if (passthrough) 1f else settings.volumeBoostMax.coerceIn(1, 3).toFloat()
 
     /** 0..maxVolume of mpv's own volume, on top of the phone's. */
-    override fun setVolume(level: Float) = later { mpv.setPropertyDouble("volume", (level * 100.0).coerceIn(0.0, maxVolume * 100.0)) }
+    override fun setVolume(level: Float) {
+        requestedVolume = level
+        later { applyVolume() }
+    }
+
+    private fun applyVolume() {
+        if (settings.audioPassthrough) mpv.setPropertyBoolean("mute", requestedVolume <= 0f)
+        mpv.setPropertyDouble("volume", if (passthrough) 100.0 else (requestedVolume * 100.0).coerceIn(0.0, maxVolume * 100.0))
+    }
 
     override fun chapters(): List<Chapter> {
         val list = mpv.getPropertyString("chapter-list")
@@ -748,12 +839,17 @@ class MpvEngine private constructor(context: Context, private val mpv: MPVLib, p
 
     override val supportsShaders = true
 
+    private var appliedShaders: List<String> = emptyList()
+
     override fun setShaders(paths: List<String>) = later {
+        if (paths == appliedShaders) return@later
+        appliedShaders = paths.toList()
         if (paths.isEmpty()) mpv.command(arrayOf("change-list", "glsl-shaders", "clr", ""))
         else mpv.command(arrayOf("change-list", "glsl-shaders", "set", paths.joinToString(":")))
     }
 
     override fun release() {
+        output.release()
         surface.holder.removeCallback(this)
         calls.shutdownNow()
         subtitleWork.shutdownNow()

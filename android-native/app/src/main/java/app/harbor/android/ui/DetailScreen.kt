@@ -136,6 +136,8 @@ fun DetailScreen(
     val providerKeys by repository.providerKeys.collectAsState()
     var mdblist by remember { mutableStateOf<Mdblist.Scores?>(null) }
     var network by remember { mutableStateOf<String?>(null) }
+    // The episode ordering chosen in Settings (DVD, Absolute, Alternate): aired (season, number) → shown.
+    var episodeOrder by remember(id) { mutableStateOf<Map<Pair<Int, Int>, Pair<Int, Int>>?>(null) }
     var art by remember { mutableStateOf<Fanart.Art?>(null) }
     val tmdbKey by repository.tmdbKey.collectAsState()
     var anime by remember { mutableStateOf<AnimeExtra?>(null) }
@@ -156,9 +158,19 @@ fun DetailScreen(
     }
 
     // Harbor's anime extras from AniList: characters, related anime, other titles, stats, next episode.
-    LaunchedEffect(meta?.id) {
+    // Again once the full metadata arrives, so its episode list gets AniList's dates too.
+    LaunchedEffect(meta?.id, full) {
         val current = meta ?: return@LaunchedEffect
         if (current.id.substringBefore(':') !in setOf("kitsu", "mal", "anilist")) return@LaunchedEffect
+        // AniList's airing times for this entry's episodes (PC 1.0.4): the Kitsu addon's dates are often off.
+        // Specials keep their own dates; a page that moved on meanwhile is left alone.
+        val aired = app.harbor.android.data.AniListSchedule.times(current.id)
+        if (aired.isNotEmpty()) meta?.takeIf { it.id == current.id }?.let { now ->
+            meta = now.copy(videos = now.videos?.map { v ->
+                val at = v.episode?.takeIf { (v.season ?: 1) >= 1 }?.let { aired[it] } ?: return@map v
+                v.copy(released = java.time.Instant.ofEpochSecond(at).toString())
+            })
+        }
         val ids = AnimeInfo.ids(current.id) ?: return@LaunchedEffect
         // The IMDb id behind the anime gives it Wikidata's awards too.
         ids.imdb?.takeIf { awards.isEmpty() }?.let { imdb -> awards = runCatching { Awards.forTitle(imdb) }.getOrDefault(emptyList()) }
@@ -204,6 +216,7 @@ fun DetailScreen(
         val tvdbId = if (series && tvdbKey != null) runCatching { Tvdb.seriesId(tvdbKey, imdb) }.getOrNull() else null
         // TheTVDB: the network, and episode titles, descriptions and stills in your language.
         if (tvdbKey != null && tvdbId != null) {
+            episodeOrder = runCatching { Tvdb.ordering(tvdbKey, tvdbId, HarborDisplay.settings.tvdbSeasonType) }.getOrNull()
             network = runCatching { Tvdb.network(tvdbKey, tvdbId) }.getOrNull()
             val lang = HarborDisplay.settings.metadataLanguage.ifEmpty { java.util.Locale.getDefault().language }
             val episodes = runCatching { Tvdb.episodes(tvdbKey, tvdbId, Tvdb.language(lang)) }.getOrDefault(emptyList())
@@ -295,6 +308,7 @@ fun DetailScreen(
                 anime,
                 relatedKitsu,
                 holdText,
+                episodeOrder = episodeOrder,
             )
             failed -> EmptyState("Couldn't load this title", "None of your addons has details for it.")
             else -> Loading(Modifier.padding(top = 160.dp))
@@ -333,9 +347,18 @@ private fun DetailBody(
     relatedKitsu: Map<Int, Int> = emptyMap(),
     /** The title, logo, genres and story are waiting for your language (see holdText). */
     holdText: Boolean = false,
+    /** A TVDB ordering to show the episodes in; their ids (playback, watched, trackers) stay as aired. */
+    episodeOrder: Map<Pair<Int, Int>, Pair<Int, Int>>? = null,
 ) {
     var trailersOpen by remember(meta.id) { mutableStateOf(false) }
-    val videos = meta.videos.orEmpty()
+    val airedVideos = meta.videos.orEmpty()
+    // The list shows the chosen ordering's numbers; Play/next and every id keep the aired ones.
+    val videos = remember(airedVideos, episodeOrder) {
+        if (episodeOrder.isNullOrEmpty()) airedVideos else airedVideos.map { v ->
+            val shown = episodeOrder[(v.season ?: -1) to (v.episode ?: -1)] ?: return@map v
+            v.copy(season = shown.first, episode = shown.second)
+        }
+    }
     val isSeries = meta.type != "movie" && videos.isNotEmpty()
     // Season 0 holds specials; start on the first real season.
     val seasons = remember(videos) { videos.mapNotNull { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })) }
@@ -345,6 +368,13 @@ private fun DetailBody(
         val saved = if (HarborDisplay.settings.rememberSeason) seasonPrefs.getInt(meta.id, -1).takeIf { it in seasons } else null
         mutableStateOf(saved ?: seasons.firstOrNull())
     }
+    var episodePage by rememberSaveable(meta.id, season) {
+        mutableStateOf(seasonPrefs.getInt("page:${meta.id}:$season", 0))
+    }
+    val selectPage: (Int) -> Unit = { page ->
+        episodePage = page
+        seasonPrefs.edit().putInt("page:${meta.id}:$season", page).apply()
+    }
     // The page can open on the poster's preview, before the episodes arrive: pick a season once they do.
     LaunchedEffect(seasons) {
         if (season !in seasons) season = (if (HarborDisplay.settings.rememberSeason) seasonPrefs.getInt(meta.id, -1).takeIf { it in seasons } else null) ?: seasons.firstOrNull()
@@ -353,7 +383,7 @@ private fun DetailBody(
         videos.filter { it.season == season }.sortedBy { it.episode ?: 0 }
             .let { if (HarborDisplay.settings.episodesNewestFirst) it.reversed() else it }
     }
-    val next = remember(meta.id, videos) { if (isSeries) nextEpisode(repository, meta, videos) else null }
+    val next = remember(meta.id, airedVideos) { if (isSeries) nextEpisode(repository, meta, airedVideos) else null }
     val episodeQuery = rememberEpisodeQuery(meta.id)
     // Harbor's episode ratings: OMDb's real IMDb scores with a key, else TMDB's; one call per season.
     val omdbKey by repository.omdbKey.collectAsState()
@@ -387,9 +417,27 @@ private fun DetailBody(
         if (!isSeries || !HarborDisplay.settings.showEpisodeDescription || episodeText.containsKey("$textLanguage|$s")) return@LaunchedEffect
         episodeText["$textLanguage|$s"] = runCatching { Tmdb.seasonEpisodeText(key, tv, s) }.getOrDefault(emptyMap())
     }
+    // Some addons date a whole season with one placeholder (Cinemeta gives every episode of The
+    // Office's first season 31 Jan 2001). Only then are TMDB's air dates used for that season.
+    val airDates = remember(meta.id) { androidx.compose.runtime.mutableStateMapOf<Int, Map<Int, String>>() }
+    LaunchedEffect(meta.id, season, tmdbKey, details?.tmdbId, episodeOrder) {
+        val s = season ?: return@LaunchedEffect
+        if (!isSeries || !episodeOrder.isNullOrEmpty() || airDates.containsKey(s)) return@LaunchedEffect
+        val inSeason = videos.filter { it.season == s }
+        if (inSeason.size < 2 || inSeason.mapNotNull { it.released?.take(10) }.let { d -> d.size < inSeason.size || d.distinct().size > 1 }) return@LaunchedEffect
+        val key = tmdbKey ?: return@LaunchedEffect
+        val tv = details?.tmdbId?.takeIf { it > 0 } ?: return@LaunchedEffect
+        airDates[s] = runCatching { Tmdb.seasonAirDates(key, tv, s) }.getOrDefault(emptyMap())
+    }
     val englishText = textLanguage.substringBefore('-').equals("en", ignoreCase = true)
-    val shownVideos = remember(videos, episodeText.toMap(), textLanguage) {
-        if (episodeText.isEmpty()) videos else videos.map { v ->
+    val datedVideos = remember(videos, airDates.toMap()) {
+        if (airDates.isEmpty()) videos else videos.map { v ->
+            val date = airDates[v.season ?: -1]?.get(v.episode ?: -1) ?: return@map v
+            v.copy(released = "${date}T00:00:00.000Z")
+        }
+    }
+    val shownVideos = remember(datedVideos, episodeText.toMap(), textLanguage) {
+        if (episodeText.isEmpty()) datedVideos else datedVideos.map { v ->
             val (name, story) = episodeText["$textLanguage|${v.season}"]?.get(v.episode ?: -1) ?: return@map v
             v.copy(
                 // In another language TMDB's story wins; in English the addon's stays when it has one.
@@ -514,12 +562,14 @@ private fun DetailBody(
                     rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
                     reviewMeta = meta,
+                    page = episodePage, onPage = selectPage,
                 )
             }
             if (!tv) (details?.overview ?: meta.description)?.takeIf { !holdText }?.let { synopsis ->
                 item(key = "synopsis") { Synopsis(synopsis, details?.tagline, side) }
             }
             anime?.nextAiring?.let { (at, ep) -> item(key = "airing") { AnimeAiringBanner(at, ep, side) } }
+            // Content Advisory isn't on PC's title page, so it's left off here too.
             // Watch on: TMDB's providers for your region; for anime, Kitsu's streaming links.
             details?.watchOn.orEmpty().ifEmpty { animeStreamers }.takeIf { it.isNotEmpty() }?.let { providers ->
                 if (tv) item(key = "watch") { app.harbor.android.ui.tv.TvWatchOnRow(providers) { uri.openUri(it) } }
@@ -582,6 +632,7 @@ private fun DetailBody(
                     set = repository::updateSettings,
                     listGap = 30.dp,
                     seasonItems = seasonList,
+                    page = episodePage, onPage = selectPage,
                 )
             }
             val cast = details?.cast?.takeIf { it.isNotEmpty() } ?: meta.castNames.map { CastMember(it, null, null) }
@@ -608,6 +659,10 @@ private fun DetailBody(
             val info = infoOf(meta, details) + animeInfo(anime, details)
             if (info.isNotEmpty()) item(key = "info") { Information(info, if (wide) 3 else 2, side) }
             anime?.statusDistribution?.takeIf { it.isNotEmpty() }?.let { item(key = "stats") { AnimeStats(it, side) } }
+            // Harbor members' reviews and ratings (PC 1.0.4), above the other sites' comments.
+            if (meta.type == "movie" || meta.type == "series") item(key = "harbor-reviews") {
+                HarborReviewsSection(repository, meta, imdbId, side)
+            }
             if (HarborDisplay.settings.showTraktComments && comments.isNotEmpty()) {
                 item(key = "trakt") {
                     TraktCommentsSection(comments, "https://trakt.tv/${if (meta.type == "movie") "movies" else "shows"}/$imdbId", side)

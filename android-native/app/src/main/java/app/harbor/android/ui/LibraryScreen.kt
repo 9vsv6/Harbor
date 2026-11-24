@@ -140,6 +140,28 @@ fun LibraryScreen(
 
     fun time(s: String?) = s?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: 0L
     val watchedIds = HarborDisplay.watchedIds
+    val addons by repository.addons.collectAsState()
+    val builtins by repository.builtins.collectAsState()
+    var finishedSeries by remember(library, shelves.watched, myList, nuvioLibrary) { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(tab, library, shelves.watched, myList, nuvioLibrary, addons, builtins) {
+        if (tab != LibTab.Watchlist) return@LaunchedEffect
+        val candidates = (library.filter { !it.removed || it.temp }.map { it.toMeta() } + myList + nuvioLibrary).distinctBy { it.id }
+            .filter { it.type in setOf("series", "anime") && (it.id in shelves.watched ||
+                shelves.watched.any { watched -> watched.startsWith(it.id + ":") } ||
+                library.firstOrNull { entry -> entry.id == it.id }?.state?.let { state -> !state.watched.isNullOrEmpty() } == true) }
+        val finished = mutableSetOf<String>()
+        for (meta in candidates) {
+            if (meta.id in shelves.watched) { finished += meta.id; continue }
+            val remote = library.firstOrNull { it.id == meta.id }?.state?.watched
+            // Bitfields belong to Cinemeta's list, never an addon's alternate episode order.
+            val sources = if (remote != null && meta.id.startsWith("tt")) (builtins + addons).filter { it.manifest.id == app.harbor.android.data.AddonClient.CINEMETA_ID } else repository.metaAddons()
+            val full = kotlinx.coroutines.withTimeoutOrNull(10_000) { app.harbor.android.data.AddonClient.meta(sources, meta.type, meta.id) } ?: continue
+            val videos = full.videos.orEmpty()
+            val watched = shelves.watched + app.harbor.android.data.LibraryProgress.watched(remote, videos)
+            if (app.harbor.android.data.LibraryProgress.seriesFinished(videos, watched)) finished += meta.id
+        }
+        finishedSeries = finished
+    }
     // Library: Stremio's library (what you added or played) and your watchlist on this device.
     // In Nuvio mode the watchlist is the Nuvio profile's library.
     val all = remember(library, myList, nuvioLibrary, continuing) {
@@ -157,7 +179,11 @@ fun LibraryScreen(
         }) { tab = it }
         when (tab) {
             LibTab.Library -> MetaTab(all, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
-            LibTab.Watchlist -> MetaTab(all.filter { it.meta.id !in watchedIds }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
+            LibTab.Watchlist -> MetaTab(all.filter { entry ->
+                val meta = entry.meta
+                if (meta.type == "movie") meta.id !in watchedIds && !app.harbor.android.data.LibraryProgress.movieFinished(library.firstOrNull { it.id == meta.id })
+                else meta.id !in shelves.watched && meta.id !in finishedSeries
+            }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.History -> MetaTab(
                 (library.filter { (it.state?.timesWatched ?: 0) > 0 || (it.state?.flaggedWatched ?: 0) > 0 }
                     .map { Entry(it.toMeta(), time(it.state?.lastWatched), it.state?.timesWatched ?: 0, true) } +
@@ -170,22 +196,23 @@ fun LibraryScreen(
             LibTab.Favorites -> MetaTab(shelves.favorites.map { Entry(it, 0L) }, onOpen, inList = { repository.inMyList(it) }, groupByYear = true)
             LibTab.Trakt -> SectionsGrid(
                 sectionsFor(tab) {
-                    val auth = trackers.trakt ?: return@sectionsFor emptyList()
-                    listOf("Watchlist" to runCatching { Trakt.watchlist(auth) }.getOrDefault(emptyList()), "Watched" to runCatching { Trakt.watched(auth) }.getOrDefault(emptyList()))
+                    if (trackers.trakt?.accessToken == null) return@sectionsFor emptyList()
+                    loadAll(listOf("Watchlist" to { repository.withTrakt { Trakt.watchlist(it) } }, "Watched" to { repository.withTrakt { Trakt.watched(it) } }))
                 },
                 onOpen,
             )
             LibTab.Simkl -> SectionsGrid(
                 sectionsFor(tab) {
                     val auth = trackers.simkl ?: return@sectionsFor emptyList()
-                    listOf("watching" to "Watching", "plantowatch" to "Plan to Watch", "completed" to "Completed").map { (status, title) ->
-                        title to listOf("shows", "anime", "movies").flatMap { kind -> runCatching { Simkl.list(auth, kind, status) }.getOrDefault(emptyList()) }
-                    }
+                    loadAll(listOf("watching" to "Watching", "plantowatch" to "Plan to Watch", "completed" to "Completed").map { (status, title) ->
+                        title to suspend { listOf("shows", "anime", "movies").flatMap { kind -> Simkl.list(auth, kind, status) } }
+                    })
                 },
                 onOpen,
             )
             LibTab.Letterboxd -> SectionsGrid(
-                sectionsFor(tab) { Letterboxd.homeRows(settings.letterboxd, trackers.letterboxd).map { it.title to it.metas } },
+                // PC's tab: your Letterboxd watchlist, whichever lists Home shows.
+                sectionsFor(tab) { listOf("Watchlist" to Letterboxd.watchlist(settings.letterboxd, trackers.letterboxd)) },
                 onOpen,
             )
             LibTab.PublicMetaDb -> PmdbLibraryTab(repository) { metas ->
@@ -387,18 +414,35 @@ private fun ListsTab(repository: Repository, onOpen: (Meta) -> Unit) {
 }
 
 /** A tracker's library as sections ("Watching 16"), loaded when its tab opens. */
+private class LoadedSections(val sections: List<Pair<String, List<Meta>>>, val error: String? = null)
+
 @Composable
-private fun sectionsFor(key: LibTab, load: suspend () -> List<Pair<String, List<Meta>>>): List<Pair<String, List<Meta>>>? {
-    var sections by remember(key) { mutableStateOf<List<Pair<String, List<Meta>>>?>(null) }
-    LaunchedEffect(key) { sections = runCatching { load() }.getOrDefault(emptyList()) }
+private fun sectionsFor(key: LibTab, load: suspend () -> List<Pair<String, List<Meta>>>): LoadedSections? {
+    var sections by remember(key) { mutableStateOf<LoadedSections?>(null) }
+    LaunchedEffect(key) {
+        sections = try { LoadedSections(load()) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { LoadedSections(emptyList(), e.message ?: e.javaClass.simpleName) }
+    }
     return sections
 }
 
+/** Each list on its own; an error only when every one of them failed (so one bad list doesn't hide the rest). */
+private suspend fun loadAll(lists: List<Pair<String, suspend () -> List<Meta>>>): List<Pair<String, List<Meta>>> {
+    val results = lists.map { (title, load) ->
+        title to try { Result.success(load()) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
+    }
+    if (results.isNotEmpty() && results.all { it.second.isFailure }) throw results.first().second.exceptionOrNull()!!
+    return results.map { (title, r) -> title to r.getOrDefault(emptyList()) }
+}
+
 @Composable
-private fun SectionsGrid(sections: List<Pair<String, List<Meta>>>?, onOpen: (Meta) -> Unit) {
+private fun SectionsGrid(loaded: LoadedSections?, onOpen: (Meta) -> Unit) {
+    val sections = loaded?.sections
     when {
         sections == null -> Loading(Modifier.padding(top = 80.dp))
-        sections.none { it.second.isNotEmpty() } -> EmptyState("Nothing here yet", "Your list on this service is empty, or it couldn't be reached.")
+        loaded.error != null && sections.none { it.second.isNotEmpty() } -> EmptyState("Couldn't load this list", loaded.error.take(160))
+        sections.none { it.second.isNotEmpty() } -> EmptyState("Nothing here yet", "Your list on this service is empty.")
         else -> LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 112.dp * HarborDisplay.settings.posterScale),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 32.dp),

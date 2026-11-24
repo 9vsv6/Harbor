@@ -54,6 +54,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -228,7 +229,9 @@ private fun HarborRoot(repository: Repository) {
             if (video == null) {
                 Toast.makeText(context, "Nothing left to watch in ${meta.name}", Toast.LENGTH_SHORT).show()
                 // Skip it and carry on with the rest of the queue.
-                app.harbor.android.data.PlayQueue.after(item.id)?.let { app.harbor.android.data.PlayQueue.pendingStart.value = it }
+                val next = app.harbor.android.data.PlayQueue.after(item.id)
+                app.harbor.android.data.PlayQueue.archive(item.id, "skipped")
+                next?.let { app.harbor.android.data.PlayQueue.pendingStart.value = it }
                 return@launch
             }
             app.harbor.android.data.PlayQueue.markPlaying(item)
@@ -373,6 +376,7 @@ private fun HarborRoot(repository: Repository) {
                         onGenre = { type, genre -> nav.openCatalog(AddonClient.CINEMETA_ID, type, "top", genre, "$genre Movies") },
                     )
                 }
+                tvPage("community") { app.harbor.android.ui.SocialScreen(repository, onBack = { nav.popBackStack() }) }
                 tvPage("calendar") { app.harbor.android.ui.CalendarScreen(repository, onBack = if (wide) null else ({ nav.popBackStack() }), onOpen = { open(it) }, onSettings = { nav.selectTab(Tab.Profile) }) }
                 tvPage("downloads") {
                     app.harbor.android.ui.DownloadsScreen(onBack = if (wide) null else ({ nav.popBackStack() })) { d ->
@@ -562,6 +566,7 @@ private fun HarborRoot(repository: Repository) {
                         app.harbor.android.ui.AccountItem("Library", R.drawable.nav_library) { nav.selectTab(Tab.MyStuff) },
                         app.harbor.android.ui.AccountItem("Downloads", R.drawable.nav_download, page("downloads")),
                         app.harbor.android.ui.AccountItem("Calendar", R.drawable.nav_calendar, page("calendar")),
+                        app.harbor.android.ui.AccountItem("Community", R.drawable.set_users, page("community")),
                         app.harbor.android.ui.AccountItem("Plugins", R.drawable.set_puzzle, page("plugins")).takeIf { plugins },
                         app.harbor.android.ui.AccountItem("Settings", R.drawable.nav_settings) { nav.selectTab(Tab.Profile) },
                     ),
@@ -709,6 +714,7 @@ private fun SideRail(route: String?, view: BrowseView, onSelect: (Tab) -> Unit, 
         RailIcon(pages[2].glyph, pages[2].label, route == pages[2].route) { onPage(pages[2].route) }
         RailIcon(pages[1].glyph, pages[1].label, route == pages[1].route) { onPage(pages[1].route) }
         RailIcon(pages[3].glyph, pages[3].label, route == pages[3].route) { onPage(pages[3].route) }
+        RailIcon(pages[5].glyph, pages[5].label, route == pages[5].route) { onPage(pages[5].route) }
         }
         Box(Modifier.height(8.dp))
         Box(
@@ -725,6 +731,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.RailIcon(glyph: Int, 
     // Harbor's rail: the glyph alone, accent when active, no pill or label.
     Box(
         Modifier.weight(1f, fill = false).sizeIn(maxWidth = 56.dp, maxHeight = 56.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
+            // Touch only: a key press (Enter in search) mustn't park focus here and draw a box round it.
+            .focusProperties { canFocus = app.harbor.android.perf.Perf.isTv }
             .clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

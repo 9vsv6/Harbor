@@ -111,6 +111,42 @@ object Tvdb {
         return out
     }
 
+    /** One season type's raw episodes: (TVDB episode id, season, number). */
+    private suspend fun raw(key: String, seriesId: Int, slug: String): List<Triple<Int, Int, Int>> {
+        val out = mutableListOf<Triple<Int, Int, Int>>()
+        for (page in 0..9) {
+            val data = get(key, "/series/$seriesId/episodes/$slug?page=$page")?.get("data").objectOrNull ?: break
+            val list = (data["episodes"] as? JsonArray).orEmpty().map { it.jsonObject }
+            list.forEach { e ->
+                val id = e["id"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                val season = e["seasonNumber"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                val number = e["number"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                out += Triple(id, season, number)
+            }
+            if (list.size < 500) break
+        }
+        return out
+    }
+
+    /**
+     * The chosen episode ordering (PC 1.0.4's TVDB orders): for each episode, its aired
+     * (season, number) → its (season, number) in the ordering. "absolute" runs every regular
+     * episode as one season in aired order; "dvd" and "alternate" are TVDB's own lists. Aired and
+     * Official are the aired order itself (null). Episodes keep their ids: only the numbers shown change.
+     */
+    suspend fun ordering(key: String, seriesId: Int, seasonType: String): Map<Pair<Int, Int>, Pair<Int, Int>>? {
+        if (seasonType !in setOf("dvd", "absolute", "alternate")) return null
+        val aired = raw(key, seriesId, "default")
+        if (aired.isEmpty()) return null
+        if (seasonType == "absolute") {
+            return aired.filter { it.second >= 1 }.sortedWith(compareBy({ it.second }, { it.third }))
+                .mapIndexed { i, (_, s, n) -> (s to n) to (1 to i + 1) }.toMap()
+        }
+        val canonical = aired.associate { (id, s, n) -> id to (s to n) }
+        val alt = raw(key, seriesId, seasonType).takeIf { it.isNotEmpty() } ?: return null
+        return alt.mapNotNull { (id, s, n) -> canonical[id]?.let { it to (s to n) } }.toMap().takeIf { it.isNotEmpty() }
+    }
+
     private val iso1To2 = mapOf(
         "en" to "eng", "es" to "spa", "fr" to "fra", "de" to "deu", "it" to "ita", "ja" to "jpn", "ko" to "kor", "ru" to "rus",
         "pt" to "por", "zh" to "zho", "ar" to "ara", "nl" to "nld", "pl" to "pol", "tr" to "tur", "sv" to "swe", "da" to "dan",

@@ -2,8 +2,11 @@ package app.harbor.android.player
 
 import androidx.compose.ui.focus.focusProperties
 import android.view.KeyEvent
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -97,6 +100,14 @@ internal fun TvPlayerControls(state: PlayerState, actions: PlayerActions, onTouc
                 Identity(state)
                 Scrub(state, actions, playFocus)
                 Times(state)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(u(8f))) {
+                    Pill(Icons.Rounded.PlayArrow, "Queue") { state.queueOpen = true }
+                    if (state.isSeries) Pill(Icons.Rounded.PlayArrow, "Episodes") { state.panel = Panel.Episodes }
+                    if (state.audioTracks.size > 1) Pill(Icons.Outlined.Translate, "Cycle audio tracks", onClick = actions::cycleAudio)
+                    Pill(Icons.Outlined.ClosedCaption, "Smaller subtitles") { actions.stepSubtitleSize(-1) }
+                    Pill(Icons.Outlined.ClosedCaption, "Larger subtitles") { actions.stepSubtitleSize(1) }
+                    Pill(Icons.Rounded.PlayArrow, "Speed") { state.panel = Panel.Speed }
+                }
                 Row(
                     Modifier.padding(top = u(6f)).fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -106,12 +117,14 @@ internal fun TvPlayerControls(state: PlayerState, actions: PlayerActions, onTouc
                         Pill(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = actions::back)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(u(12f)), verticalAlignment = Alignment.CenterVertically) {
-                        RoundButton(Icons.Rounded.FastRewind, "Back ${state.settings.seekBackSec} seconds", u(32f)) { actions.seekBy(-state.settings.seekBackSec * 1_000L) }
+                        RoundButton(Icons.Rounded.FastRewind, "Back ${app.harbor.android.data.PlaybackSteps.label(state.settings.seekBackSec)} seconds", u(32f),
+                            onLongClick = { actions.seekBy(-(state.settings.seekBackLongSec * 1_000).toLong()) }) { actions.seekBy(-(state.settings.seekBackSec * 1_000).toLong()) }
                         RoundButton(
                             if (state.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (state.playing) "Pause" else "Play", u(40f),
                             requester = playFocus, onClick = actions::togglePlay,
                         )
-                        RoundButton(Icons.Rounded.FastForward, "Forward ${state.settings.seekForwardSec} seconds", u(32f)) { actions.seekBy(state.settings.seekForwardSec * 1_000L) }
+                        RoundButton(Icons.Rounded.FastForward, "Forward ${app.harbor.android.data.PlaybackSteps.label(state.settings.seekForwardSec)} seconds", u(32f),
+                            onLongClick = { actions.seekBy((state.settings.seekForwardLongSec * 1_000).toLong()) }) { actions.seekBy((state.settings.seekForwardSec * 1_000).toLong()) }
                     }
                     // Audio comes first, so the others stay put whether or not this video has a choice of audio.
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(u(8f), Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -141,7 +154,7 @@ private fun Identity(state: PlayerState) {
     } else {
         Text(state.title, color = HarborColors.Ink, fontSize = s(17f), fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
-    val line = listOfNotNull(state.episodeLine?.takeIf { it.isNotBlank() }, state.quality?.takeIf { it.isNotBlank() }).joinToString("  ·  ")
+    val line = listOfNotNull((state.episodeLine ?: state.year)?.takeIf { it.isNotBlank() }, state.quality?.takeIf { it.isNotBlank() }).joinToString("  ·  ")
     if (line.isNotEmpty()) Text(line, color = HarborColors.InkSubtle, fontSize = s(8.5f), fontWeight = FontWeight.Medium, maxLines = 1)
 }
 
@@ -155,8 +168,8 @@ private fun Scrub(state: PlayerState, actions: PlayerActions, below: FocusReques
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (e.key.nativeKeyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { actions.seekBy(-state.settings.seekBackSec * 1_000L); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { actions.seekBy(state.settings.seekForwardSec * 1_000L); true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { actions.seekBy(-(state.settings.seekBackSec * 1_000).toLong()); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { actions.seekBy((state.settings.seekForwardSec * 1_000).toLong()); true }
                     else -> false
                 }
             }
@@ -204,11 +217,13 @@ private fun Times(state: PlayerState) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun RoundButton(
     icon: ImageVector,
     label: String,
     size: androidx.compose.ui.unit.Dp,
     requester: FocusRequester? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val source = remember { MutableInteractionSource() }
@@ -220,7 +235,7 @@ private fun RoundButton(
             .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .clip(CircleShape).background(fill)
             .then(if (!focused) Modifier.border(1.dp, HarborColors.Ink.copy(alpha = 0.22f), CircleShape) else Modifier)
-            .clickable(interactionSource = source, indication = null, onClick = onClick),
+            .combinedClickable(interactionSource = source, indication = null, onClick = onClick, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, label, tint = if (focused) HarborColors.Canvas else HarborColors.Ink, modifier = Modifier.size(size * 0.48f))

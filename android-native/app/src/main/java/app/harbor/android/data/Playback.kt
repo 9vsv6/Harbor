@@ -22,8 +22,9 @@ object Playback {
         id: String,
         debrid: DebridAccount?,
         settings: AppSettings = AppSettings(),
-        media3: Boolean = settings.engine == "media3" || app.harbor.android.perf.Perf.isTv,
+        media3: Boolean = settings.engine in setOf("media3", "auto") || app.harbor.android.perf.Perf.isTv,
         prefer: Pair<String, String?>? = null,
+        preferred: SourceRef? = null,
         /** Told which addons failed, as (addon name, reason). */
         onFailures: ((List<Pair<String, String>>) -> Unit)? = null,
         /** The list so far, each time another addon or plugin answers (on the caller's thread). */
@@ -42,7 +43,7 @@ object Playback {
                     arrived += groups
                     val snapshot = arrived.toList()
                     val ordered = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                        order(snapshot, addons, type, debrid, settings, media3, anime, prefer, accounts)
+                        order(snapshot, addons, type, debrid, settings, media3, anime, prefer, preferred, accounts, id)
                     }
                     kotlinx.coroutines.withContext(caller) { deliver(ordered) }
                 }
@@ -76,7 +77,7 @@ object Playback {
         }
         onFailures?.invoke(groups.filter { it.error != null }.map { it.addon.manifest.name to it.error!! })
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            order(groups, addons, type, debrid, settings, media3, anime, prefer, accounts)
+            order(groups, addons, type, debrid, settings, media3, anime, prefer, preferred, accounts, id)
         }
     }
 
@@ -90,7 +91,9 @@ object Playback {
         media3: Boolean,
         anime: AnimeStreams.Request?,
         prefer: Pair<String, String?>?,
+        preferred: SourceRef?,
         accounts: List<DebridAccount>,
+        videoId: String,
     ): List<RankedStream> {
         val rank = addons.withIndex().associate { it.value to it.index }
         // An addon can list a source twice (asked under two ids for anime, say): one row each, as lists key on it.
@@ -124,7 +127,9 @@ object Playback {
                 .thenByDescending { StreamFit.fitsScreen(it.stream) }
                 .thenByDescending { StreamFit.fitsNetwork(it.stream, type) },
         )
-        if (prefer == null || settings.streamSort in Ranking.sourceSorts) return ordered
+        if (settings.streamSort in Ranking.sourceSorts) return ordered
+        if (preferred != null) return preferRemembered(ordered, preferred, debrid != null || accounts.isNotEmpty(), videoId)
+        if (prefer == null) return ordered
         val match = ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) && (prefer.second == null || streamKey(it.stream) == prefer.second) }
             ?: ordered.firstOrNull { it.addon.manifest.id == prefer.first && playable(it.stream) }.takeIf { prefer.second == null }
             ?: return ordered
@@ -134,16 +139,67 @@ object Playback {
     }
 
     /** The source you chose, as Harbor remembers it for the next episode (playback-history.ts). */
-    data class SourceRef(val addonId: String?, val resolution: Int, val releaseGroup: String?, val languages: List<String>)
+    @kotlinx.serialization.Serializable
+    data class SourceRef(
+        val addonId: String?,
+        val resolution: Int,
+        val releaseGroup: String?,
+        val languages: List<String>,
+        val infoHash: String? = null,
+        val fileIdx: Int? = null,
+        val urlFingerprint: String? = null,
+        val bingeGroup: String? = null,
+        val source: String? = null,
+        val streamKey: String = "",
+        val videoId: String? = null,
+    )
 
     private val DUB_LANGUAGES = listOf("en", "fr", "de", "es", "it", "pt", "ru", "ja", "ko", "zh", "hi", "ar", "pl", "tr", "nl")
 
-    fun sourceRef(stream: Stream, addonId: String?): SourceRef = SourceRef(
+    fun sourceRef(stream: Stream, addonId: String?, videoId: String? = null): SourceRef = SourceRef(
         addonId,
         Ranking.traits(stream).resolution,
         releaseGroup(stream),
-        DUB_LANGUAGES.filter { Ranking.mentionsLanguage(stream, listOf(it)) },
+        // By name: the language tags are keyed "English", "Japanese"… ("en" alone never matched them).
+        DUB_LANGUAGES.filter { Ranking.mentionsLanguage(stream, listOf(java.util.Locale(it).getDisplayLanguage(java.util.Locale.ENGLISH))) },
+        stream.infoHash?.lowercase(), stream.fileIdx,
+        stream.url?.let { url -> java.security.MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) } },
+        stream.behaviorHints?.bingeGroup,
+        Ranking.traits(stream).let { when { it.remux -> "remux"; it.bluray -> "bluray"; it.web -> "web"; else -> null } },
+        streamKey(stream), videoId,
     )
+
+    /** Exact file from its serving addon, then its release lineage, before aggregator copies. */
+    fun preferRemembered(ordered: List<RankedStream>, ref: SourceRef, debrid: Boolean, videoId: String? = ref.videoId): List<RankedStream> {
+        val playable = ordered.filter { it.stream.playable(debrid) }
+        fun same(a: String?, b: String?) = !a.isNullOrBlank() && a == b
+        fun exact(item: RankedStream): Boolean {
+            if (ref.videoId != null && videoId != ref.videoId) return false
+            val candidate = sourceRef(item.stream, item.addon.manifest.id)
+            if (same(candidate.infoHash, ref.infoHash)) return ref.fileIdx == null || candidate.fileIdx == null || ref.fileIdx == candidate.fileIdx
+            return same(candidate.urlFingerprint, ref.urlFingerprint)
+        }
+        fun lineage(item: RankedStream): Boolean {
+            val r = sourceRef(item.stream, item.addon.manifest.id)
+            if (ref.resolution > 0 && r.resolution > 0 && ref.resolution != r.resolution) return false
+            if (ref.languages.isNotEmpty() && r.languages.isNotEmpty() && ref.languages.none { it in r.languages }) return false
+            return same(r.infoHash, ref.infoHash) || same(r.bingeGroup, ref.bingeGroup) || same(r.releaseGroup, ref.releaseGroup)
+        }
+        fun score(item: RankedStream): Int {
+            val r = sourceRef(item.stream, item.addon.manifest.id)
+            return (if (item.addon.manifest.id == ref.addonId) 4 else 0) +
+                (if (same(r.releaseGroup, ref.releaseGroup)) 2 else 0) +
+                (if (ref.languages.any { it in r.languages }) 2 else 0) +
+                (if (ref.resolution > 0 && ref.resolution == r.resolution) 1 else 0)
+        }
+        val served = playable.filter { it.addon.manifest.id == ref.addonId }
+        val pick = served.firstOrNull(::exact) ?: served.filter(::lineage).maxByOrNull(::score)
+            ?: playable.firstOrNull(::exact) ?: playable.filter(::lineage).maxByOrNull(::score)
+            // Old saves have only the addon and display name.
+            ?: served.firstOrNull { ref.infoHash == null && ref.urlFingerprint == null && ref.releaseGroup == null && ref.bingeGroup == null && streamKey(it.stream) == ref.streamKey }
+            ?: return ordered
+        return listOf(pick) + (ordered - pick)
+    }
 
     /** The release group: "[SubsPlease] …" or "….1080p.WEB-DL-NTb.mkv". */
     fun releaseGroup(stream: Stream): String? {
@@ -158,6 +214,8 @@ object Playback {
      * else another stream at that quality, the addon's first. The rest keep their order.
      */
     fun preferSource(ordered: List<RankedStream>, ref: SourceRef, debrid: Boolean): List<RankedStream> {
+        val matched = preferRemembered(ordered, ref.copy(videoId = "previous"), debrid, videoId = null)
+        if (matched !== ordered) return matched
         val playable = ordered.filter { it.stream.playable(debrid) }
         fun refs(s: RankedStream) = sourceRef(s.stream, s.addon.manifest.id)
         val matches = playable.filter { s ->
@@ -250,14 +308,22 @@ object Playback {
      * The best stream that actually opens: tries the top few playable ones in rank
      * order, so one uncached torrent doesn't stop auto-play.
      */
-    suspend fun best(ranked: List<RankedStream>, debrid: DebridAccount?, attempts: Int = 3, accounts: List<DebridAccount> = listOfNotNull(debrid)): Ready? {
-        for (candidate in ranked.filter { it.stream.playable(debrid != null || accounts.isNotEmpty()) }.take(attempts)) {
+    suspend fun best(ranked: List<RankedStream>, debrid: DebridAccount?, attempts: Int = 3, accounts: List<DebridAccount> = listOfNotNull(debrid), addons: List<Addon> = ranked.map { it.addon }.distinct(), preferred: SourceRef? = null, videoId: String? = preferred?.videoId): Ready? {
+        // Picker sorting changes the rows, never the remembered first choice for automatic play.
+        val candidates = autoCandidates(ranked, preferred, debrid != null || accounts.isNotEmpty(), videoId)
+        for (candidate in candidates.filter { it.stream.playable(debrid != null || accounts.isNotEmpty()) }.take(attempts)) {
             // Cancelled (you picked another source meanwhile): stop, rather than open the next candidate too.
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             runCatching { resolve(candidate.stream, debrid, candidate.addon.manifest.id, accounts) }
                 .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
-                .getOrNull()?.let { return it }
+                .getOrNull()?.let { ready ->
+                    val url = PlaybackRedirect.resolve(ready.url, ready.stream.behaviorHints?.proxyHeaders?.request.orEmpty(), addons)
+                    return ready.copy(url = url)
+                }
         }
         return null
     }
+
+    internal fun autoCandidates(ranked: List<RankedStream>, preferred: SourceRef?, debrid: Boolean, videoId: String? = preferred?.videoId): List<RankedStream> =
+        if (preferred == null) ranked else preferRemembered(ranked, preferred, debrid, videoId)
 }

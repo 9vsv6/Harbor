@@ -109,7 +109,7 @@ fun SettingsHeader(title: String, onBack: (() -> Unit)?, query: String, onQuery:
 @Composable
 fun SettingsSearchField(query: String, onQuery: (String) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(10.dp)).background(HarborColors.Elevated).padding(start = 12.dp),
+        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(10.dp)).background(HarborColors.Elevated).padding(start = 12.dp, end = if (query.isEmpty()) 12.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Rounded.Search, null, tint = HarborColors.InkSubtle, modifier = Modifier.size(19.dp))
@@ -120,7 +120,7 @@ fun SettingsSearchField(query: String, onQuery: (String) -> Unit) {
                 value = query,
                 onValueChange = onQuery,
                 singleLine = true,
-                textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.5.sp),
+                textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.5.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content),
                 cursorBrush = SolidColor(HarborColors.Accent),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -368,7 +368,7 @@ fun HTextField(
             minLines = minLines,
             visualTransformation = visualTransformation,
             keyboardOptions = keyboardOptions,
-            textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp),
+            textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content),
             cursorBrush = SolidColor(HarborColors.Accent),
             modifier = Modifier.fillMaxWidth(),
         )

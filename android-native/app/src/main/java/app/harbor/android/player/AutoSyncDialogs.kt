@@ -27,6 +27,45 @@ internal fun AutoSyncDialogs(state: PlayerState, actions: PlayerActions) {
             dismissButton = { TextButton(onClick = { if (offer.applied) actions.undoAutoSync() else actions.dismissAutoSync() }) { Text(if (offer.applied) "Undo" else "Keep current timing") } })
     }
     state.autoSyncError?.let { message ->
+        // A Moonshine language without its model (PC's prompt): download just that language here.
+        app.harbor.android.data.Moonshine.missingModelLanguage(message)?.let { language ->
+            val context = LocalContext.current
+            val models by app.harbor.android.data.MoonshineModels.state.collectAsState()
+            val installed = language in models.installed
+            val downloading = models.downloading == language
+            val name = app.harbor.android.data.Moonshine.name(language)
+            AlertDialog(onDismissRequest = actions::dismissAutoSync,
+                title = { Text(if (installed) "Speech model ready" else "Download the $name Moonshine model?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(when {
+                            installed -> "The $name Moonshine model is installed. Sync now to match the subtitle to the speech."
+                            downloading -> "Downloading the $name Moonshine model…" + (if (models.files > 0) " File ${models.file} of ${models.files}." else "")
+                            else -> "$message Moonshine recognizes $name speech on this device, so Auto sync can match the subtitle to the words."
+                        })
+                        if (downloading) models.total.takeIf { it > 0 }?.let { total ->
+                            LinearProgressIndicator(progress = { (models.received.toFloat() / total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                        } ?: LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        models.error?.takeIf { it.first == language && !downloading && !installed }?.let { Text(it.second) }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        when {
+                            installed -> { actions.dismissAutoSync(); actions.startAutoSync() }
+                            downloading -> app.harbor.android.data.MoonshineModels.cancelDownload()
+                            else -> app.harbor.android.data.MoonshineModels.download(context, language)
+                        }
+                    }) { Text(when {
+                        installed -> "Sync now"
+                        downloading -> "Cancel download"
+                        models.error?.first == language -> "Retry download"
+                        else -> "Download model"
+                    }) }
+                },
+                dismissButton = { TextButton(onClick = actions::dismissAutoSync) { Text("Close") } })
+            return@let
+        }
         val model by WhisperModel.state.collectAsState()
         // Speech recognition needs the model: download it right here instead of a trip to Settings.
         val offerModel = message.contains("Whisper Tiny")

@@ -68,6 +68,17 @@ data class CwItem(
     val source: String? = null,
     val altIds: Set<String> = emptySet(),
     val members: List<CwItem> = emptyList(),
+    /** The next anime episode after one you finished (PC's resurfaced card). */
+    val upNext: Boolean = false,
+    /** When that episode airs, from AniList (epoch ms): a countdown until then. */
+    val airsAt: Long? = null,
+)
+
+/** The anime episode after the one last finished, remembered per profile for Continue watching. */
+@kotlinx.serialization.Serializable
+data class AnimeNext(
+    val metaId: String, val name: String, val poster: String? = null, val background: String? = null,
+    val videoId: String, val episode: Int, val finishedAt: Long,
 )
 
 data class Account(val authKey: String, val email: String)
@@ -202,9 +213,17 @@ class Repository(private val context: Context) {
     private val _resume = MutableStateFlow<Map<String, Resume>>(emptyMap())
     private val _traktCw = MutableStateFlow<List<CwItem>>(emptyList())
 
+    // Declared early: the Continue watching flow below reads it while the class is still being built.
+    private val _settings = MutableStateFlow(AppSettings())
+    private val _animeNext = MutableStateFlow<Map<String, AnimeNext>>(emptyMap())
+    private val animeNextSerializer = MapSerializer(String.serializer(), AnimeNext.serializer())
     private val _trackers = MutableStateFlow(TrackerSettings())
     /** This profile's tracker sign-ins. */
     val trackers: StateFlow<TrackerSettings> = _trackers.asStateFlow()
+    /** Refract's watched-history queue and Plan to Watch sync (personal API key, outbound only). */
+    val refract = RefractSync(context.getSharedPreferences("refract-sync", android.content.Context.MODE_PRIVATE), scope) {
+        _trackers.value.refract?.takeIf { it.enabled && it.key.isNotBlank() }?.let { profileKey("refract") to it.key }
+    }
     private val _dismissed = MutableStateFlow<Set<String>>(emptySet())
 
     /** The Harbor account, the account provider (Stremio or Nuvio) and PublicMetaDB. */
@@ -240,12 +259,29 @@ class Repository(private val context: Context) {
                 parseTime(state.lastWatched),
             )
         }
-        (local + remote + trakt + external)
+        val since = System.currentTimeMillis() - 45L * 24 * 60 * 60_000
+        val upNext = _animeNext.value.values.filter { it.finishedAt > since }.map { n ->
+            CwItem(Meta(id = n.metaId, type = "series", name = n.name, poster = n.poster, background = n.background),
+                n.videoId, 0, 0, null, n.episode, n.finishedAt, upNext = true)
+        }
+        (local + remote + trakt + external + upNext)
             .filter { "${it.meta.id}@${it.videoId}" !in dismissed }
     }.transformLatest { items ->
-        emit(ContinueWatching.merge(items))
-        val resolved = CwIdentities.resolve(items, _tmdbKey.value, accounts.pmdb.value)
-        emit(ContinueWatching.merge(resolved))
+        val (waiting, ready) = items.partition { it.upNext }
+        emit(ContinueWatching.merge(ready))
+        // An up-next episode shows only when AniList lists it: with its countdown before it airs.
+        val confirmed = waiting.mapNotNull { item ->
+            val aired = runCatching { AniListSchedule.times(item.meta.id) }.getOrDefault(emptyMap())
+            aired[item.episode ?: -1]?.let { item.copy(airsAt = it * 1000) }
+        }
+        val resolved = CwIdentities.resolve(ready + confirmed, _tmdbKey.value, accounts.pmdb.value)
+        // "Repair Continue Watching identities": the offline database's verified aliases for native ids.
+        val repaired = if (_settings.value.animeIdentityEnabled && _settings.value.animeIdentityRepairEnabled) resolved.map { item ->
+            val native = ContinueWatching.nativeId(item) ?: return@map item
+            val aliases = AnimeIdentity.aliases(native).filter { it.substringBefore(':') in setOf("kitsu", "mal", "anilist", "anidb") }
+            if (aliases.isEmpty()) item else item.copy(altIds = item.altIds + aliases)
+        } else resolved
+        emit(ContinueWatching.merge(repaired))
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private fun loadProfile(prefs: Preferences) {
@@ -258,6 +294,7 @@ class Repository(private val context: Context) {
         _myList.value = prefs[keyMyList]?.let { runCatching { Net.json.decodeFromString(metaListSerializer, it) }.getOrNull() } ?: emptyList()
         _shelves.value = prefs[keyShelves]?.let { runCatching { Net.json.decodeFromString(Shelves.serializer(), it) }.getOrNull() } ?: Shelves()
         _dismissed.value = prefs[keyDismissed]?.let { runCatching { Net.json.decodeFromString(stringSet, it) }.getOrNull() } ?: emptySet()
+        _animeNext.value = prefs[stringPreferencesKey(profileKey("animeUpNext"))]?.let { runCatching { Net.json.decodeFromString(animeNextSerializer, it) }.getOrNull() } ?: emptyMap()
         _trackers.value = prefs[keyTrackers]?.let { runCatching { Net.json.decodeFromString(TrackerSettings.serializer(), it) }.getOrNull() } ?: TrackerSettings()
         _traktCw.value = emptyList()
         _settings.value = prefs[keySettings]?.let { runCatching { savedSettings(it) }.getOrNull() }
@@ -265,6 +302,10 @@ class Repository(private val context: Context) {
             ?.let { it.copy(subtitleFallbacks = LanguageCodes.codes(it.subtitleFallbacks), audioLanguages = LanguageCodes.codes(it.audioLanguages), secondarySubLanguage = LanguageCodes.code(it.secondarySubLanguage)) }
             ?: AppSettings()
         _lastStreams.value = prefs[keyLastStreams]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
+        refract.refresh()
+        refract.flush()
+        providerClear.flush()
+        if (_settings.value.animeIdentityEnabled) AnimeIdentity.refreshIfStale(context)
         scope.launch { refreshTrackers(); runCatching { syncTrackerAvatar() } }
         accounts.load(prefs)
         profileLoaded.forEach { it(prefs) }
@@ -299,9 +340,44 @@ class Repository(private val context: Context) {
     private val keyAutoPlay get() = booleanPreferencesKey(profileKey("autoPlay"))
     private val keyTrackers get() = stringPreferencesKey(profileKey("trackers"))
 
+    /**
+     * Runs a Trakt call with a current sign-in: renewed when close to expiring, and once more when
+     * Trakt refuses it (401: revoked, or renewed on another device). The renewed sign-in is saved.
+     */
+    /** Trakt refused the renewal: that sign-in is spent, so Settings offers Connect again (as PC). */
+    private fun traktSignedOut(spent: TrackerAuth) {
+        updateTrackers { if (it.trakt?.accessToken == spent.accessToken) it.copy(trakt = null) else it }
+    }
+
+    suspend fun <T> withTrakt(block: suspend (TrackerAuth) -> T): T {
+        val saved = _trackers.value.trakt?.takeIf { it.accessToken != null } ?: error("Sign in to Trakt in Settings → Trakt.")
+        var auth = runCatching { Trakt.fresh(saved) }.getOrDefault(saved)
+        if (auth != saved) updateTrackers { if (it.trakt?.refreshToken == saved.refreshToken) it.copy(trakt = auth) else it }
+        return try { block(auth) } catch (e: Net.HttpError) {
+            if (e.code != 401) throw e
+            val before = auth
+            auth = try { Trakt.fresh(before, force = true) } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (r: Exception) {
+                // As PC: only Trakt refusing the renewal ends the connection (not a network hiccup).
+                if (r is Net.HttpError && r.code in setOf(400, 401, 403)) traktSignedOut(before)
+                before
+            }
+            if (auth == before) {
+                // Refused and not renewable (no refresh token or app secret saved): the connection is dead.
+                traktSignedOut(before)
+                error("Your Trakt sign-in has expired. Connect Trakt again in Settings → Trakt.")
+            }
+            updateTrackers { if (it.trakt?.refreshToken == before.refreshToken) it.copy(trakt = auth) else it }
+            block(auth)
+        }
+    }
+
     fun updateTrackers(change: (TrackerSettings) -> TrackerSettings) {
-        val next = change(_trackers.value)
+        val before = _trackers.value
+        val next = change(before)
         _trackers.value = next
+        // A different Refract key starts its own queue; turning sync on sends what waited.
+        if (before.refract?.key != next.refract?.key) refract.reset(profileKey("refract"))
+        if (next.refract != before.refract) { refract.refresh(); refract.flush() }
         val key = keyTrackers
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(TrackerSettings.serializer(), next) }
         if (next.trakt?.accessToken == null) _traktCw.value = emptyList()
@@ -357,9 +433,13 @@ class Repository(private val context: Context) {
         }
         val trakt = initial.trakt?.takeIf { it.accessToken != null } ?: return
         if (profile != keyTrackers || _trackers.value.trakt != trakt) return
-        val fresh = runCatching { Trakt.fresh(trakt) }.getOrDefault(trakt)
-        if (profile != keyTrackers || _trackers.value.trakt != trakt) return
-        if (fresh != trakt) updateTrackers { it.copy(trakt = fresh) }
+        val fresh = runCatching { Trakt.fresh(trakt) }
+            .onFailure { if (it is Net.HttpError && it.code in setOf(400, 401, 403) && profile == keyTrackers) traktSignedOut(trakt) }
+            .getOrDefault(trakt)
+        // Trakt's refresh token works once: the renewed sign-in must be kept, or Trakt is lost
+        // for good. It goes to the profile still holding the old token.
+        if (fresh != trakt && profile == keyTrackers) updateTrackers { if (it.trakt?.refreshToken == trakt.refreshToken) it.copy(trakt = fresh) else it }
+        if (profile != keyTrackers || _trackers.value.trakt != fresh) return
         val playback = if (_settings.value.traktInContinueWatching) runCatching { Trakt.playback(fresh) }.getOrDefault(emptyList()) else emptyList()
         if (profile == keyTrackers && _trackers.value.trakt == fresh) {
             _traktCw.value = if (_settings.value.traktInContinueWatching) playback else emptyList()
@@ -391,7 +471,13 @@ class Repository(private val context: Context) {
             // A stop past 80% marks it watched, which the player's sync indicator shows.
             val label = if (what.season != null && what.episode != null) "Episode ${what.episode}" else "Movie"
             fun done(service: String) { if (action == "stop" && progressPercent >= 80) syncEvents.tryEmit("$service · $label synced") }
-            trackers.trakt?.takeIf { it.accessToken != null }?.let { auth -> runCatching { Trakt.scrobble(auth, action, what, progressPercent) }.onSuccess { done("Trakt") } }
+            trackers.trakt?.takeIf { it.accessToken != null }?.let { auth ->
+                runCatching { Trakt.scrobble(auth, action, what, progressPercent) }.onSuccess {
+                    done("Trakt")
+                    // A confirmed finish drops Trakt's paused card: read the list again rather than show it until restart.
+                    if (action == "stop" && progressPercent >= 80) runCatching { refreshTrackers() }
+                }
+            }
             if (_settings.value.simklScrobble) trackers.simkl?.takeIf { it.accessToken != null }?.let { auth -> runCatching { Simkl.scrobble(auth, action, what, progressPercent) }.onSuccess { done("Simkl") } }
         }
     }
@@ -407,13 +493,23 @@ class Repository(private val context: Context) {
             TrackerSync.Rewatched -> syncEvents.tryEmit("Rewatched on $service · Episode $episode")
             null -> false
         }
+        // "Validate tracker scrobble targets": the online id map must agree with the offline database.
+        suspend fun agrees(scheme: String): Boolean {
+            if (!settings.animeIdentityEnabled || !settings.animeIdentityLiveScrobbleEnabled) return true
+            val offline = AnimeIdentity.idOn("kitsu:$kitsuId", scheme) ?: return true
+            val online = runCatching { AnimeInfo.ids("kitsu:$kitsuId") }.getOrNull()?.let { if (scheme == "anilist") it.anilist else it.mal }?.toString() ?: return true
+            if (online == offline) return true
+            syncEvents.tryEmit("${if (scheme == "anilist") "AniList" else "MyAnimeList"} · not synced: the title didn't match")
+            return false
+        }
         if (settings.anilistAutoSync) trackers.anilist?.takeIf { it.accessToken != null }?.let { auth ->
             val guard = rewatchGuard("anilist")
-            scope.launch { emit("AniList", runCatching { AniList.markWatched(auth, kitsuId, episode, settings.anilistCountRewatches, guard) }.getOrNull()) }
+            scope.launch { if (agrees("anilist")) emit("AniList", runCatching { AniList.markWatched(auth, kitsuId, episode, settings.anilistCountRewatches, guard) }.getOrNull()) }
         }
         if (settings.malAutoSync) trackers.mal?.takeIf { it.accessToken != null }?.let { auth ->
             val guard = rewatchGuard("mal")
             scope.launch {
+                if (!agrees("mal")) return@launch
                 val fresh = runCatching { Mal.fresh(auth) }.getOrDefault(auth)
                 if (fresh != auth && profile == keyTrackers && _trackers.value.mal == auth) updateTrackers { it.copy(mal = fresh) }
                 emit("MyAnimeList", runCatching { Mal.markWatched(fresh, "kitsu:$kitsuId", episode, settings.malCountRewatches, guard) }.getOrNull())
@@ -637,7 +733,6 @@ class Repository(private val context: Context) {
 
     // ---- Settings (per profile), and shared keys ----
 
-    private val _settings = MutableStateFlow(AppSettings())
     /** Harbor's settings that Harbor native acts on, for the active profile. */
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
     private val keySettings get() = stringPreferencesKey(profileKey("settings"))
@@ -698,26 +793,45 @@ class Repository(private val context: Context) {
     private val keyLastStreams get() = stringPreferencesKey(profileKey("lastStreams"))
     private val stringMap = MapSerializer(String.serializer(), String.serializer())
 
-    /** The remembered source for `metaId` as (addon id, stream name), when that setting is on. */
+    /** The remembered source for `metaId` as (addon id, stream name). */
     fun preferredSource(metaId: String): Pair<String, String?>? {
-        if (!_settings.value.rememberLastStream) return null
         val saved = _lastStreams.value[metaId] ?: return null
-        return saved.substringBefore("|") to saved.substringAfter("|", "").ifEmpty { null }
+        val ref = decodeSource(saved)
+        return ref.addonId?.let { it to ref.streamKey.ifEmpty { null } }
     }
 
     /** Forgets a remembered source that failed to open, if it's still the one remembered for this title. */
     fun forgetStream(metaId: String, addonId: String, streamName: String) {
-        if (_lastStreams.value[metaId] != "$addonId|$streamName") return
-        val next = _lastStreams.value - metaId
+        if (preferredSource(metaId) != (addonId to streamName)) return
+        val next = _lastStreams.value.filterNot { (id, value) ->
+            (id == metaId || id.startsWith("$metaId|video:")) && decodeSource(value).let { it.addonId == addonId && it.streamKey == streamName }
+        }
         _lastStreams.value = next
         val key = keyLastStreams
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }
     }
 
     fun rememberStream(metaId: String, addonId: String, streamName: String) {
-        if (!_settings.value.rememberLastStream) return
         // Taken out first, so a title played again counts as recent and isn't the next to be dropped.
         val next = (_lastStreams.value - metaId + (metaId to "$addonId|$streamName")).entries.toList().takeLast(500).associate { it.key to it.value }
+        _lastStreams.value = next
+        val key = keyLastStreams
+        queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }
+    }
+
+    private fun decodeSource(value: String): Playback.SourceRef =
+        runCatching { Net.json.decodeFromString(Playback.SourceRef.serializer(), value) }.getOrElse {
+            Playback.SourceRef(value.substringBefore("|"), 0, null, emptyList(), streamKey = value.substringAfter("|", ""))
+        }
+
+    fun preferredRelease(metaId: String, videoId: String): Playback.SourceRef? =
+        (_lastStreams.value["$metaId|video:$videoId"] ?: _lastStreams.value[metaId])?.let(::decodeSource)
+
+    fun rememberRelease(metaId: String, videoId: String, stream: Stream, addonId: String) {
+        if (!stream.direct && stream.infoHash == null) return
+        val value = Net.json.encodeToString(Playback.SourceRef.serializer(), Playback.sourceRef(stream, addonId, videoId))
+        val keys = setOf(metaId, "$metaId|video:$videoId")
+        val next = (_lastStreams.value - keys + keys.associateWith { value }).entries.toList().takeLast(500).associate { it.key to it.value }
         _lastStreams.value = next
         val key = keyLastStreams
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(stringMap, next) }
@@ -900,13 +1014,47 @@ class Repository(private val context: Context) {
     }
 
     /** Marks episodes (by video id) watched or not: "Mark season as watched". */
-    fun setWatched(ids: List<String>, on: Boolean) = editShelves { s -> s.copy(watched = if (on) s.watched + ids else s.watched - ids.toSet()) }
+    fun setWatched(ids: List<String>, on: Boolean) {
+        editShelves { s -> s.copy(watched = if (on) s.watched + ids else s.watched - ids.toSet()) }
+        if (on) refractEpisodes(ids)
+    }
+
+    /** Sends episodes ("tt…:season:episode") to Refract, grouped by show. Native anime numbering is left out. */
+    private fun refractEpisodes(ids: List<String>) {
+        ids.mapNotNull { id ->
+            val p = id.split(':')
+            if (p.size != 3 || !p[0].startsWith("tt")) return@mapNotNull null
+            val season = p[1].toIntOrNull() ?: return@mapNotNull null
+            val episode = p[2].toIntOrNull() ?: return@mapNotNull null
+            p[0] to (season to episode)
+        }.groupBy({ it.first }, { it.second }).forEach { (show, episodes) -> refract.enqueue(show, movie = false, episodes = episodes) }
+    }
+
+    // ---- Refract (personal API key, outbound only), as Harbor PC 1.0.4 ----
+
+    /**
+     * The player's "Automatic watch threshold": once per video, when the position reaches it.
+     * Harbor's own watched state is unchanged. Returns true once it was logged (or can't be).
+     */
+    fun refractPlayback(metaId: String, type: String, videoId: String, season: Int?, episode: Int?, positionMs: Long, durationMs: Long): Boolean {
+        val auth = _trackers.value.refract?.takeIf { it.enabled } ?: return true
+        if (!Refract.reached(auth.threshold, positionMs / 1000.0, durationMs / 1000.0)) return false
+        val show = metaId.substringBefore(':')
+        when {
+            type == "movie" -> refract.enqueue(metaId, movie = true)
+            // Anime numbered by Kitsu/MAL doesn't line up with IMDb seasons: only IMDb-numbered episodes go.
+            show.startsWith("tt") && season != null && episode != null && videoId.startsWith("tt") ->
+                refract.enqueue(show, movie = false, episodes = listOf(season to episode))
+        }
+        return true
+    }
 
     /** "Mark watched" on a film: kept here and added to Trakt's and Simkl's history when connected. */
     fun toggleWatched(meta: Meta) {
         val on = meta.id !in _shelves.value.watched
         editShelves { s -> s.copy(watched = if (on) s.watched + meta.id else s.watched - meta.id) }
         accounts.markWatched(meta, on)
+        if (on && meta.type == "movie") refract.enqueue(meta.id, movie = true)
         val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return
         val trackers = _trackers.value
         scope.launch {
@@ -919,8 +1067,10 @@ class Repository(private val context: Context) {
         // Nuvio mode: My List is the Nuvio profile's library.
         if (accounts.nuvioActive) return accounts.toggleNuvioLibrary(meta.copy(videos = null))
         val current = _myList.value
-        val next = if (current.any { it.id == meta.id }) current.filterNot { it.id == meta.id }
+        val adding = current.none { it.id == meta.id }
+        val next = if (!adding) current.filterNot { it.id == meta.id }
         else listOf(meta.copy(videos = null, description = null)) + current
+        refract.watchlist(meta.id, meta.type, meta.id.substringBefore(':').takeIf { it.startsWith("tt") }, adding)
         _myList.value = next
         val key = keyMyList
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(metaListSerializer, next) }
@@ -953,6 +1103,9 @@ class Repository(private val context: Context) {
         if ((state.string("video_id") ?: id) != videoId) return null
         val offset = (state["timeOffset"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: return null
         if (offset <= 0) return null
+        // Within the last 5% counts as finished (as saveResume): don't reopen it in the credits.
+        val length = (state["duration"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L
+        if (length > 0 && offset >= length * 0.95) return null
         val at = parseTime(state.string("lastWatched") ?: item.string("_mtime"))
         val local = _resume.value[videoId]
         val cached = _library.value.firstOrNull { it.id == metaId }?.state?.takeIf { (it.videoId ?: metaId) == videoId }
@@ -963,6 +1116,15 @@ class Repository(private val context: Context) {
     fun saveResume(videoId: String, positionMs: Long, durationMs: Long, meta: Meta? = null, video: Video? = null) {
         // Within the last 5% counts as finished: start from the beginning next time.
         val finished = durationMs > 0 && positionMs >= durationMs * 0.95
+        if (LibraryProgress.finished(positionMs, durationMs) && meta != null && videoId !in _shelves.value.watched) setWatched(listOf(videoId), true)
+        if (finished && meta != null) Regex("^((?:kitsu|mal|anilist):\\d+):(\\d+)$").matchEntire(videoId)?.let { m ->
+            val episode = m.groupValues[2].toInt() + 1
+            val entry = AnimeNext(meta.id, meta.name, meta.poster, meta.background, "${m.groupValues[1]}:$episode", episode, System.currentTimeMillis())
+            val updated = (_animeNext.value + (meta.id to entry)).entries.sortedByDescending { it.value.finishedAt }.take(40).associate { it.key to it.value }
+            _animeNext.value = updated
+            val key = stringPreferencesKey(profileKey("animeUpNext"))
+            queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(animeNextSerializer, updated) }
+        }
         val current = _resume.value
         val previous = current[videoId]
         val next = if (finished || positionMs < 10_000) current - videoId
@@ -994,7 +1156,42 @@ class Repository(private val context: Context) {
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(resumeSerializer, next) }
     }
 
+    /** "Also clear provider playback progress": what a dismissed card clears on Trakt, Simkl and PublicMetaDB. */
+    private val providerClear by lazy {
+        CwProviderClear(
+            context.getSharedPreferences("cw-provider-clear", android.content.Context.MODE_PRIVATE), scope,
+            owner = { profileKey("cwProviderClear") },
+            account = { provider ->
+                val t = _trackers.value
+                when (provider) {
+                    "trakt" -> t.trakt?.takeIf { it.accessToken != null }?.let { it.user ?: it.clientId }
+                    "simkl" -> t.simkl?.takeIf { it.accessToken != null }?.let { it.user ?: it.clientId }
+                    else -> accounts.pmdb.value?.let { it.username ?: it.apiKey.takeLast(6) }
+                }
+            },
+            trakt = { _trackers.value.trakt }, simkl = { _trackers.value.simkl }, pmdb = { accounts.pmdb.value },
+        )
+    }
+
+    /** "Copy CW": what fed Continue watching, as JSON safe to paste into a report (see CwSnapshot). */
+    fun cwSnapshot(): String {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
+        val settings = _settings.value
+        val flags = mapOf(
+            "accountProvider" to kotlinx.serialization.json.JsonPrimitive(accounts.shared.value.provider),
+            "nuvioActive" to kotlinx.serialization.json.JsonPrimitive(accounts.nuvioActive),
+            "traktInContinueWatching" to kotlinx.serialization.json.JsonPrimitive(settings.traktInContinueWatching),
+            "traktConnected" to kotlinx.serialization.json.JsonPrimitive(_trackers.value.trakt?.accessToken != null),
+            "publicMetaDbConnected" to kotlinx.serialization.json.JsonPrimitive(accounts.pmdb.value != null),
+            "clearProviderProgress" to kotlinx.serialization.json.JsonPrimitive(settings.cwClearProviderProgress),
+        )
+        val snapshot = CwSnapshot.build(version, flags, _resume.value, _library.value, _traktCw.value,
+            accounts.externalCw.value, _dismissed.value, continueWatching.value)
+        return Net.json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), snapshot)
+    }
+
     fun dismissContinueWatching(item: CwItem) {
+        if (_settings.value.cwClearProviderProgress) providerClear.enqueue(item)
         val next = _dismissed.value + (item.members.ifEmpty { listOf(item) }).map { "${it.meta.id}@${it.videoId}" }
         _dismissed.value = next
         val key = keyDismissed

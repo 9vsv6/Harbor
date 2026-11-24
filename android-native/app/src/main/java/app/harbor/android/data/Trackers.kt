@@ -39,6 +39,8 @@ data class TrackerSettings(
     val mal: TrackerAuth? = null,
     /** Letterboxd Full mode, through Stremboxd. */
     val letterboxd: LetterboxdSession? = null,
+    /** Refract, with a personal API key (outbound only). */
+    val refract: RefractAuth? = null,
 )
 
 /** What a device sign-in shows the user: a code to type on the tracker's site. */
@@ -53,6 +55,10 @@ private val jsonType = "application/json".toMediaType()
 
 object Trakt {
     private const val API = "https://api.trakt.tv"
+    /** Harbor's own Trakt app (lib/trakt/config.ts); its secret stays on Harbor's token proxy. */
+    const val HARBOR_CLIENT = "wL17DxIVWSRSKgCXLJGnRvwT2c8vUcqUtxSo5u4Mt7Q"
+    private const val PROXY = "https://harborcommunity.site/api/trakt"
+    private fun builtIn(auth: TrackerAuth) = auth.clientId == HARBOR_CLIENT && auth.clientSecret.isNullOrBlank()
 
     private fun request(auth: TrackerAuth, path: String) = Request.Builder().url(API + path)
         .header("trakt-api-version", "2")
@@ -78,14 +84,15 @@ object Trakt {
         var interval = code.intervalS * 1000L
         while (System.currentTimeMillis() < deadline) {
             delay(interval)
+            val proxied = secret.isBlank()
             val body = buildJsonObject {
                 put("code", code.deviceCode)
-                put("client_id", clientId)
-                put("client_secret", secret)
+                if (!proxied) { put("client_id", clientId); put("client_secret", secret) }
             }.toString().toRequestBody(jsonType)
             try {
-                val json = Net.json.parseToJsonElement(Net.call(Request.Builder().url("$API/oauth/device/token").post(body).build())).jsonObject
-                val auth = tokens(TrackerAuth(clientId, secret), json)
+                val url = if (proxied) "$PROXY/device-token" else "$API/oauth/device/token"
+                val json = Net.json.parseToJsonElement(Net.call(Request.Builder().url(url).post(body).build())).jsonObject
+                val auth = tokens(TrackerAuth(clientId, secret.ifBlank { null }), json)
                 return auth.copy(user = runCatching { username(auth) }.getOrNull())
             } catch (e: Net.HttpError) {
                 when (e.code) {
@@ -111,18 +118,36 @@ object Trakt {
     private suspend fun username(auth: TrackerAuth): String? =
         Net.json.parseToJsonElement(Net.call(request(auth, "/users/settings").build())).jsonObject["user"].objectOrNull?.string("username")
 
-    /** Refreshes the token when it is within a day of expiring. */
-    suspend fun fresh(auth: TrackerAuth): TrackerAuth {
-        if (auth.expiresAt - System.currentTimeMillis() > 86_400_000 || auth.refreshToken == null || auth.clientSecret == null) return auth
-        val body = buildJsonObject {
-            put("refresh_token", auth.refreshToken)
-            put("client_id", auth.clientId)
-            put("client_secret", auth.clientSecret)
-            put("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
-            put("grant_type", "refresh_token")
-        }.toString().toRequestBody(jsonType)
-        val json = Net.json.parseToJsonElement(Net.call(Request.Builder().url("$API/oauth/token").post(body).build())).jsonObject
-        return tokens(auth, json)
+    private val refreshing = kotlinx.coroutines.sync.Mutex()
+    private var lastRefresh: Pair<String, TrackerAuth>? = null
+
+    /**
+     * Renews the sign-in when it is within 14 days of expiring (as PC), or now (force) after
+     * Trakt refused it. A refresh token works once, so renewals run one at a time and a second
+     * caller gets the first one's result instead of spending the token again.
+     */
+    suspend fun fresh(auth: TrackerAuth, force: Boolean = false): TrackerAuth {
+        val refreshToken = auth.refreshToken ?: return auth
+        if (!builtIn(auth) && auth.clientSecret == null) return auth
+        if (!force && auth.expiresAt - System.currentTimeMillis() > 14L * 86_400_000) return auth
+        refreshing.lock()
+        try {
+            lastRefresh?.takeIf { it.first == refreshToken }?.let { return it.second }
+            val body = buildJsonObject {
+                put("refresh_token", refreshToken)
+                put("grant_type", "refresh_token")
+                if (!builtIn(auth)) {
+                    put("client_id", auth.clientId)
+                    put("client_secret", auth.clientSecret)
+                    put("redirect_uri", "urn:ietf:wg:oauth:2.0:oob")
+                }
+            }.toString().toRequestBody(jsonType)
+            val url = if (builtIn(auth)) "$PROXY/token" else "$API/oauth/token"
+            val json = Net.json.parseToJsonElement(Net.call(Request.Builder().url(url).post(body).build())).jsonObject
+            return tokens(auth, json).also { lastRefresh = refreshToken to it }
+        } finally {
+            refreshing.unlock()
+        }
     }
 
     suspend fun scrobble(auth: TrackerAuth, action: String, what: Scrobble, progress: Double) {
@@ -223,6 +248,8 @@ object Trakt {
 
 object Simkl {
     private const val API = "https://api.simkl.com"
+    /** Harbor's own Simkl app (lib/simkl/config.ts). */
+    const val HARBOR_CLIENT = "9609ef0a6051b6fdcf3290fd962fd65e0f8e969c942555410cffd37afca91997"
 
     suspend fun pin(clientId: String): DeviceCode {
         val json = Net.json.parseToJsonElement(Net.get("$API/oauth/pin?client_id=$clientId&redirect=urn:ietf:wg:oauth:2.0:oob")).jsonObject
@@ -512,13 +539,87 @@ private fun simklRequest(auth: TrackerAuth, path: String) = Request.Builder().ur
     .header("Authorization", "Bearer ${auth.accessToken}")
 
 /** trakt-tab.tsx: what you've watched on Trakt, most recent first. */
-suspend fun Trakt.watched(auth: TrackerAuth): List<Meta> = listOf("movies" to "movie", "shows" to "show").flatMap { (kind, key) ->
-    runCatching {
+suspend fun Trakt.watched(auth: TrackerAuth): List<Meta> {
+    val halves = listOf("movies" to "movie", "shows" to "show").map { (kind, key) -> runCatching {
         (Net.json.parseToJsonElement(Net.call(traktRequest(auth, "/sync/watched/$kind").build())) as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
             val entry = o[key].objectOrNull ?: return@mapNotNull null
             val imdb = entry["ids"].objectOrNull?.string("imdb") ?: return@mapNotNull null
             (o.string("last_watched_at") ?: "") to metahubMeta(imdb, if (kind == "movies") "movie" else "series", entry.string("title").orEmpty()).copy(releaseInfo = entry["year"]?.jsonPrimitive?.intOrNull?.toString())
         }
-    }.getOrDefault(emptyList())
-}.sortedByDescending { it.first }.map { it.second }
+    } }
+    if (halves.all { it.isFailure }) throw halves.first().exceptionOrNull()!!
+    return halves.flatMap { it.getOrDefault(emptyList()) }.sortedByDescending { it.first }.map { it.second }
+}
+
+/** Whether a title is on your Trakt watchlist. */
+suspend fun Trakt.inWatchlist(auth: TrackerAuth, imdb: String, type: String): Boolean {
+    val kind = if (type == "movie") "movies" else "shows"
+    val key = if (type == "movie") "movie" else "show"
+    val list = Net.json.parseToJsonElement(Net.call(traktRequest(auth, "/sync/watchlist/$kind").build())) as? JsonArray ?: return false
+    return list.any { it.jsonObject[key].objectOrNull?.get("ids").objectOrNull?.string("imdb") == imdb }
+}
+
+/** Adds a title to (or removes it from) your Trakt watchlist only. */
+suspend fun Trakt.setWatchlist(auth: TrackerAuth, imdb: String, type: String, add: Boolean) =
+    Net.call(traktRequest(auth, if (add) "/sync/watchlist" else "/sync/watchlist/remove").post(syncBody(imdb, type)).build())
+
+// ---------------- Playback records (Continue watching: "Also clear provider playback progress") ----------------
+
+/** One saved playback position on Trakt or Simkl, with the id that deletes it. */
+data class PlaybackRecord(val id: String, val type: String, val ids: Set<String>, val season: Int?, val episode: Int?)
+
+/** The ids a Trakt/Simkl node carries, as Harbor writes them ("tt…", "tmdb:movie:N", "mal:N", "kitsu:N"). */
+internal fun playbackRecordIds(ids: JsonObject?, movie: Boolean): Set<String> {
+    ids ?: return emptySet()
+    fun num(key: String) = ids[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()?.takeIf { it > 0 }
+    return setOfNotNull(
+        ids.string("imdb")?.trim()?.lowercase(java.util.Locale.ROOT)?.takeIf { Regex("""^tt\d+$""").matches(it) },
+        num("tmdb")?.let { "tmdb:${if (movie) "movie" else "tv"}:$it" },
+        num("mal")?.let { "mal:$it" },
+        num("kitsu")?.let { "kitsu:$it" },
+        num("anilist")?.let { "anilist:$it" },
+    )
+}
+
+internal fun parsePlaybackRecords(list: JsonArray): List<PlaybackRecord> = list.mapNotNull { element ->
+    val item = element as? JsonObject ?: return@mapNotNull null
+    val id = item["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+    val movie = item["movie"].objectOrNull
+    if (movie != null) return@mapNotNull PlaybackRecord(id, "movie", playbackRecordIds(movie["ids"].objectOrNull, true), null, null)
+    val show = (item["show"] ?: item["anime"]).objectOrNull ?: return@mapNotNull null
+    val episode = item["episode"].objectOrNull ?: return@mapNotNull null
+    val season = (episode["season"] ?: episode["tvdb_season"])?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+    val number = (episode["number"] ?: episode["episode"] ?: episode["tvdb_number"])?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+    PlaybackRecord(id, "series", playbackRecordIds(show["ids"].objectOrNull, false), season, number)
+}
+
+/** Trakt's saved positions; `complete` is false when the list may go on past what was read. */
+suspend fun Trakt.playbackRecords(auth: TrackerAuth): Pair<List<PlaybackRecord>, Boolean> {
+    val all = mutableListOf<PlaybackRecord>()
+    for (page in 1..5) {
+        val list = Net.json.parseToJsonElement(Net.call(traktRequest(auth, "/sync/playback?limit=100&page=$page").build())) as? JsonArray
+            ?: error("Trakt playback response was not a list")
+        all += parsePlaybackRecords(list)
+        if (list.size < 100) return all to true
+    }
+    return all to false
+}
+
+/** Simkl's saved positions (hide_watched=false: a finished title's position may still be there). */
+suspend fun Simkl.playbackRecords(auth: TrackerAuth): Pair<List<PlaybackRecord>, Boolean> {
+    val list = Net.json.parseToJsonElement(Net.call(simklRequest(auth, "/sync/playback?hide_watched=false&limit=40").build())) as? JsonArray
+        ?: error("Simkl playback response was not a list")
+    return parsePlaybackRecords(list) to (list.size < 40)
+}
+
+/** Deletes one saved position. A record already gone (404) counts as deleted. */
+suspend fun Trakt.deletePlayback(auth: TrackerAuth, id: String) {
+    try { Net.call(traktRequest(auth, "/sync/playback/${java.net.URLEncoder.encode(id, "UTF-8")}").delete().build()) }
+    catch (e: Net.HttpError) { if (e.code != 404) throw e }
+}
+
+suspend fun Simkl.deletePlayback(auth: TrackerAuth, id: String) {
+    try { Net.call(simklRequest(auth, "/sync/playback/${java.net.URLEncoder.encode(id, "UTF-8")}").delete().build()) }
+    catch (e: Net.HttpError) { if (e.code != 404) throw e }
+}

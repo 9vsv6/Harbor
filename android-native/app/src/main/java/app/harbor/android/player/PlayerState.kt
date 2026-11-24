@@ -65,6 +65,7 @@ class PlayerState {
     var durationMs by mutableLongStateOf(0)
     var bufferedMs by mutableLongStateOf(0)
 
+    var queueOpen by mutableStateOf(false)
     var controlsVisible by mutableStateOf(true)
     /** Running on a TV (remote, no touch). */
     var tv = false

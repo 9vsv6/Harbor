@@ -33,6 +33,8 @@ class HarborApp : Application(), coil.ImageLoaderFactory {
         repository = Repository(this)
         app.harbor.android.data.WhisperModel.init(this)
         app.harbor.android.data.SileroModel.init(this)
+        app.harbor.android.data.MoonshineModels.init(this)
+        app.harbor.android.data.AnimeIdentity.init(this)
         // Installed plugins (Cloudstream extensions) and their repositories.
         app.harbor.android.data.plugins.Plugins.init(this)
         app.harbor.android.data.Awards.init(this)

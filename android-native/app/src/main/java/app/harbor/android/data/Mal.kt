@@ -9,7 +9,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * MyAnimeList, as Harbor's lib/mal: sign in with OAuth (PKCE, plain challenge), keep episode
@@ -20,6 +22,10 @@ import okhttp3.Request
 object Mal {
     private const val API = "https://api.myanimelist.net/v2"
     const val REDIRECT = "harbor://mal"
+    /** Harbor's own MyAnimeList app (lib/mal/config.ts): its page hands the code back through harbor://mal. */
+    const val HARBOR_CLIENT = "8d7dac2f8cfd72abf79f59288bf6b0ed"
+    private const val PROXY = "https://harborcommunity.site/api/mal/token"
+    private fun builtIn(auth: TrackerAuth) = auth.clientId == HARBOR_CLIENT && auth.clientSecret.isNullOrBlank()
 
     /** The harbor://mal?code=… link the browser hands back after sign-in. */
     val incoming = MutableStateFlow<String?>(null)
@@ -30,20 +36,29 @@ object Mal {
         return (1..64).map { chars[random.nextInt(chars.length)] }.joinToString("")
     }
 
-    fun authorizeUrl(clientId: String, verifier: String) =
-        "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=$clientId&code_challenge=$verifier&code_challenge_method=plain&redirect_uri=${android.net.Uri.encode(REDIRECT)}"
+    fun authorizeUrl(clientId: String, verifier: String, state: String? = null) =
+        "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=$clientId&code_challenge=$verifier&code_challenge_method=plain" +
+            // Harbor's app returns to its own registered page; a self-made app comes straight back.
+            (if (clientId == HARBOR_CLIENT) "" else "&redirect_uri=${android.net.Uri.encode(REDIRECT)}") +
+            (state?.let { "&state=$it" } ?: "")
 
     /** The code from a pasted page address or the code itself (auth.ts extractMalCode). */
     fun extractCode(input: String): String =
         Regex("[?&#]code=([^&\\s#]+)").find(input.trim())?.groupValues?.get(1)?.let { android.net.Uri.decode(it) } ?: input.trim().trim('"', '\'')
 
     private suspend fun token(auth: TrackerAuth, fields: Map<String, String>): TrackerAuth {
-        val form = FormBody.Builder().apply {
-            add("client_id", auth.clientId)
-            auth.clientSecret?.takeIf { it.isNotBlank() }?.let { add("client_secret", it) }
-            fields.forEach { (k, v) -> add(k, v) }
-        }.build()
-        val json = Net.json.parseToJsonElement(Net.call(Request.Builder().url("https://myanimelist.net/v1/oauth2/token").post(form).build())).jsonObject
+        val json = if (builtIn(auth)) {
+            // auth.ts exchangeCode / refreshAccessToken: JSON to Harbor's proxy, which holds the app.
+            val body = kotlinx.serialization.json.buildJsonObject { fields.filterKeys { it != "redirect_uri" }.forEach { (k, v) -> put(k, kotlinx.serialization.json.JsonPrimitive(v)) } }
+            Net.json.parseToJsonElement(Net.call(Request.Builder().url(PROXY).post(body.toString().toRequestBody("application/json".toMediaType())).build())).jsonObject
+        } else {
+            val form = FormBody.Builder().apply {
+                add("client_id", auth.clientId)
+                auth.clientSecret?.takeIf { it.isNotBlank() }?.let { add("client_secret", it) }
+                fields.forEach { (k, v) -> add(k, v) }
+            }.build()
+            Net.json.parseToJsonElement(Net.call(Request.Builder().url("https://myanimelist.net/v1/oauth2/token").post(form).build())).jsonObject
+        }
         return auth.copy(
             accessToken = json.string("access_token") ?: error("MyAnimeList did not return a token. Try again."),
             refreshToken = json.string("refresh_token") ?: auth.refreshToken,

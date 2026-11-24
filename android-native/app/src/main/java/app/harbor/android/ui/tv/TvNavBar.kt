@@ -244,6 +244,7 @@ internal fun TvSideBar(
     val (items, gear) = navItems(route, view, onSelect, onView, onPage)
     state.activeKey = (items + gear).firstOrNull { it.on }?.key ?: TvNavState.KEY_HOME
     var focused by remember { mutableStateOf(false) }
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
     val focusManager = LocalFocusManager.current
     androidx.compose.foundation.layout.Column(
         modifier.width(TvSideWidth + TvInsets.SafeX).fillMaxHeight().background(Color(0xFF0E0F11))
@@ -252,8 +253,8 @@ internal fun TvSideBar(
             .focusProperties { enter = { state.active() } }
             .focusGroup()
             .onPreviewKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown || e.key.nativeKeyCode != KeyEvent.KEYCODE_DPAD_RIGHT) return@onPreviewKeyEvent false
-                if (!focusManager.moveFocus(FocusDirection.Right)) onExitRight()
+                if (e.type != KeyEventType.KeyDown || e.key.nativeKeyCode != (if (rtl) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)) return@onPreviewKeyEvent false
+                if (!focusManager.moveFocus(if (rtl) FocusDirection.Left else FocusDirection.Right)) onExitRight()
                 true
             },
         horizontalAlignment = Alignment.CenterHorizontally,

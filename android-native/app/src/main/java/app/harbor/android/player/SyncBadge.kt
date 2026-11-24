@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.harbor.android.data.AppSettings
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -39,14 +40,18 @@ import kotlinx.coroutines.flow.Flow
  */
 @Composable
 fun TrackerSyncBadge(events: Flow<String>, settings: AppSettings) {
-    var message by remember { mutableStateOf<String?>(null) }
-    var visible by remember { mutableStateOf(false) }
+    // One badge per tracker (PC 1.0.4: separate AniList and MyAnimeList indicators), each on its own
+    // timer, so a MyAnimeList sync no longer waits behind AniList's or replaces it.
+    val shown = remember { androidx.compose.runtime.mutableStateListOf<Pair<Long, String>>() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(events) {
-        events.collect {
-            message = it
-            visible = true
-            delay(3_500)
-            visible = false
+        var next = 0L
+        events.collect { message ->
+            val service = SyncBadges.service(message)
+            shown.removeAll { SyncBadges.service(it.second) == service }
+            val id = next++
+            shown += id to message
+            scope.launch { delay(3_500); shown.removeAll { it.first == id } }
         }
     }
     if (!settings.syncIndicator) return
@@ -57,16 +62,34 @@ fun TrackerSyncBadge(events: Flow<String>, settings: AppSettings) {
         "bottom-center" -> Alignment.BottomCenter
         else -> Alignment.TopEnd
     }
+    val horizontal = when (alignment) {
+        Alignment.TopStart, Alignment.BottomStart -> Alignment.Start
+        Alignment.BottomCenter -> Alignment.CenterHorizontally
+        else -> Alignment.End
+    }
     Box(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 20.dp, vertical = if (alignment == Alignment.TopEnd || alignment == Alignment.TopStart) 70.dp else 96.dp)) {
-        AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(alignment)) {
-            Row(
-                Modifier.clip(RoundedCornerShape(50)).background(Color(0xD9121316)).padding(horizontal = 14.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF3FB950), modifier = Modifier.size(16.dp))
-                Text(message.orEmpty(),color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        androidx.compose.foundation.layout.Column(Modifier.align(alignment), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = horizontal) {
+            shown.forEach { (id, message) ->
+                androidx.compose.runtime.key(id) {
+                    var visible by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { visible = true }
+                    AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut()) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50)).background(Color(0xD9121316)).padding(horizontal = 14.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF3FB950), modifier = Modifier.size(16.dp))
+                            Text(message, color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/** Which tracker a sync message is from: "AniList · Episode 5 synced", "Rewatched on MyAnimeList · …". */
+internal object SyncBadges {
+    fun service(message: String) = message.substringBefore(" · ").removePrefix("Rewatched on ").trim()
 }

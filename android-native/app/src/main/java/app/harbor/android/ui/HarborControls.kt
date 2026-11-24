@@ -136,7 +136,7 @@ fun LanguageOrder(selected: List<String>, max: Int = 12, onChange: (List<String>
                     Spacer(Modifier.width(12.dp))
                     Box(Modifier.weight(1f)) {
                         if (query.isEmpty()) Text("Search languages", color = HarborColors.InkSubtle, fontSize = 16.sp)
-                        BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp), cursorBrush = SolidColor(HarborColors.Accent), modifier = Modifier.fillMaxWidth())
+                        BasicTextField(query, { query = it }, singleLine = true, textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content), cursorBrush = SolidColor(HarborColors.Accent), modifier = Modifier.fillMaxWidth())
                     }
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x0DFFFFFF)))
@@ -409,8 +409,10 @@ fun PositionGrid(selected: String, onPick: (String) -> Unit) {
 
 /** Harbor's plain segmented choice: the chosen word on a white pill, the rest as text. */
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun <T> PillChoice(options: List<Pair<T, String>>, selected: T, onPick: (T) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Wraps onto more lines when the choices don't fit (Refract's thresholds, Moonshine's languages).
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         options.forEach { (value, label) ->
             val on = value == selected
             Text(
@@ -485,7 +487,7 @@ fun ProviderKeyBlock(
                             { text = it.trim(); onKey(text.ifBlank { null }) },
                             singleLine = true,
                             visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation('•'),
-                            textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp, letterSpacing = if (shown) 0.sp else 2.sp),
+                            textStyle = TextStyle(color = HarborColors.Ink, fontSize = 16.sp, textDirection = androidx.compose.ui.text.style.TextDirection.Ltr, letterSpacing = if (shown) 0.sp else 2.sp),
                             cursorBrush = SolidColor(HarborColors.Accent),
                             modifier = Modifier.fillMaxWidth(),
                         )

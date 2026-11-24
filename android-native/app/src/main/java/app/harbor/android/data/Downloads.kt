@@ -18,7 +18,7 @@ data class SavedDownload(
     val title: String,
     val poster: String? = null,
     val file: String,
-    val addedAt: Long = System.currentTimeMillis(),
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class) @kotlinx.serialization.EncodeDefault val addedAt: Long = System.currentTimeMillis(),
     val addonId: String? = null,
     val sourceName: String? = null,
     val playbackFailed: Boolean = false,

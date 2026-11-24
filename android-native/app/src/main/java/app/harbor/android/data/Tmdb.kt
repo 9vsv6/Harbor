@@ -485,23 +485,25 @@ object Tmdb {
         val art = byKey(posterLang)
         fun norm(s: String?) = s?.lowercase()?.replace(Regex("""[^\p{L}\p{N}]"""), "")?.takeIf { it.isNotEmpty() }
         val candidates = results(main).filter { it.string("media_type") == "movie" || it.string("media_type") == "tv" }
-        return metas.map { meta ->
-            val kind = when (meta.type) { "movie" -> "movie"; "series" -> "tv"; else -> return@map meta }
-            val name = norm(meta.name) ?: return@map meta
+        // In parallel (a few at a time): each match may ask TMDB for its posters.
+        return coroutineScope { metas.map { meta -> async {
+            val kind = when (meta.type) { "movie" -> "movie"; "series" -> "tv"; else -> return@async meta }
+            val name = norm(meta.name) ?: return@async meta
             val hit = candidates.firstOrNull { c ->
                 val year = (c.string("release_date") ?: c.string("first_air_date"))?.take(4)?.takeIf { it.isNotEmpty() }
                 c.string("media_type") == kind &&
                     (norm(c.string("title") ?: c.string("name")) == name || norm(c.string("original_title") ?: c.string("original_name")) == name) &&
                     (meta.year == null || year == null || meta.year == year)
-            } ?: return@map meta
+            } ?: return@async meta
             val t = titles[keyOf(hit)]
-            val a = art[keyOf(hit)]
+            val id = hit["id"]?.jsonPrimitive?.intOrNull
+            // Your language's poster, else English, else the addon's; never the original language's.
+            val poster = if (posterBase != "en" && id != null) localGate.withPermit { posterIn(key, kind, id) } else null
             meta.copy(
                 name = (if (titleLang != null) (t?.string("title") ?: t?.string("name"))?.takeIf { it.isNotBlank() } else null) ?: meta.name,
-                poster = a?.string("poster_path")?.let { "$IMAGES/w342$it" } ?: meta.poster
-                    ?: hit.string("poster_path")?.let { "$IMAGES/w342$it" },
+                poster = poster ?: meta.poster ?: hit.string("poster_path")?.let { "$IMAGES/w342$it" },
             )
-        }
+        } }.awaitAll() }
     }
 
     private val localCache = java.util.concurrent.ConcurrentHashMap<String, Pair<String?, String?>>()
@@ -533,11 +535,25 @@ object Tmdb {
             }.getOrNull()
             val forTitle = tl?.let { find(it) }
             val forPoster = if (pl != null && tl != null && base(pl) == base(tl)) forTitle else pl?.let { find(it) }
+            val posterId = forPoster?.get("id")?.jsonPrimitive?.intOrNull
             (forTitle?.let { if (original) it.string("original_title") ?: it.string("original_name") else it.string("title") ?: it.string("name") }?.takeIf { it.isNotBlank() }) to
-                forPoster?.string("poster_path")?.let { "$IMAGES/w342$it" }
+                posterId?.let { posterIn(key, if (type == "movie") "movie" else "tv", it) }
         }
         localCache[cacheKey] = result
         return result
+    }
+
+    /**
+     * A poster in your poster language, else English, else one without text; null keeps the addon's
+     * own. Not TMDB's language answer: with no poster in that language it gives the original's,
+     * which for anime is the Japanese one.
+     */
+    private suspend fun posterIn(key: String, kind: String, id: Int): String? {
+        val images = runCatching { get(key, "/$kind/$id/images", mapOf("include_image_language" to "$posterBase,en,null")) }.getOrNull() ?: return null
+        val posters = (images["posters"] as? JsonArray).orEmpty().map { it.jsonObject }
+        fun lang(o: JsonObject) = (o["iso_639_1"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        val pick = posters.firstOrNull { lang(it) == posterBase } ?: posters.firstOrNull { lang(it) == "en" } ?: posters.firstOrNull { lang(it) == null }
+        return pick?.string("file_path")?.let { "$IMAGES/w342$it" }
     }
 
     /** Details already fetched this session, per title and languages: a page opened again shows them at once. */
@@ -770,6 +786,17 @@ object Tmdb {
             val name = EpisodeText.accept(o.string("name"), lang)
             val story = EpisodeText.accept(o.string("overview"), lang)
             if (name == null && story == null) null else n to (name to story)
+        }.toMap()
+    }
+
+    /** A season's episode air dates ("2005-03-24"), by episode number. */
+    suspend fun seasonAirDates(key: String, tvId: Int, season: Int): Map<Int, String> {
+        val body = runCatching { get(key, "/tv/$tvId/season/$season") }.getOrNull() ?: return emptyMap()
+        return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e.jsonObject
+            val n = o["episode_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val date = o.string("air_date")?.takeIf { it.length == 10 } ?: return@mapNotNull null
+            n to date
         }.toMap()
     }
 

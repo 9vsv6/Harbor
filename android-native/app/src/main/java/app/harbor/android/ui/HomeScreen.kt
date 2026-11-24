@@ -355,11 +355,11 @@ fun HomeScreen(repository: Repository, nav: BrowseNav, view: BrowseView, onView:
                             item(key = "spooktober") { SpooktoberEntry(compact = false, onDismiss = dismissSpooktober, modifier = Modifier.padding(horizontal = 16.dp)) }
                         }
                         if ((view == BrowseView.Home || view == BrowseView.Anime) && cw.isNotEmpty()) {
-                            item(key = "cw") { ContinueWatchingRow(cw, nav::resume, repository::dismissContinueWatching) }
+                            item(key = "cw") { ContinueWatchingRow(cw, nav::resume, repository::dismissContinueWatching, onCopyDiagnostics = copyCwDiagnostics(repository)) }
                         }
                         // Shows: your series in progress, as Harbor's "Pick up where you left off".
                         val showsCw = if (view == BrowseView.Shows) allCw.filter { it.meta.type == "series" && !app.harbor.android.data.AnimeDetect.isAnime(it.meta) } else emptyList()
-                        if (showsCw.isNotEmpty()) item(key = "cw") { ContinueWatchingRow(showsCw, nav::resume, repository::dismissContinueWatching, "Pick up where you left off") }
+                        if (showsCw.isNotEmpty()) item(key = "cw") { ContinueWatchingRow(showsCw, nav::resume, repository::dismissContinueWatching, "Pick up where you left off", onCopyDiagnostics = copyCwDiagnostics(repository)) }
                         if (view == BrowseView.Home && newEpisodes.isNotEmpty()) {
                             item(key = "new-episodes") { Rail("New Episodes", newEpisodes.map { it.meta }, browse::openMeta) }
                         }

@@ -94,13 +94,13 @@ import kotlinx.coroutines.launch
 // Harbor PC's Big Picture settings (bp-settings.tsx, bp-settings-catalog.ts, bp-settings-parts.tsx,
 // bp-settings-pane.tsx) and its Accounts and TMDB page with phone setup (bp-connect.tsx).
 
-private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
+private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Audio("Audio"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
 
 private class Opt(val value: String, val label: String)
 
 private sealed interface Control {
     val id: String
-    class Options(override val id: String, val label: String, val value: String, val options: List<Opt>, val letter: Boolean = false) : Control
+    class Options(override val id: String, val label: String, val value: String, val options: List<Opt>, val letter: Boolean = false, val detail: String? = null) : Control
     class Multi(override val id: String, val label: String, val items: List<Triple<String, String, Int>>, val logos: Boolean = false, val ranked: Boolean = true, val detail: String? = null) : Control
     class Push(override val id: String, val label: String, val detail: String) : Control
     class Action(override val id: String, val label: String) : Control
@@ -167,7 +167,15 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             BackHandler { pane = null }
             Column(Modifier.fillMaxSize().padding(u(24f)).verticalScroll(rememberScrollState())) {
                 androidx.compose.material3.TextButton(onClick = { pane = null }) { Text("Back") }
-                app.harbor.android.ui.AutoSyncModelsPanel(requestFocus = true)
+                app.harbor.android.ui.AutoSyncModelsPanel(requestFocus = true, repository = repository)
+            }
+            return@CompositionLocalProvider
+        }
+        if (pane == "behaviour") {
+            BackHandler { pane = null }
+            Column(Modifier.fillMaxSize().padding(u(24f)).verticalScroll(rememberScrollState())) {
+                androidx.compose.material3.TextButton(onClick = { pane = null }) { Text("Back") }
+                app.harbor.android.ui.PlaybackBehaviour(settings, repository::updateSettings)
             }
             return@CompositionLocalProvider
         }
@@ -181,6 +189,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
                 Cat.Subtitles -> listOfNotNull(subLangs.firstOrNull()?.let(::langName) ?: "Off", "${subPx}px").joinToString(" / ")
                 Cat.Playback -> if (autoPlay) "Instant play" else "Pick a source"
+                Cat.Audio -> if (settings.audioPassthrough) "Passthrough on" else "Passthrough off"
                 Cat.Sources -> if (settings.streamFilter.active) "Filters on" else "All resolutions and codecs"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
                 Cat.Services -> "${StreamingServices.enabled(settings).size} on"
@@ -240,6 +249,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                             is Control.Multi -> MultiRow(control, f) { commit(repository, control.id, it) }
                             is Control.Push -> PushRow(control.label, control.detail, f) {
                                 when (control.id) {
+                                    "behaviour" -> pane = "behaviour"
                                     "addons" -> onOpenAddons()
                                     "updates" ->
                                         // Available: the update pop-up again (even after Later); else look now.
@@ -375,6 +385,8 @@ private fun subtitleTiming(s: AppSettings): List<Control> = buildList {
 
 private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.PlayerPrefs, autoPlay: Boolean, connected: List<String>): List<Control> = when (cat) {
     Cat.Playback -> listOf(
+        Control.Options("engine", "Player engine", s.engine, listOf(Opt("auto", "Automatic"), Opt("mpv", "mpv"), Opt("media3", "Android (Media3)")), detail = app.harbor.android.player.PlayerEngineChoice.AUTOMATIC_DESCRIPTION),
+        Control.Options("switchEngine", "Switch engine on playback error", onOff(s.switchEngineOnError), OnOff, detail = app.harbor.android.player.PlayerEngineChoice.SWITCH_ON_ERROR),
         Control.Options("skipIntro", "Skip intros", onOff(p.autoSkipIntro), OnOff),
         Control.Options("autoNext", "Auto-play next episode", onOff(s.autoPlayNextEpisode), OnOff),
         Control.Options("instantPlay", "Instant play", onOff(autoPlay), OnOff),
@@ -389,16 +401,18 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
         Control.Options("topMatch", "Use TMDB for Top Match in search", onOff(s.searchTmdbTopMatch), OnOff),
         Control.Options("resume", "Resume where you left off", onOff(s.resumePlayback), OnOff),
         Control.Options("resumeNotice", "Show resume notice and Start over", onOff(s.resumeNotice), OnOff),
-        Control.Options("seekBack", "Skip back", s.seekBackSec.toString(), secondsOptions(listOf(5, 10, 15, 30), s.seekBackSec)),
-        Control.Options("seekForward", "Skip forward", s.seekForwardSec.toString(), secondsOptions(listOf(5, 10, 15, 30, 60), s.seekForwardSec)),
+        Control.Push("behaviour", "Behavior", "Seek step, Long seek, Slow speed and Speed step"),
         Control.Options("skipRecap", "Skip recaps", onOff(s.autoSkipRecap), OnOff),
         Control.Options("skipOutro", "Skip credits", onOff(s.autoSkipOutro), OnOff),
         Control.Options("nextLead", "Show next episode before the end", s.nextEpisodeLeadSec.toString(), secondsOptions(listOf(0, 15, 30, 45, 60), s.nextEpisodeLeadSec, "Auto / at credits")),
         Control.Options("stillWatching", "Ask if you are still watching", p.stillWatchingAfter.toString(), (listOf(0, 2, 3, 5, 10) + p.stillWatchingAfter).distinct().sorted().map { Opt(it.toString(), if (it == 0) "Off" else "$it episodes") }),
     )
+    Cat.Audio -> listOf(
+        Control.Options("audioPassthrough", "Audio passthrough", onOff(s.audioPassthrough), OnOff, detail = app.harbor.android.player.AudioPassthrough.DESCRIPTION),
+    ) + if (s.audioPassthrough) listOf(
+        Control.Multi("passthroughFormats", "Passthrough formats", app.harbor.android.player.AudioPassthrough.formats.map { (key, label) -> Triple(key, label, if (key in s.audioPassthroughFormats) 1 else 0) }, ranked = false, detail = app.harbor.android.player.AudioPassthrough.PROCESSING_NOTE),
+    ) else emptyList()
     Cat.Sources -> listOf(
-        Control.Options("rememberStream", "Remember last source", onOff(s.rememberLastStream), OnOff),
-        Control.Options("keepSource", "Keep same addon on next episode", onOff(s.keepSourceNextEpisode), OnOff),
         Control.Options("switchStalled", "Automatically switch stalled sources", onOff(s.autoNextStreamOnStall), OnOff),
     ) + (if (s.autoNextStreamOnStall) listOf(Control.Options("stallWait", "Buffering time before switching", s.stallSec.toString(), secondsOptions(listOf(5, 10, 15, 30), s.stallSec))) else emptyList()) + listOf(
         Control.Options("streamSort", "Source order", s.streamSort, listOf(Opt("addon", "Addon order"), Opt("harbor", "Harbor ranking")) + app.harbor.android.data.Ranking.sourceSorts.map { Opt(it.key, it.value) }),
@@ -417,6 +431,8 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
         Control.Action("resetFilters", "Reset source filters"),
     )
     Cat.Home -> listOf(
+        Control.Options("scaleTvScores", "Scale TV score badges", onOff(s.tvScaleScoreBadges), OnOff, detail = "Shrink the score stack when several ratings are enabled."),
+        Control.Multi("tvScores", "TV · Scores", app.harbor.android.data.TvScores.sources.map { (key, label) -> Triple(key, label, if (key in s.tvScoreSources) 1 else 0) }, ranked = false),
         Control.Options("cardTags", "Show tags on cards", onOff(s.showCardBadges), OnOff),
         Control.Options("hidePosterTitles", "Hide titles under posters", onOff(s.hidePosterTitles), OnOff),
         Control.Options("heroRotate", "Rotate the top title", onOff(s.heroAutoRotate), OnOff),
@@ -447,6 +463,13 @@ private fun commit(repository: Repository, id: String, value: String) {
         return
     }
     when (id) {
+        "scaleTvScores" -> repository.updateSettings { it.copy(tvScaleScoreBadges = value == "on") }
+        "tvScores" -> repository.updateSettings { it.copy(tvScoreSources = if (value in it.tvScoreSources) it.tvScoreSources - value else it.tvScoreSources + value) }
+        "advisoryExpanded" -> repository.updateSettings { it.copy(contentAdvisoryKeepExpanded = value == "on") }
+        "engine" -> repository.updateSettings { it.copy(engine = value) }
+        "switchEngine" -> repository.updateSettings { it.copy(switchEngineOnError = value == "on") }
+        "audioPassthrough" -> repository.updateSettings { it.copy(audioPassthrough = value == "on") }
+        "passthroughFormats" -> repository.updateSettings { it.copy(audioPassthroughFormats = if (value in it.audioPassthroughFormats) it.audioPassthroughFormats - value else it.audioPassthroughFormats + value) }
         "overscan" -> repository.updateSettings { it.copy(tvOverscan = value.toFloat()) }
         "detailsLanguage" -> repository.updateSettings { it.copy(metadataLanguage = value, translateOverviews = true) }
         "titleLanguage" -> repository.updateSettings { it.copy(titleLanguage = value, translateTitles = true) }
@@ -509,14 +532,10 @@ private fun commit(repository: Repository, id: String, value: String) {
         "instantPlay" -> repository.setAutoPlay(value == "on")
         "resume" -> repository.updateSettings { it.copy(resumePlayback = value == "on") }
         "resumeNotice" -> repository.updateSettings { it.copy(resumeNotice = value == "on") }
-        "seekBack" -> repository.updateSettings { it.copy(seekBackSec = value.toInt()) }
-        "seekForward" -> repository.updateSettings { it.copy(seekForwardSec = value.toInt()) }
         "skipRecap" -> repository.updateSettings { it.copy(autoSkipRecap = value == "on") }
         "skipOutro" -> repository.updateSettings { it.copy(autoSkipOutro = value == "on") }
         "nextLead" -> repository.updateSettings { it.copy(nextEpisodeLeadSec = value.toInt()) }
         "stillWatching" -> repository.updatePlayerPrefs { it.copy(stillWatchingAfter = value.toInt()) }
-        "rememberStream" -> repository.updateSettings { it.copy(rememberLastStream = value == "on") }
-        "keepSource" -> repository.updateSettings { it.copy(keepSourceNextEpisode = value == "on") }
         "switchStalled" -> repository.updateSettings { it.copy(autoNextStreamOnStall = value == "on") }
         "stallWait" -> repository.updateSettings { it.copy(stallSec = value.toInt()) }
         "streamSort" -> repository.updateSettings { it.copy(streamSort = value) }
@@ -629,6 +648,7 @@ private fun Cell(text: String, on: Boolean, focus: FocusRequester?, modifier: Mo
 private fun OptionRow(control: Control.Options, focus: FocusRequester?, onPick: (String) -> Unit) {
     Column {
         ControlLabel(control.label)
+        control.detail?.let { Text(it, color = HarborColors.InkSubtle, fontSize = s(7.5f), modifier = Modifier.padding(bottom = u(4f))) }
         val start = control.options.indexOfFirst { it.value == control.value }.coerceAtLeast(0)
         val scroll = rememberLazyListState(initialFirstVisibleItemIndex = start)
         val fit = control.options.size <= 4
@@ -771,18 +791,22 @@ private fun SettingsPane(
                         "Poster language" to when (s.imageLanguage) { "" -> "Same as the device"; "null" -> "No text"; else -> langName(s.imageLanguage) },
                     )
                     Cat.Playback -> listOf(
+                        "Player engine" to app.harbor.android.player.PlayerEngineChoice.label(s.engine),
                         "Skip intros" to if (p.autoSkipIntro) "On" else "Off",
                         "Auto-play next episode" to if (s.autoPlayNextEpisode) "On" else "Off",
                         "Instant play" to if (autoPlay) "On" else "Off",
                         "Resume playback" to if (s.resumePlayback) "On" else "Off",
-                        "Skip back / forward" to "${s.seekBackSec} s / ${s.seekForwardSec} s",
+                        "Skip back / forward" to "${app.harbor.android.data.PlaybackSteps.label(s.seekBackSec)} s / ${app.harbor.android.data.PlaybackSteps.label(s.seekForwardSec)} s",
                         "Skip recaps" to if (s.autoSkipRecap) "On" else "Off",
                         "Skip credits" to if (s.autoSkipOutro) "On" else "Off",
+                    )
+                    Cat.Audio -> listOf(
+                        "Audio passthrough" to if (s.audioPassthrough) "On" else "Off",
+                        "Formats" to app.harbor.android.player.AudioPassthrough.formats.filter { it.first in s.audioPassthroughFormats }.joinToString(" / ") { it.second }.ifEmpty { "None" },
                     )
                     Cat.Sources -> listOf(
                         "Source order" to (app.harbor.android.data.Ranking.sourceSorts[s.streamSort] ?: if (s.streamSort == "addon") "Addon order" else "Harbor ranking"),
                         "Put first" to if (s.smoothSourcesFirst) "Smooth on this TV" else "Best quality",
-                        "Remember last source" to if (s.rememberLastStream) "On" else "Off",
                         "Switch stalled sources" to if (s.autoNextStreamOnStall) "After ${s.stallSec} s" else "Off",
                         "Resolutions" to s.streamFilter.resolutions.sortedDescending().joinToString(" / ") { if (it == 2160) "4K" else "${it}p" }.ifEmpty { "Any" },
                         "Codecs" to s.streamFilter.codecs.sorted().joinToString(" / ").ifEmpty { "Any" },

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Icon
 import app.harbor.android.i18n.Text
@@ -133,6 +134,10 @@ internal fun ReviewCard(
     blurred: Boolean = false,
     openLabel: String = "Read on Letterboxd",
     translationTarget: String = HarborDisplay.settings.appLanguage,
+    /** Harbor member reviews: your like, and what tapping the heart and the comments do. */
+    liked: Boolean = false,
+    onLike: (() -> Unit)? = null,
+    onReplies: (() -> Unit)? = null,
 ) {
     var revealed by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
@@ -197,14 +202,21 @@ internal fun ReviewCard(
             }
         }) { Text(if (translating) "Translating…" else if (showTranslation) "Show original" else if (translationError) "Translation unavailable · Retry" else "Translate") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Icon(Icons.Rounded.Favorite, null, tint = Color(0xFFFB7185), modifier = Modifier.size(13.dp))
+            Row(
+                Modifier.clip(RoundedCornerShape(50)).then(if (onLike != null) Modifier.clickable(onClick = onLike).padding(horizontal = 6.dp, vertical = 4.dp) else Modifier),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(if (onLike == null || liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, if (onLike != null) (if (liked) "Unlike" else "Like") else null,
+                    tint = Color(0xFFFB7185), modifier = Modifier.size(if (onLike != null) 16.dp else 13.dp))
                 Text("%,d".format(Locale.getDefault(), likes), color = HarborColors.InkSubtle, fontSize = 12.5.sp)
             }
-            replies?.takeIf { it > 0 }?.let {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Icon(Icons.Rounded.ChatBubbleOutline, null, tint = HarborColors.InkSubtle, modifier = Modifier.size(13.dp))
-                    Text("$it", color = HarborColors.InkSubtle, fontSize = 12.5.sp)
+            (replies?.takeIf { it > 0 || onReplies != null })?.let {
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).then(if (onReplies != null) Modifier.clickable(onClick = onReplies).padding(horizontal = 6.dp, vertical = 4.dp) else Modifier),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Icon(Icons.Rounded.ChatBubbleOutline, if (onReplies != null) "Comments" else null, tint = HarborColors.InkSubtle, modifier = Modifier.size(if (onReplies != null) 16.dp else 13.dp))
+                    Text(if (onReplies != null && it == 0) "Comment" else "$it", color = HarborColors.InkSubtle, fontSize = 12.5.sp)
                 }
             }
             onOpen?.let { Text(openLabel, color = HarborColors.Accent, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable(onClick = it)) }

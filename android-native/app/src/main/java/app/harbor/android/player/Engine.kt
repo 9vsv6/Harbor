@@ -14,6 +14,9 @@ data class EngineTrack(
     val commentary: Boolean = false,
     /** Added from an addon (mpv loads those as its own tracks). */
     val external: Boolean = false,
+    val title: String? = null,
+    val codec: String? = null,
+    val channels: Int? = null,
 )
 
 /** A chapter mark in the file (mpv's chapter-list). */

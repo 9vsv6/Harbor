@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LibraryGroupsUrlTest {
+    @Test fun tildeAndDotInMdblistUsernamesRoundTrip() {
+        for (user in listOf("jane~doe", "jane.doe", "~jane.doe", "jane%7Edoe")) {
+            val parsed = LibraryGroups.parseMdblistUrl("https://mdblist.com/lists/$user/favorites")!!
+            assertEquals(parsed, LibraryGroups.parseMdblistUrl(parsed.url))
+            assertTrue(parsed.url.contains('~') || parsed.url.contains("jane.doe"))
+        }
+    }
     @Test fun internationalAndDottedMdblistPathsAreEncodedOnce() {
         val raw = LibraryGroups.parseListUrl("https://www.mdblist.com/lists/jane.doe/日本語-é~é/?sort=rank#top")!!
         assertEquals("lists/jane.doe/%E6%97%A5%E6%9C%AC%E8%AA%9E-%C3%A9~e%CC%81", raw.path)

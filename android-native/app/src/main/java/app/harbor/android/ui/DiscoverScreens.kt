@@ -91,6 +91,8 @@ enum class ExtraPage(val route: String, val label: String, val icon: androidx.co
     DownloadsPage("downloads", "Downloads", Icons.Outlined.CollectionsBookmark, app.harbor.android.R.drawable.nav_download),
     /** Harbor's Plugins page: each installed plugin's own rows. */
     PluginsPage("plugins", "Plugins", Icons.Outlined.CollectionsBookmark, app.harbor.android.R.drawable.set_puzzle),
+    /** Harbor's community: people, friends, messages and invites (last, so the pages above keep their places). */
+    CommunityPage("community", "Community", Icons.Outlined.CollectionsBookmark, app.harbor.android.R.drawable.set_users),
 }
 
 @Composable

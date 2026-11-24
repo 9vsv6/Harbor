@@ -151,7 +151,7 @@ fun CalendarScreen(repository: Repository, onBack: (() -> Unit)?, onOpen: (Meta)
                 CalendarSource.All -> tmdbKey?.let { Discover.allUpcoming(it, month) }.orEmpty()
                 CalendarSource.Trakt -> trakt?.let { Discover.traktCalendar(it, month) }.orEmpty()
                 CalendarSource.Anticipated -> Discover.anticipatedCalendar(trackers.trakt?.clientId, month)
-                CalendarSource.Anime -> if (animeDub) Discover.animeDubCalendar(month) else Discover.animeCalendar(month)
+                CalendarSource.Anime -> if (animeDub) Discover.animeDubCalendar(month) else Discover.animeCalendar(month, trackers.anilist?.accessToken)
             }.sortedWith(compareBy({ it.date }, { it.atMs ?: 0L }))
         }.onFailure { error = it.message ?: "Failed to load" }.getOrDefault(emptyList())
     }

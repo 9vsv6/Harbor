@@ -4,10 +4,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/** Old saves omitted false defaults. Keep those choices; new profiles use AppSettings(). */
+/** Old saves omitted defaults. Keep those choices; new profiles use AppSettings(). */
 internal fun savedSettings(value: String): AppSettings {
     val saved = Net.json.parseToJsonElement(value) as JsonObject
-    val defaults = mapOf("keepSourceNextEpisode" to JsonPrimitive(false), "animePreferImdbStreams" to JsonPrimitive(false))
+    val defaults = mapOf("keepSourceNextEpisode" to JsonPrimitive(false), "animePreferImdbStreams" to JsonPrimitive(false), "engine" to JsonPrimitive("mpv"))
     return Net.json.decodeFromJsonElement(AppSettings.serializer(), JsonObject(defaults + saved))
 }
 
@@ -89,9 +89,15 @@ data class SubLook(
  */
 @Serializable
 data class AppSettings(
+    /** Last choice in the detail page's library split button, scoped with the profile. */
+    val libraryAddScope: String = "library",
     // ---- Playback: player ----
-    /** "mpv" (Harbor's player) or "media3" (Android's own). */
-    val engine: String = "mpv",
+    /** "auto" (Media3, then mpv if needed), "mpv" or "media3". */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault
+    val engine: String = "auto",
+    /** Move a video that fails to play to the other engine (once per video), whichever engine is chosen. */
+    val switchEngineOnError: Boolean = true,
     val rememberAudioTracks: Boolean = true,
     val preferOfflineDownloads: Boolean = true,
     val autoDownloadNext: Boolean = false,
@@ -111,8 +117,13 @@ data class AppSettings(
     val resumePlayback: Boolean = true,
     /** Show "Resumed at 12:34 · Start over" when resuming. */
     val resumeNotice: Boolean = false,
-    val seekBackSec: Int = 10,
-    val seekForwardSec: Int = 10,
+    val seekBackSec: Float = 10f,
+    val seekForwardSec: Float = 10f,
+    val seekBackLongSec: Float = 30f,
+    val seekForwardLongSec: Float = 30f,
+    val slowSpeed: Float = 0.5f,
+    val speedDownStep: Float = 0.25f,
+    val speedUpStep: Float = 0.25f,
     val playbackSpeeds: List<Float> = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f),
     val sleepMinutes: List<Int> = listOf(15, 30, 45, 60, 90),
     /** Harbor hides the lock by default on desktop; on a phone it's the screen-lock button. */
@@ -144,6 +155,7 @@ data class AppSettings(
     val seekBarChapters: Boolean = false,
     /** Harbor's content advisory: the IMDb parental guide, briefly, when a title starts. */
     val contentAdvisoryToast: Boolean = false,
+    val contentAdvisoryKeepExpanded: Boolean = false,
     /** "colored" or "monochrome". */
     val contentAdvisoryTheme: String = "monochrome",
     val contentAdvisoryShowIgnore: Boolean = true,
@@ -153,6 +165,7 @@ data class AppSettings(
     // ---- Playback: sources ----
     val autoNextStreamOnStall: Boolean = false,
     val stallSec: Int = 10,
+    // Legacy backup fields only. Remembered streams and source continuity are always enabled.
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault
     val keepSourceNextEpisode: Boolean = true,
@@ -164,6 +177,8 @@ data class AppSettings(
     /** "balanced", "performance" or "quality". */
     val mpvQuality: String = "balanced",
     val downmixStereo: Boolean = false,
+    val audioPassthrough: Boolean = false,
+    val audioPassthroughFormats: Set<String> = setOf("ac3", "eac3", "dts", "dts-hd", "truehd"),
     /** Loudest mpv may go, as a multiple of 100%. */
     val volumeBoostMax: Int = 2,
     /** "auto", "small", "large". */
@@ -188,6 +203,16 @@ data class AppSettings(
     val autoSyncExperimental: Boolean = false,
     val subtitleAutoSync: Boolean = false,
     val subtitleAutoSyncAsr: Boolean = true,
+    /** Continue watching: dismissing a card also deletes its saved position on Trakt, Simkl and PublicMetaDB. */
+    val cwClearProviderProgress: Boolean = false,
+    /** Episode numbers on show pages, from TVDB (PC's tvdbSeasonType): "aired", "official", "dvd", "absolute" or "alternate". */
+    val tvdbSeasonType: String = "aired",
+    /** Settings → Home → Anime identity (experimental), as PC: the offline database and what may use it. All off. */
+    val animeIdentityEnabled: Boolean = false,
+    val animeIdentityRepairEnabled: Boolean = false,
+    val animeIdentityLiveScrobbleEnabled: Boolean = false,
+    /** "Moonshine language": "auto" follows the selected audio track; or one of Moonshine.LANGUAGES. */
+    val subtitleMoonshineLanguage: String = "auto",
     /** Auto sync goes straight to the speech model (when installed), skipping the speech-timing pass. */
     val autoSyncAlwaysSpeech: Boolean = false,
     val autoSyncApplyCorrections: Boolean = false,
@@ -227,6 +252,8 @@ data class AppSettings(
 
     // ---- Library and cards ----
     val showRatingBadge: Boolean = true,
+    val tvScaleScoreBadges: Boolean = true,
+    val tvScoreSources: Set<String> = setOf("imdb", "rt", "mal", "simkl"),
     /** Harbor's card badges: "In cinema" and "New" at the top left. */
     val showCardBadges: Boolean = true,
     /** Harbor's award tab on cards: the top award a title won. */

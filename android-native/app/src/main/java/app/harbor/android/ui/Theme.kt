@@ -85,6 +85,7 @@ fun HarborTheme(content: @Composable () -> Unit) {
     }
     MaterialTheme(colorScheme = colors, typography = typography) {
         androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalLayoutDirection provides if (app.harbor.android.i18n.I18n.rtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr,
             androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(fontFamily = sans),
             // Every clickable shows where a TV remote's focus is (TvFocus.kt).
             androidx.compose.foundation.LocalIndication provides HarborIndication,

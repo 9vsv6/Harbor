@@ -284,6 +284,9 @@ private fun TracksLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerAc
 @Composable
 private fun FindLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions) {
     var query by remember { mutableStateOf(state.meta?.name ?: state.title) }
+    val current = state.episodes.firstOrNull { it.id == state.videoId }
+    var season by remember(state.videoId) { mutableIntStateOf(current?.season ?: 1) }
+    var episode by remember(state.videoId) { mutableIntStateOf(current?.episode ?: 1) }
     var results by remember { mutableStateOf<List<Subtitle>?>(null) }
     var pending by remember { mutableIntStateOf(0) }
     var hideHi by remember { mutableStateOf(false) }
@@ -295,7 +298,7 @@ private fun FindLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActi
         pending = 2
         // Only this search's answers count: a slower earlier search can't overwrite a newer one.
         val mine = runs
-        actions.findSubtitles(query) { found, left -> if (mine == runs) { results = found; pending = left } }
+        actions.findSubtitles(query, season, episode) { found, left -> if (mine == runs) { results = found; pending = left } }
     }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
     val added = state.addonSubs.orEmpty().map { it.url }.toSet()
@@ -317,6 +320,10 @@ private fun FindLane(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActi
         item {
             Rail {
                 Chip("Search", Icons.Rounded.Search) { runs++ }
+                if (state.isSeries) {
+                    Stepper("Season", "$season", { season = (season + it).coerceAtLeast(0) }) { season = current?.season ?: 1 }
+                    Stepper("Episode", "$episode", { episode = (episode + it).coerceAtLeast(1) }) { episode = current?.episode ?: 1 }
+                }
                 Chip("Hide HI/SDH", on = hideHi) { hideHi = !hideHi }
                 Chip("Forced only", on = forcedOnly) { forcedOnly = !forcedOnly }
             }

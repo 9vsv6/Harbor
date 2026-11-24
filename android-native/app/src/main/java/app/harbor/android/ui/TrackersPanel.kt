@@ -76,6 +76,7 @@ enum class Tracker(val label: String, val logo: Int, val blurb: String, val site
     Mal("MyAnimeList", R.drawable.logo_mal, "Syncs anime progress and lets you browse your MAL list inside Harbor.", "https://myanimelist.net"),
     Letterboxd("Letterboxd", R.drawable.logo_letterboxd, "Brings your watchlist, diary, likes and lists in through the Stremboxd bridge.", "https://letterboxd.com"),
     PublicMetaDb("PublicMetaDB", R.drawable.logo_publicmetadb, "Tracks watch history, syncs resume points and keeps a watchlist on PublicMetaDB.", "https://publicmetadb.com"),
+    Refract("Refract", R.drawable.logo_refract, "Sends watched movies, episodes and watchlist changes to Refract.", "https://getrefract.app"),
 }
 
 @Composable
@@ -86,12 +87,13 @@ fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSetti
         Tracker.Simkl -> trackers.simkl
         Tracker.AniList -> trackers.anilist
         Tracker.Mal -> trackers.mal
-        Tracker.Letterboxd, Tracker.PublicMetaDb -> null
+        Tracker.Letterboxd, Tracker.PublicMetaDb, Tracker.Refract -> null
     }
     val pmdb by repository.accounts.pmdb.collectAsState()
     fun connected(t: Tracker) = when (t) {
         Tracker.Letterboxd -> settings.letterboxd.enabled && settings.letterboxd.username.isNotBlank()
         Tracker.PublicMetaDb -> pmdb != null
+        Tracker.Refract -> trackers.refract != null
         else -> authOf(t)?.accessToken != null
     }
     var picked by rememberSaveable { mutableStateOf(Tracker.Trakt) }
@@ -110,6 +112,7 @@ fun TrackersPanel(repository: Repository, settings: AppSettings, set: ((AppSetti
             Tracker.Mal -> MalPage(repository, settings, set, authOf(Tracker.Mal))
             Tracker.Letterboxd -> LetterboxdPage(repository, settings, set)
             Tracker.PublicMetaDb -> PublicMetaDbPage(repository, settings, set)
+            Tracker.Refract -> RefractPage(repository)
         }
     }
     Text("Sign-ins belong to the current profile.", color = HarborColors.InkSubtle, fontSize = 13.5.sp, modifier = Modifier.padding(top = 4.dp))
@@ -181,6 +184,7 @@ private fun signOut(repository: Repository, t: Tracker, auth: TrackerAuth) {
             Tracker.AniList -> it.copy(anilist = signedOut)
             Tracker.Mal -> it.copy(mal = signedOut)
             Tracker.Letterboxd, Tracker.PublicMetaDb -> it.copy(letterboxd = null)
+            Tracker.Refract -> it.copy(refract = null)
         }
     }
 }
@@ -207,6 +211,7 @@ private fun TraktPage(repository: Repository, settings: AppSettings, set: ((AppS
             tracker = Tracker.Trakt,
             auth = auth,
             needsSecret = true,
+            builtInClientId = Trakt.HARBOR_CLIENT,
             registerUrl = "https://trakt.tv/oauth/applications/new",
             start = { id, _ -> Trakt.deviceCode(id) },
             await = { id, secret, code -> Trakt.awaitToken(id, secret.orEmpty(), code) },
@@ -266,6 +271,7 @@ private fun SimklPage(repository: Repository, settings: AppSettings, set: ((AppS
             tracker = Tracker.Simkl,
             auth = auth,
             needsSecret = false,
+            builtInClientId = Simkl.HARBOR_CLIENT,
             registerUrl = "https://simkl.com/settings/developer/new/",
             start = { id, _ -> Simkl.pin(id) },
             await = { id, _, code -> Simkl.awaitToken(id, code) },
@@ -383,11 +389,16 @@ private fun MalConnect(repository: Repository, auth: TrackerAuth?) {
     fun authorize() {
         // The verifier outlives a trip to the browser, which can end this screen.
         val verifier = Mal.newVerifier()
-        prefs.edit().putString("verifier", verifier).putString("client", clientId).putString("secret", secret).apply()
-        uri.openUri(Mal.authorizeUrl(clientId, verifier))
+        val state = Mal.newVerifier()
+        prefs.edit().putString("verifier", verifier).putString("state", state).putString("client", clientId).putString("secret", secret).apply()
+        uri.openUri(Mal.authorizeUrl(clientId, verifier, state))
     }
     fun finish(pasted: String) {
         val verifier = prefs.getString("verifier", null) ?: run { error = "Session expired. Start over and authorize again."; return }
+        // A link back from MyAnimeList must belong to this attempt (auth.ts requireState).
+        Regex("[?&]state=([^&#]+)").find(pasted)?.groupValues?.get(1)?.let { returned ->
+            if (returned != prefs.getString("state", null)) { error = "This authorization belongs to another attempt. Authorize again."; return }
+        }
         val id = clientId.ifBlank { prefs.getString("client", "").orEmpty() }
         busy = true
         error = null
@@ -408,11 +419,26 @@ private fun MalConnect(repository: Repository, auth: TrackerAuth?) {
         finish(link)
     }
 
+    var ownApp by remember { mutableStateOf(auth?.clientId?.let { it != Mal.HARBOR_CLIENT } == true) }
     TrackerConnectCard(Tracker.Mal) {
         open = true
+        if (!ownApp) clientId = Mal.HARBOR_CLIENT
         if (clientId.isNotBlank()) authorize()
     }
     if (!open) return
+    if (!ownApp) {
+        SettingsSection("Authorize Harbor on MyAnimeList", "Approve Harbor there, then tap Open Harbor. If Harbor doesn't open, copy the code and paste it below.") {
+            HGhostButton(onClick = { clientId = Mal.HARBOR_CLIENT; secret = ""; authorize() }) {
+                Text("Open MyAnimeList")
+                Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(15.dp))
+            }
+            HTextField(code, { code = it.trim() }, Modifier.fillMaxWidth(), label = { Text("Paste the code") }, singleLine = true)
+            error?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp) }
+            HButton(enabled = !busy && code.isNotBlank(), onClick = { finish(code) }) { Text(if (busy) "Checking with MyAnimeList…" else "Connect") }
+            HGhostButton(onClick = { ownApp = true; clientId = "" }) { Text("Use your own MyAnimeList app instead") }
+        }
+        return
+    }
     AppSetup(
         Tracker.Mal,
         "https://myanimelist.net/apiconfig/create",
@@ -718,6 +744,8 @@ private fun DeviceConnect(
     auth: TrackerAuth?,
     needsSecret: Boolean,
     registerUrl: String,
+    /** Harbor's own app (as PC): Connect needs no setup. Your own app stays available. */
+    builtInClientId: String? = null,
     start: suspend (clientId: String, secret: String?) -> DeviceCode,
     await: suspend (clientId: String, secret: String?, code: DeviceCode) -> TrackerAuth,
     onSave: (TrackerAuth?) -> Unit,
@@ -733,13 +761,15 @@ private fun DeviceConnect(
     var job by remember(tracker) { mutableStateOf<Job?>(null) }
     val ready = clientId.isNotBlank() && (!needsSecret || secret.isNotBlank())
 
-    fun connect() {
+    fun connect(own: Boolean = true) {
         error = null
+        val id = if (own) clientId else builtInClientId.orEmpty()
+        val key = if (own) secret.ifBlank { null } else null
         job = scope.launch {
             runCatching {
-                val device = start(clientId, secret.ifBlank { null })
+                val device = start(id, key)
                 code = device
-                val signedIn = await(clientId, secret.ifBlank { null }, device)
+                val signedIn = await(id, key, device)
                 onSave(signedIn)
                 after()
             }.onFailure { if (it !is kotlinx.coroutines.CancellationException) error = it.message ?: "Sign-in failed" }
@@ -765,8 +795,15 @@ private fun DeviceConnect(
         return
     }
 
-    TrackerConnectCard(tracker) { if (ready) connect() else setup = true }
+    TrackerConnectCard(tracker) {
+        when {
+            builtInClientId != null -> connect(own = false)
+            ready -> connect()
+            else -> setup = true
+        }
+    }
     error?.let { Text(it, color = Color(0xFFE57373), fontSize = 14.sp) }
+    if (builtInClientId != null && !setup) HGhostButton(onClick = { setup = true }) { Text("Use your own ${tracker.label} app instead") }
     if (setup) {
         AppSetup(
             tracker,
@@ -831,5 +868,111 @@ private fun AniListConnect(repository: Repository, auth: TrackerAuth?) {
                 }
             },
         ) { Text(if (busy) "Checking…" else "Connect") }
+    }
+}
+
+// ---------------- Refract ----------------
+
+/** Refract sync, as Harbor PC 1.0.4's refract-panel.tsx: a personal API key, outbound only. */
+@Composable
+private fun RefractPage(repository: Repository) {
+    val trackers by repository.trackers.collectAsState()
+    val auth = trackers.refract
+    val status by repository.refract.status.collectAsState()
+    val watchlist by repository.refract.watchlistMessage.collectAsState()
+    val scope = rememberCoroutineScope()
+    var input by remember { mutableStateOf("") }
+    var showKey by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    // A late verification never saves a key after leaving the page or starting again.
+    var attempt by remember { mutableStateOf<Job?>(null) }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { attempt?.cancel() } }
+
+    SettingsSection("Refract sync", "Sync watched history and Harbor watchlist changes with Refract.") {
+        if (auth == null) {
+            Text(
+                "Create a personal API key in Refract with profile:read, library:read, library:write and history:write. Never share or commit the key.",
+                color = HarborColors.InkMuted, fontSize = 14.sp,
+            )
+            HarborHeading("Refract personal API key")
+            HTextField(
+                input, { input = it }, Modifier.fillMaxWidth(), label = { Text("rfk_...") }, singleLine = true,
+                visualTransformation = if (showKey) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HGhostButton(onClick = { showKey = !showKey }) { Text(if (showKey) "Hide" else "Show") }
+                HButton(
+                    enabled = !busy && input.isNotBlank(),
+                    onClick = {
+                        val key = input.trim()
+                        busy = true
+                        message = null
+                        attempt?.cancel()
+                        attempt = scope.launch {
+                            try {
+                                val identity = app.harbor.android.data.Refract.verify(key)
+                                repository.updateTrackers { it.copy(refract = app.harbor.android.data.RefractAuth(key = key, user = identity)) }
+                                input = ""
+                                message = "Connected to Refract ($identity). Watched history sync is enabled."
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                message = "Could not verify the key via Refract /v1/me. Check permissions and connectivity."
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                ) { Text(if (busy) "Verifying..." else "Connect Refract") }
+            }
+        } else {
+            RowText("Your Refract account", auth.user?.let { "Connected as $it." } ?: "Connected.")
+            ToggleRow(
+                "Sync watched history and watchlist",
+                "Send watched history and watchlist changes from Harbor to Refract. Only this profile is synced.",
+                auth.enabled,
+            ) { on ->
+                repository.updateTrackers { t -> t.copy(refract = t.refract?.copy(enabled = on)) }
+                if (on) repository.refract.retry()
+            }
+            if (auth.enabled) {
+                HarborHeading(
+                    "Automatic watch threshold",
+                    "Log a movie or episode in Refract when playback reaches the selected time or percentage. Seeking past it also qualifies. Early logging counts as watched in Refract, not partially watched. Harbor's own completion threshold is unchanged.",
+                )
+                HarborSelect(app.harbor.android.data.Refract.THRESHOLDS.map { it to app.harbor.android.data.Refract.thresholdLabel(it) }, auth.threshold) { v ->
+                    repository.updateTrackers { t -> t.copy(refract = t.refract?.copy(threshold = v)) }
+                }
+            }
+            RowText(
+                "Harbor → Refract Plan to Watch",
+                "New watchlist additions and removals are sent automatically while sync is enabled. Requires library:write; reconnect with an updated key if needed. Existing Refract history and other library statuses are preserved.",
+            )
+            if (watchlist.isNotEmpty()) Text(watchlist, color = HarborColors.InkMuted, fontSize = 14.sp)
+            Text(
+                "${status.synced} sent · ${status.pending} pending · ${status.failed} unmatched" + (if (status.message.isNotEmpty()) " · ${app.harbor.android.i18n.I18n.tr(status.message)}" else ""),
+                color = HarborColors.InkMuted, fontSize = 14.sp,
+            )
+            if (status.failures.isNotEmpty()) {
+                HarborHeading("Unmatched items")
+                status.failures.forEach { f ->
+                    val episode = if (f.season != null) " S${f.season}E${f.episode}" else ""
+                    Text("${f.sourceId}$episode: ${app.harbor.android.i18n.I18n.tr(f.reason)}", color = HarborColors.InkSubtle, fontSize = 13.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HGhostButton(onClick = { repository.refract.retry() }) { Text("Retry pending watches") }
+                HGhostButton(onClick = {
+                    attempt?.cancel()
+                    repository.updateTrackers { it.copy(refract = null) }
+                    message = "Disconnected from Refract."
+                }) {
+                    Icon(Icons.AutoMirrored.Rounded.Logout, null, Modifier.size(16.dp))
+                    Text("Disconnect Refract")
+                }
+            }
+        }
+        message?.let { Text(it, color = HarborColors.InkMuted, fontSize = 14.sp) }
     }
 }

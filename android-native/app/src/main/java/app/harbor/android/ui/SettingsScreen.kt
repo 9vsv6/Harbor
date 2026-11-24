@@ -170,10 +170,11 @@ private enum class Section(
     TrackMal("MyAnimeList", "Anime progress, and your MAL list inside Harbor.", R.drawable.logo_mal, "myanimelist mal anime list progress", logo = true),
     TrackLetterboxd("Letterboxd", "Your watchlist, diary, likes and lists, through Stremboxd.", R.drawable.logo_letterboxd, "letterboxd stremboxd watchlist diary likes lists reviews", logo = true),
     TrackPmdb("PublicMetaDB", "Watch history, resume points and a watchlist on PublicMetaDB.", R.drawable.logo_publicmetadb, "publicmetadb pmdb history resume watchlist", logo = true),
+    TrackRefract("Refract", "Watched movies, episodes and watchlist changes, sent to Refract.", R.drawable.logo_refract, "refract history watchlist plan to watch api key", logo = true),
     Play("When you press Play", "What Play does, resuming, and which source plays.", R.drawable.set_play_start, "play button instant manual picker resume start over remember source stalled", setOf("Play")),
-    Engine("Player engine", "mpv or Android's player.", R.drawable.set_cpu, "engine mpv media3 player", setOf("Engine")),
+    Engine("Player engine", "Automatic, mpv or Android's player.", R.drawable.set_cpu, "engine automatic auto mpv media3 player", setOf("Engine")),
     Aspect("Aspect ratio", "How the picture fills the screen.", R.drawable.set_rectangle_horizontal, "aspect ratio fit fill stretch zoom", setOf("Aspect")),
-    Audio("Audio", "Downmix, loudness, sound profiles and volume boost.", R.drawable.set_volume2, "downmix stereo volume boost loudness sound profile bass night vocal", setOf("Player audio")),
+    Audio("Audio", "Passthrough, downmix, loudness, sound profiles and volume boost.", R.drawable.set_volume2, "passthrough surround dolby atmos ac3 eac3 dts truehd downmix stereo volume boost loudness sound profile bass night vocal", setOf("Player audio")),
     OnScreen("On-screen controls", "The player's controls: quality, seek steps, speeds and sleep timer.", R.drawable.set_onscreen_controls, "seek speed sleep lock quality badge volume pop-up", setOf("On screen")),
     XRay("X-Ray", "The cast, crew and facts from the player.", R.drawable.set_scan_eye, "xray x-ray cast crew", setOf("X-Ray")),
     AdSkip("Ad skipping", "Skip injected ads in cam and new-release rips.", R.drawable.set_skip_forward, "ad skip injected ads report cam new release experimental"),
@@ -199,9 +200,9 @@ private enum class Section(
     Sorting("Stream sorting", "The order sources come in.", R.drawable.set_arrow_down_up, "order sort ranking addon order", setOf("Sorting")),
     Picker("Source picker", "The picker's layout, source mode and what each source shows.", R.drawable.set_mouse_pointer_click, "picker layout condensed stremio source mode direct p2p descriptions release name file names refresh back", setOf("Picker")),
     StreamFilters("Stream filters", "Only show sources that match.", R.drawable.set_filter, "filter resolution 4k 1080p remux bluray web hevc av1 hdr cached size"),
-    HomeRows("Home", "The hero and rows on Home.", R.drawable.set_house, "home top 10 hero unreleased anime room watched hide catalogs new episodes row continue watching trakt", setOf("Home")),
+    HomeRows("Home", "The hero and rows on Home.", R.drawable.set_house, "home top 10 hero unreleased anime room watched hide catalogs new episodes row continue watching trakt anime identity offline database repair validate scrobble targets provider progress clear", setOf("Home")),
     PosterCards("Poster cards", "What a poster card shows.", R.drawable.set_layout_grid, "poster card badge rating award dub watched check watchlist bookmark titles", setOf("Cards")),
-    DetailPages("Detail pages", "Show pages, spoilers, episode cards and community.", R.drawable.set_file_text, "episodes spoilers order description card size trakt comments letterboxd reviews community show pages full descriptions remember season imdb keyless free data season explorer tvdb posters synopses", setOf("Detail pages")),
+    DetailPages("Detail pages", "Show pages, spoilers, episode cards and community.", R.drawable.set_file_text, "episodes spoilers order tvdb aired official dvd absolute alternate numbering description card size trakt comments letterboxd reviews community show pages full descriptions remember season imdb keyless free data season explorer tvdb posters synopses", setOf("Detail pages")),
     Metadata("Metadata providers", "Where titles, artwork and scores come from.", R.drawable.set_database, "tmdb omdb tvdb thetvdb mdblist fanart rpdb custom posters ratings keys metadata providers"),
     AiSearchPage("Search", "AI search: describe what you want to watch.", R.drawable.set_discovery_search, "ai search openrouter groq model jina natural language", setOf("Search")),
     LibraryContent("Library", "Content filters and downloads.", R.drawable.set_saved_library, "library content filters hide anime downloads delete", setOf("Library")),
@@ -224,7 +225,7 @@ private enum class Group(val label: String, val section: String, @androidx.annot
         "Account & setup", "Setup", R.drawable.set_account_setup,
         listOf(
             Section.Essentials, Section.YourProfile, Section.Profiles, Section.HarborAccount, Section.Provider, Section.Stremio, Section.Nuvio,
-            Section.TrackTrakt, Section.TrackSimkl, Section.TrackAniList, Section.TrackMal, Section.TrackLetterboxd, Section.TrackPmdb,
+            Section.TrackTrakt, Section.TrackSimkl, Section.TrackAniList, Section.TrackMal, Section.TrackLetterboxd, Section.TrackPmdb, Section.TrackRefract,
         ),
     ),
     Playback(
@@ -658,6 +659,7 @@ private fun SectionBody(
             Section.TrackMal -> TrackersPanel(repository, settings, set, Tracker.Mal)
             Section.TrackLetterboxd -> TrackersPanel(repository, settings, set, Tracker.Letterboxd)
             Section.TrackPmdb -> TrackersPanel(repository, settings, set, Tracker.PublicMetaDb)
+            Section.TrackRefract -> TrackersPanel(repository, settings, set, Tracker.Refract)
             Section.Play, Section.Engine, Section.Aspect, Section.Audio, Section.OnScreen, Section.XRay, Section.Intros, Section.UpNext, Section.Trailers,
             Section.Quality, Section.Picture, Section.Network, Section.MpvConf, Section.Shaders -> PlayerSection(repository, settings, set)
             Section.AppLanguage, Section.AudioLanguage, Section.WhatYouSee -> LanguageSection(repository, settings, set)
@@ -930,8 +932,6 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         ToggleRow("Automatically download the next episode", "While watching, prepare the next episode using your current source preferences. Uses storage and your connection.", settings.autoDownloadNext) { on -> set { it.copy(autoDownloadNext = on) } }
         ToggleRow("Try future-dated episodes", "Look for a source even when the listed release date is in the future. The countdown remains visible.", settings.allowFutureEpisodes) { on -> set { it.copy(allowFutureEpisodes = on) } }
         HarborHeading("Sources", "Which source plays, and what happens when it struggles.")
-        ToggleRow("Remember last stream", "Marks the source you picked and plays it first next time.", settings.rememberLastStream) { v -> set { it.copy(rememberLastStream = v) } }
-        ToggleRow("Keep same source on next episode", "Stay on one source for a season: the next episode prefers the addon this one came from.", settings.keepSourceNextEpisode) { v -> set { it.copy(keepSourceNextEpisode = v) } }
         ToggleRow("Auto-skip stalled streams", "Moves to the next source when a stream keeps buffering.", settings.autoNextStreamOnStall) { v -> set { it.copy(autoNextStreamOnStall = v) } }
         if (settings.autoNextStreamOnStall) {
             RowText("How long to wait first", "How long a stream may buffer before Harbor tries the next one.")
@@ -944,11 +944,13 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
         HarborHeading("Player engine", "What plays the video.")
         CheckList(
             listOf(
-                Triple("mpv", "mpv", "Harbor's player: styled subtitles, every format, Anime4K and shaders. If mpv can't start, Harbor uses Media3."),
+                Triple("auto", "Automatic", app.harbor.android.player.PlayerEngineChoice.AUTOMATIC_DESCRIPTION),
+                Triple("mpv", "mpv", "Harbor's player: styled subtitles, every format, Anime4K and shaders. If mpv can't play a video, Harbor moves it to Media3."),
                 Triple("media3", "Android (Media3)", "Android's own player: lightest on battery. No Anime4K; Harbor draws the subtitles."),
             ),
             settings.engine,
         ) { v -> set { it.copy(engine = v) } }
+        ToggleRow("Switch engine on playback error", app.harbor.android.player.PlayerEngineChoice.SWITCH_ON_ERROR, settings.switchEngineOnError) { on -> set { it.copy(switchEngineOnError = on) } }
     }
     // ---- Aspect ----
     Part("Aspect") {
@@ -964,6 +966,16 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
     }
     // ---- Audio ----
     Part("Player audio") {
+        ToggleRow("Audio passthrough", app.harbor.android.player.AudioPassthrough.DESCRIPTION, settings.audioPassthrough) { v -> set { it.copy(audioPassthrough = v) } }
+        if (settings.audioPassthrough) {
+            HarborHeading("Passthrough formats", "Only enabled formats supported by the current audio output are sent through.")
+            app.harbor.android.player.AudioPassthrough.formats.forEach { (format, label) ->
+                ToggleRow(label, null, format in settings.audioPassthroughFormats) { on ->
+                    set { it.copy(audioPassthroughFormats = if (on) it.audioPassthroughFormats + format else it.audioPassthroughFormats - format) }
+                }
+            }
+            Muted(app.harbor.android.player.AudioPassthrough.PROCESSING_NOTE)
+        }
         HarborHeading("Player audio", "How the sound is mixed (mpv).")
         ToggleRow("Mix surround sound down to stereo", "Clearer dialogue on phone speakers and headphones.", settings.downmixStereo) { v -> set { it.copy(downmixStereo = v) } }
         ToggleRow("Normalize loudness", "Evens out quiet dialogue and loud scenes.", settings.audioNormalize) { v -> set { it.copy(audioNormalize = v) } }
@@ -1020,11 +1032,7 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
                 )
             }
         }
-        HarborHeading("Seek steps", "How far the back and forward buttons and double-taps jump.")
-        RowText("Back", null)
-        PillChoice(listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 30 to "30 s"), settings.seekBackSec) { v -> set { it.copy(seekBackSec = v) } }
-        RowText("Forward", null)
-        PillChoice(listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 30 to "30 s", 60 to "60 s"), settings.seekForwardSec) { v -> set { it.copy(seekForwardSec = v) } }
+        PlaybackBehaviour(settings, set)
         HarborHeading("Playback speed", "The speed a video starts at, and the speeds in the player's menu.")
         HarborSelect(settings.playbackSpeeds.sorted().map { it to speedLabel(it) }, prefs.speed) { v -> repository.updatePlayerPrefs { it.copy(speed = v) } }
         MultiChipRow(listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f).map { it to speedLabel(it) }, settings.playbackSpeeds.toSet()) { v ->
@@ -1094,7 +1102,7 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
     }
     // ---- Quality (mpv) ----
     Part("Quality") {
-        if (settings.engine != "mpv") Muted("These apply when the player engine is mpv.")
+        if (settings.engine != "mpv") Muted("These apply when mpv is in use, including under Automatic.")
         HarborHeading("Picture quality", "How hard mpv works on the picture.")
         CheckList(
             listOf(
@@ -1162,7 +1170,8 @@ private fun PlayerSection(repository: Repository, settings: AppSettings, set: ((
     }
     // ---- Anime Shaders ----
     Part("Anime Shaders") {
-        if (settings.engine != "mpv") Muted("Anime4K needs the mpv engine.")
+        if (settings.engine == "media3") Muted("Anime4K needs the mpv engine.")
+        if (settings.engine == "auto") Muted("Automatic uses mpv for titles with Anime4K or picture shaders applied.")
         HarborHeading("Anime4K upscaling", "Sharper lines and cleaner upscaling for anime. You can also switch it from the player's Anime4K button.")
         CheckList(listOf(Triple("", "Off", null)) + Anime4K.Mode.entries.map { Triple(it.name, it.label, null) }, prefs.anime4kMode) { mode ->
             repository.updatePlayerPrefs { it.copy(anime4kMode = mode) }
@@ -1591,6 +1600,12 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         ToggleRow("Keep anime in the Anime room only", "Anime stays in the Anime view, out of Home, Movies and Shows.", settings.animeRoomOnly) { v -> set { it.copy(animeRoomOnly = v) } }
         HarborHeading("Continue Watching", null)
         ToggleRow("Trakt in Continue Watching", "Adds what you're watching elsewhere, from Trakt.", settings.traktInContinueWatching) { v -> set { it.copy(traktInContinueWatching = v) } }
+        AnimeIdentityRows(settings, set)
+        ToggleRow(
+            "Also clear provider playback progress",
+            "When you dismiss a Continue Watching card, also delete its saved playback position from every connected provider. Watch history, ratings, and watchlist statuses are unchanged.",
+            settings.cwClearProviderProgress,
+        ) { v -> set { it.copy(cwClearProviderProgress = v) } }
     }
     // ---- Cards ----
     Part("Cards") {
@@ -1602,12 +1617,17 @@ private fun LibrarySection(repository: Repository, settings: AppSettings, set: (
         ToggleRow("Watched badge", "A check on the posters of titles you have watched.", settings.watchedBadge) { v -> set { it.copy(watchedBadge = v) } }
         ToggleRow("Watchlist bookmark", "A bookmark on the posters of titles in your list.", settings.watchlistBookmark) { v -> set { it.copy(watchlistBookmark = v) } }
         ToggleRow("Hide titles under posters", "Cleaner grid when your poster service already prints the title on the artwork.", settings.hidePosterTitles) { v -> set { it.copy(hidePosterTitles = v) } }
+        HarborHeading("TV · Scores", "Rating badges on TV cards.")
+        ToggleRow("Scale TV score badges", "Shrink the score stack when several ratings are enabled.", settings.tvScaleScoreBadges) { v -> set { it.copy(tvScaleScoreBadges = v) } }
+        MultiChipRow(app.harbor.android.data.TvScores.sources, settings.tvScoreSources) { v -> set { it.copy(tvScoreSources = v.toSet()) } }
     }
     // ---- Detail pages ----
     Part("Detail pages") {
         HarborHeading("Show pages", "How a show or movie page behaves when you open it.")
         ToggleRow("Show full descriptions", "Opens with the whole synopsis instead of the first lines.", settings.fullDescriptions) { v -> set { it.copy(fullDescriptions = v) } }
         ToggleRow("Remember your place on show pages", "Reopens a show on the season you last looked at.", settings.rememberSeason) { v -> set { it.copy(rememberSeason = v) } }
+        HarborHeading("Which order", "How episodes are numbered on show pages, from TVDB (needs your TVDB key). Playback, watched marks and trackers keep the aired episodes.")
+        HarborSelect(listOf("aired" to "Aired", "official" to "Official", "dvd" to "DVD", "absolute" to "Absolute", "alternate" to "Alternate"), settings.tvdbSeasonType) { v -> set { it.copy(tvdbSeasonType = v) } }
         ToggleRow(
             "Season explorer",
             "Shows a season shelf with posters, names, and synopses above the episode list. Anime uses Harbor's TVDB service without a key. Regular shows use your TVDB key when set, otherwise their TMDB metadata. Turn this off to hide the shelf and stop its metadata requests.",
@@ -1988,8 +2008,8 @@ private fun EssentialsPage(repository: Repository, settings: AppSettings, set: (
     )
     Line(
         "Player engine",
-        "mpv is Harbor's player; Android's own (Media3) is lighter on battery. Pick the other one if playback misbehaves.",
-        if (settings.engine == "mpv") "mpv" else "Media3", { open(Section.Engine) },
+        "Automatic starts with Android's own player (Media3) and uses mpv when needed.",
+        app.harbor.android.player.PlayerEngineChoice.label(settings.engine), { open(Section.Engine) },
     )
     val langs = settings.streamLanguages
     Line(
@@ -2152,4 +2172,38 @@ internal fun SetupSettingsPage(repository: Repository, page: String, onBack: () 
             }
         }
     }
+}
+
+/**
+ * Settings → Home → Anime identity (experimental), as PC: the offline database (download, status,
+ * check for an update, delete) and the two things that may use it.
+ */
+@Composable
+private fun AnimeIdentityRows(settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val state by app.harbor.android.data.AnimeIdentity.state.collectAsState()
+    HarborHeading("Anime identity (experimental)", "An offline map of which Kitsu, MyAnimeList, AniList, AniDB and Simkl entries are the same anime, from the anime-offline-database (ODbL). About 6 MB to download, checked before use, refreshed weekly while on.")
+    ToggleRow("Use the offline anime identity database", "Off by default. Turning it on downloads the dataset.", settings.animeIdentityEnabled) { on ->
+        set { it.copy(animeIdentityEnabled = on) }
+        if (on) app.harbor.android.data.AnimeIdentity.refreshIfStale(context)
+    }
+    if (!settings.animeIdentityEnabled) return
+    Text(
+        when {
+            state.busy -> state.progress ?: "Working…"
+            state.installed -> "Installed · ${state.entries} titles · built ${java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(state.builtAt))}"
+            else -> "Not installed"
+        },
+        color = HarborColors.InkMuted, fontSize = 14.sp,
+    )
+    state.error?.let { Text(it, color = HarborColors.InkMuted, fontSize = 14.sp) }
+    androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (state.busy) HGhostButton(onClick = { app.harbor.android.data.AnimeIdentity.cancel() }) { Text("Cancel") }
+        else {
+            HButton(onClick = { app.harbor.android.data.AnimeIdentity.download(context) }) { Text(if (state.installed) "Check for update" else "Download") }
+            if (state.installed) HGhostButton(onClick = { app.harbor.android.data.AnimeIdentity.remove(context) }) { Text("Delete") }
+        }
+    }
+    ToggleRow("Repair Continue Watching identities", "Joins cards that name the same anime through different sites, using only verified matches.", settings.animeIdentityRepairEnabled) { v -> set { it.copy(animeIdentityRepairEnabled = v) } }
+    ToggleRow("Validate tracker scrobble targets", "Before AniList or MyAnimeList records an episode, checks the title against the offline database and skips it when they disagree.", settings.animeIdentityLiveScrobbleEnabled) { v -> set { it.copy(animeIdentityLiveScrobbleEnabled = v) } }
 }

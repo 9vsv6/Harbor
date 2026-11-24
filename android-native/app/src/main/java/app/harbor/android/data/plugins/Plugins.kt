@@ -317,7 +317,11 @@ object Plugins {
     // ---------------- streams ----------------
 
     /** A plugin as the picker's source groups see it: its name and icon, like an addon. */
-    fun addonOf(plugin: InstalledPlugin) = Addon("plugin://${plugin.id}", Manifest(id = plugin.id, name = plugin.name, version = plugin.version, logo = plugin.icon))
+    fun addonOf(plugin: InstalledPlugin) = Addon("plugin://${plugin.id}", Manifest(
+        id = plugin.id, name = plugin.name, version = plugin.version, logo = plugin.icon,
+        types = plugin.types.ifEmpty { listOf("movie", "series") },
+        resources = listOf(kotlinx.serialization.json.JsonPrimitive("stream")),
+    ))
 
     /** What the title is, for plugins that search by name (the desktop's StreamPluginRequest). */
     data class Title(val name: String, val year: Int?)

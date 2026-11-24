@@ -118,8 +118,8 @@ android {
         // Whisper has a private C++ runtime. mpv's newer shared runtime must keep winning
         // its existing dependency merge; substituting the NDK's can prevent mpv loading.
         externalNativeBuild { cmake { arguments += listOf("-DANDROID_STL=c++_static") } }
-        versionCode = 30
-        versionName = "1.0.18"
+        versionCode = 31
+        versionName = "1.0.19"
         // Phones (arm64), 32-bit TVs (armeabi-v7a) and the x86_64 emulator; mpv adds about 25 MB per ABI.
         if (!splitAbis) ndk { abiFilters += abis }
     }
@@ -239,6 +239,12 @@ dependencies {
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
     // mpv, the main player engine (libmpv-android, MIT; mpv and FFmpeg inside are LGPL/GPL).
     implementation("dev.jdtech.mpv:libmpv:1.0.0")
+    // Moonshine speech recognition for subtitle Auto sync (MIT; models downloaded per language on request).
+    implementation("ai.moonshine:moonshine-voice:0.1.6")
+    // Reads the optional offline anime identity dataset (.jsonl.zst); BSD licence.
+    implementation("com.github.luben:zstd-jni:1.5.7-6@aar")
+    // Plays PC's Harbor boat loader (assets/lottie/harbor-loader.json); Apache 2.0.
+    implementation("com.airbnb.android:lottie-compose:6.6.2")
 
     // Chromecast: the Cast framework with Google's default media receiver.
     implementation("com.google.android.gms:play-services-cast-framework:22.0.0")

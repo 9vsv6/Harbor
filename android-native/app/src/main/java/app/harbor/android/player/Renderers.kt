@@ -13,11 +13,13 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.RendererCapabilities
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.AudioOffloadSupport
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.extractor.text.CueDecoder
+import app.harbor.android.data.AppSettings
 import java.util.concurrent.ConcurrentSkipListMap
 
 /**
@@ -25,11 +27,15 @@ import java.util.concurrent.ConcurrentSkipListMap
  * video can be shifted either way in time, and an audio sink with a delay.
  */
 @OptIn(UnstableApi::class)
-class HarborRenderersFactory(context: Context, val cues: CueStore, val audioDelay: AudioDelay) : DefaultRenderersFactory(context) {
+internal class HarborRenderersFactory(context: Context, val cues: CueStore, val audioDelay: AudioDelay, private val settings: AppSettings, private val output: AudioOutputCapabilities) : DefaultRenderersFactory(context) {
+    @Volatile private var audioSink: PassthroughAudioSink? = null
+
+    fun audioCapabilitiesChanged() = audioSink?.capabilitiesChanged()
+
     init {
         // TV firmware often advertises Dolby/DTS support that fails or produces silence.
         // Decode supported audio to PCM with FFmpeg; video still uses the TV's hardware decoder.
-        setExtensionRendererMode(if (app.harbor.android.perf.Perf.isTv) EXTENSION_RENDERER_MODE_PREFER else EXTENSION_RENDERER_MODE_ON)
+        setExtensionRendererMode(if (app.harbor.android.perf.Perf.isTv && !settings.audioPassthrough) EXTENSION_RENDERER_MODE_PREFER else EXTENSION_RENDERER_MODE_ON)
         if (app.harbor.android.perf.Perf.isTv) {
             setMediaCodecSelector { mimeType, secure, tunneling ->
                 val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling)
@@ -77,7 +83,42 @@ class HarborRenderersFactory(context: Context, val cues: CueStore, val audioDela
 
     override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? {
         val sink = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams) ?: return null
-        return DelayedAudioSink(sink, audioDelay)
+        val filtered = PassthroughAudioSink(sink, settings, output).also { audioSink = it }
+        return DelayedAudioSink(filtered, audioDelay)
+    }
+}
+
+/** Refuse encoded output for disabled formats; decoded PCM still uses the normal sink. */
+@OptIn(UnstableApi::class)
+private class PassthroughAudioSink(sink: AudioSink, private val settings: AppSettings, private val output: AudioOutputCapabilities) : ForwardingAudioSink(sink) {
+    private var listener: AudioSink.Listener? = null
+    private var handler: android.os.Handler? = null
+    @Volatile private var released = false
+
+    override fun setListener(listener: AudioSink.Listener) {
+        this.listener = listener
+        handler = android.os.Handler(android.os.Looper.myLooper()!!)
+        super.setListener(listener)
+    }
+
+    fun capabilitiesChanged() {
+        handler?.post { if (!released) listener?.onAudioCapabilitiesChanged() }
+    }
+
+    private fun allowed(format: Format): Boolean {
+        if (format.sampleMimeType == MimeTypes.AUDIO_RAW) return true
+        val encoding = output.capabilities.getEncodingAndChannelConfigForPassthrough(format, AudioOutputCapabilities.attributes)?.first ?: return false
+        return output.selection(settings).allowsMedia3(encoding)
+    }
+
+    override fun supportsFormat(format: Format) = allowed(format) && super.supportsFormat(format)
+    override fun getFormatSupport(format: Format) = if (allowed(format)) super.getFormatSupport(format) else AudioSink.SINK_FORMAT_UNSUPPORTED
+    // Offload is a different encoded path and must not bypass the format switches.
+    override fun getFormatOffloadSupport(format: Format): AudioOffloadSupport = AudioOffloadSupport.DEFAULT_UNSUPPORTED
+
+    override fun release() {
+        released = true
+        super.release()
     }
 }
 

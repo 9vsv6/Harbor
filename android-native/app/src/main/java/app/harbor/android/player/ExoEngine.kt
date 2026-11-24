@@ -8,7 +8,6 @@ import android.os.Looper
 import android.view.View
 import androidx.annotation.OptIn
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -25,6 +24,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import app.harbor.android.data.AppSettings
 import app.harbor.android.data.Net
@@ -43,7 +43,13 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     private val audioDelay = AudioDelay()
     private val bitmaps = java.util.WeakHashMap<android.graphics.Bitmap, androidx.compose.ui.graphics.ImageBitmap>()
     private val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
-    private val player: ExoPlayer = ExoPlayer.Builder(context, HarborRenderersFactory(context, cueStore, audioDelay))
+    private val output = AudioOutputCapabilities(context)
+    private val renderers = HarborRenderersFactory(context, cueStore, audioDelay, setup.settings, output)
+    private val trackSelector = DefaultTrackSelector(context).apply {
+        if (setup.settings.audioPassthrough) parameters = buildUponParameters().setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true).build()
+    }
+    private val player: ExoPlayer = ExoPlayer.Builder(context, renderers)
+        .setTrackSelector(trackSelector)
         .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
         .build()
     private val playerView = PlayerView(context).apply {
@@ -58,8 +64,9 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
     override var listener: EngineListener? = null
 
     init {
+        output.onChanged = { renderers.audioCapabilitiesChanged() }
         player.setAudioAttributes(
-            AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
+            AudioOutputCapabilities.attributes,
             true,
         )
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
@@ -118,7 +125,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                 // An unsupported audio track need not be fatal to Media3: it can silently play
                 // just the picture. Try mpv when none of the file's audio tracks can be decoded.
                 val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                if (tv && !toldUnsupported && audio.isNotEmpty() && audio.none { g -> (0 until g.length).any { g.isTrackSupported(it, true) } }) {
+                if ((tv || setup.settings.engine == "auto") && !toldUnsupported && audio.isNotEmpty() && audio.none { g -> (0 until g.length).any { g.isTrackSupported(it, true) } }) {
                     toldUnsupported = true
                     cantPlay = true
                     listener?.onError("This device can't decode this file's audio.")
@@ -239,6 +246,9 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
                     detail = if (type == C.TRACK_TYPE_AUDIO) audioDetail(format) else textDetail(format),
                     selected = group.isTrackSelected(i),
                     language = format.language,
+                    title = format.label,
+                    codec = format.codecs ?: format.sampleMimeType?.substringAfter('/'),
+                    channels = format.channelCount.takeIf { it > 0 },
                     commentary = format.roleFlags and C.ROLE_FLAG_COMMENTARY != 0 ||
                         format.label?.contains("commentary", ignoreCase = true) == true,
                 )
@@ -299,6 +309,7 @@ class ExoEngine(context: Context, setup: EngineSetup) : Engine {
 
     override fun release() {
         loadAttempt++
+        output.release()
         main.removeCallbacks(firstFrameTimeout)
         // The view lets go first, so nothing in it touches the released player during teardown.
         playerView.player = null

@@ -1,11 +1,21 @@
 package app.harbor.android.data
 
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.serialization.json.jsonObject
 import java.text.Normalizer
 
@@ -15,6 +25,61 @@ import java.text.Normalizer
  */
 object ContentAdvisory {
     class Guide(val categories: List<Pair<String, String>>, val rating: String?)
+
+    data class Note(val text: String, val spoiler: Boolean)
+    data class Category(val id: String, val label: String, val severity: String, val severityVotes: Int, val totalVotes: Int, val totalItems: Int, val notes: List<Note>)
+    private data class Detailed(val categories: List<Category>, val expires: Long)
+    private val detailed = object : LinkedHashMap<String, Detailed>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Detailed>?) = size > 150
+    }
+    private val detailGate = Mutex()
+
+    /** The detailed IMDb guide is separate from the player's short advisory and CSM fallback. */
+    suspend fun details(imdb: String): List<Category> = detailGate.withLock {
+        require(Regex("tt\\d+").matches(imdb))
+        synchronized(detailed) { detailed[imdb] }?.takeIf { it.expires > System.currentTimeMillis() }?.let { return@withLock it.categories }
+        val query = """query ParentsGuide(${'$'}id: ID!) { title(id: ${'$'}id) { parentsGuide { categories {
+            category { id text } severity { text voteType votedFor } totalSeverityVotes
+            guideItems(first: 50) { total edges { node { isSpoiler text { plainText } } } }
+        } } } }"""
+        val body = buildJsonObject {
+            put("query", query)
+            put("variables", buildJsonObject { put("id", imdb) })
+        }
+        val request = Request.Builder().url("https://api.graphql.imdb.com/")
+            .header("x-imdb-client-name", "imdb-web-next-localized").header("Accept", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+        val categories = try {
+            withTimeoutOrNull(6_000) { parseDetails(Net.parseObject(Net.call(request))) }
+                ?: throw java.io.IOException("Content advisory timed out")
+        } catch (e: CancellationException) { throw e }
+        catch (e: Net.HttpError) { if (e.code == 404) emptyList() else throw e }
+        synchronized(detailed) {
+            detailed[imdb] = Detailed(categories, System.currentTimeMillis() + if (categories.isEmpty()) 10 * 60_000 else 30 * 60_000)
+        }
+        categories
+    }
+
+    internal fun parseDetails(root: JsonObject): List<Category> {
+        check((root["errors"] as? JsonArray).isNullOrEmpty()) { "IMDb guide request failed" }
+        val title = (root["data"] as? JsonObject)?.get("title") as? JsonObject
+        val guide = title?.get("parentsGuide") as? JsonObject
+        return (guide?.get("categories") as? JsonArray).orEmpty().mapNotNull { element ->
+            val raw = element as? JsonObject ?: return@mapNotNull null
+            val cat = raw["category"] as? JsonObject
+            val sev = raw["severity"] as? JsonObject
+            val items = raw["guideItems"] as? JsonObject
+            fun JsonObject?.str(key: String) = (this?.get(key) as? JsonPrimitive)?.contentOrNull
+            fun JsonObject?.num(key: String) = ((this?.get(key) as? JsonPrimitive)?.intOrNull ?: 0).coerceAtLeast(0)
+            val notes = (items?.get("edges") as? JsonArray).orEmpty().mapNotNull { edge ->
+                val node = (edge as? JsonObject)?.get("node") as? JsonObject ?: return@mapNotNull null
+                val text = (node["text"] as? JsonObject).str("plainText")?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                Note(text, (node["isSpoiler"] as? JsonPrimitive)?.booleanOrNull == true)
+            }
+            Category(cat.str("id").orEmpty(), cat.str("text").orEmpty(), sev.str("text") ?: "Unrated",
+                sev.num("votedFor"), raw.num("totalSeverityVotes"), maxOf(items.num("total"), notes.size), notes)
+        }
+    }
 
     private val cache = mutableMapOf<String, Guide>()
 

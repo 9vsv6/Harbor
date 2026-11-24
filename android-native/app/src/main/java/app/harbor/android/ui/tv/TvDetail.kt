@@ -242,6 +242,8 @@ fun TvEpisodes(
     rating: (app.harbor.android.data.Video) -> String?,
     onPlay: (app.harbor.android.data.Video) -> Unit,
     reviewMeta: Meta? = null,
+    page: Int = 0,
+    onPage: (Int) -> Unit = {},
 ) {
     var picker by remember { mutableStateOf(false) }
     var reviewVideo by remember { mutableStateOf<app.harbor.android.data.Video?>(null) }
@@ -249,6 +251,7 @@ fun TvEpisodes(
     reviewVideo?.let { video -> reviewMeta?.let { meta -> app.harbor.android.ui.EpisodeReviewsDialog(repository, meta, video) { reviewVideo = null } } }
     Column(verticalArrangement = Arrangement.spacedBy(u(10f))) {
         TvSectionTitle("Episodes")
+        Box(Modifier.padding(horizontal = TvInsets.Gutter)) { app.harbor.android.ui.EpisodePager(page, episodes.size, onPage) }
         if (season != null) {
             val source = remember { MutableInteractionSource() }
             val focused by source.collectIsFocusedAsState()
@@ -274,7 +277,7 @@ fun TvEpisodes(
                 contentPadding = PaddingValues(horizontal = TvInsets.Gutter, vertical = u(8f)),
                 horizontalArrangement = Arrangement.spacedBy(u(10f)),
             ) {
-                items(episodes, key = { it.id }) { ep ->
+                items(app.harbor.android.data.EpisodePages.slice(episodes, page), key = { it.id }) { ep ->
                     Column {
                         EpisodeCard(ep, backdrop, rating(ep)) { if (app.harbor.android.ui.HarborDisplay.settings.allowFutureEpisodes || !app.harbor.android.data.ReleaseCountdowns.upcoming(ep.released)) onPlay(ep) }
                         if (reviewMeta != null) androidx.compose.material3.TextButton(onClick = { reviewVideo = ep }) { Text("Episode reviews") }

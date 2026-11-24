@@ -73,6 +73,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import app.harbor.android.i18n.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -84,6 +85,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -116,6 +118,8 @@ interface PlayerActions {
     fun setSpeed(speed: Float)
     fun setFit(fit: Fit)
     fun selectAudio(key: String)
+    fun cycleAudio()
+    fun stepSubtitleSize(direction: Int)
     fun selectSubtitle(choice: SubChoice)
     fun setSubDelay(delayMs: Long)
     /**
@@ -123,7 +127,7 @@ interface PlayerActions {
      * subtitle addon and Harbor's own sources. `onResults` runs as each group arrives, with how many
      * are still searching.
      */
-    fun findSubtitles(query: String, onResults: (List<app.harbor.android.data.Subtitle>, Int) -> Unit)
+    fun findSubtitles(query: String, season: Int?, episode: Int?, onResults: (List<app.harbor.android.data.Subtitle>, Int) -> Unit)
     /** Live sync: Harbor's panel of every subtitle line; align the one you hear to now. */
     fun startLiveSync()
     fun startAutoSync()
@@ -147,8 +151,10 @@ interface PlayerActions {
     fun updatePrefs(change: (PlayerPrefs) -> PlayerPrefs)
     fun updateSettings(change: (app.harbor.android.data.AppSettings) -> app.harbor.android.data.AppSettings)
     fun skipSegment()
+    fun playQueued(item: app.harbor.android.data.PlayQueue.Item)
     fun playNext()
     fun playEpisode(video: Video)
+    fun playRelatedEpisode(meta: app.harbor.android.data.Meta, video: Video)
     fun downloadEpisode(video: Video)
     fun loadSources()
     fun playSource(source: RankedStream)
@@ -218,12 +224,12 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                         val third = size.width / 3f
                         when {
                             offset.x < third -> {
-                                actions.seekBy(-state.settings.seekBackSec * 1_000L)
-                                state.hint = "-${state.settings.seekBackSec}s"
+                                actions.seekBy(-(state.settings.seekBackSec * 1_000).toLong())
+                                state.hint = "-${app.harbor.android.data.PlaybackSteps.label(state.settings.seekBackSec)}s"
                             }
                             offset.x > third * 2 -> {
-                                actions.seekBy(state.settings.seekForwardSec * 1_000L)
-                                state.hint = "+${state.settings.seekForwardSec}s"
+                                actions.seekBy((state.settings.seekForwardSec * 1_000).toLong())
+                                state.hint = "+${app.harbor.android.data.PlaybackSteps.label(state.settings.seekForwardSec)}s"
                             }
                             else -> actions.togglePlay()
                         }
@@ -296,19 +302,16 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
                 }
             },
     ) {
-        // While a source connects, the title's backdrop, dimmed, rather than a black screen (TVs have
-        // their own Connecting page). It goes as soon as the first frame plays.
-        if (!state.tv && !state.hasPlayed && state.error == null) {
-            state.meta?.let { it.background ?: it.poster }?.let { art ->
-                Box(Modifier.fillMaxSize()) {
-                    AsyncImage(art, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    Box(Modifier.fillMaxSize().background(Color(0xB3000000)))
-                }
-            }
-        }
         SubtitleLayer(state, prefs)
 
-        if (state.buffering && !state.ended && state.error == null) {
+        // While a source connects, PC's Connecting screen (TVs have their own). It goes as soon as
+        // the first frame plays.
+        val connecting = !state.tv && !state.hasPlayed && state.error == null
+        if (connecting) {
+            val episode = remember(state.meta, state.videoId) { state.meta?.videos?.firstOrNull { it.id == state.videoId } }
+            app.harbor.android.ui.HarborConnecting(state.meta, episode, onCancel = { actions.back() })
+        }
+        if (!connecting && state.buffering && !state.ended && state.error == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(56.dp), color = Color.White, strokeWidth = 3.dp)
         }
 
@@ -353,6 +356,14 @@ fun PlayerUi(state: PlayerState, prefs: PlayerPrefs, actions: PlayerActions, cas
 
         if (!state.tv) state.error?.let { ErrorCard(it, state, actions, Modifier.align(Alignment.Center)) }
 
+        if (state.queueOpen) {
+            val items by app.harbor.android.data.PlayQueue.items.collectAsState()
+            val resume by app.harbor.android.data.PlayQueue.resumeId.collectAsState()
+            app.harbor.android.ui.QueueDialog(items, resume,
+                onClose = { state.queueOpen = false },
+                onPlay = { r -> app.harbor.android.data.PlayQueue.startItem(r)?.let(actions::playQueued) },
+                onPlayItem = actions::playQueued, onOpen = actions::endScreenInfo)
+        }
         HarborPopovers(state, prefs, actions)
         if (state.tv && state.panel == Panel.Subtitles) TvSubtitlePanel(state, prefs, actions)
         if (state.tv && state.panel == Panel.Audio) TvAudioPanel(state, actions)
@@ -523,18 +534,7 @@ private fun BottomPills(state: PlayerState, prefs: PlayerPrefs, actions: PlayerA
             app.harbor.android.data.SkipSegment.Kind.Outro -> s.autoSkipOutro
             app.harbor.android.data.SkipSegment.Kind.Ad -> s.autoSkipAd
         }
-        // Harbor's auto-hide: gone after a while, back whenever the controls show.
-        // The position moves 4x/second; deriving these two decisions means a tick only costs a
-        // recomposition when the answer actually changes, not on every tick.
-        val timedOut by remember(skip, s) {
-            derivedStateOf {
-                skip != null && s.skipButtonHideSec > 0 && !state.controlsVisible &&
-                    state.positionMs - skip.startMs > s.skipButtonHideSec * 1_000L
-            }
-        }
-        if (skip != null && s.showSkipButton && !autoSkips && !timedOut) {
-            Pill(skip.kind.label, primary = false) { actions.skipSegment() }
-        }
+        if (skip != null && s.showSkipButton && !autoSkips) SegmentPill(skip, state, actions)
         val next = state.next
         val upNext by remember(next, skip, s, state.ended, state.creditsAtMs, state.liveSync) {
             derivedStateOf {
@@ -553,6 +553,27 @@ private fun BottomPills(state: PlayerState, prefs: PlayerPrefs, actions: PlayerA
         val reportable = s.adSkipEnabled && state.adSource != null && (s.adReportAlwaysShow || state.recentRelease)
         if (reportable && state.controlsVisible && skip == null && !upNext) AdReportButton(state, actions)
     }
+}
+
+@Composable
+private fun SegmentPill(skip: app.harbor.android.data.SkipSegment, state: PlayerState, actions: PlayerActions) {
+    // Start when visible, including when enabled midway through a segment.
+    val appearedAt = remember(skip) { state.positionMs }
+    val appearedClock = remember(skip) { android.os.SystemClock.elapsedRealtime() }
+    var elapsed by remember(skip) { mutableStateOf(0L) }
+    val window = if (skip.kind == app.harbor.android.data.SkipSegment.Kind.Ad ||
+        (skip.kind == app.harbor.android.data.SkipSegment.Kind.Outro && state.next != null)) 0L
+    else SkipPillProgress.window(skip.startMs, skip.endMs, appearedAt, state.settings.skipButtonHideSec)
+    LaunchedEffect(skip, window) {
+        while (window > 0 && elapsed < window) {
+            elapsed = android.os.SystemClock.elapsedRealtime() - appearedClock
+            delay(100)
+        }
+    }
+    if (window > 0 && elapsed >= window) return
+    val progress = if (window > 0) (elapsed.toFloat() / window).coerceIn(0f, 1f)
+        else SkipPillProgress.segment(skip.startMs, skip.endMs, appearedAt, state.positionMs)
+    Pill(skip.kind.label, primary = false, progress = progress) { actions.skipSegment() }
 }
 
 private fun adClock(ms: Long): String {
@@ -716,17 +737,43 @@ private fun StillWatching(state: PlayerState, actions: PlayerActions) {
 
 @Composable
 internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
-    val current = state.episodes.firstOrNull { it.id == state.videoId }
-    var season by remember(current?.season) { mutableStateOf(current?.season) }
-    val seasons = remember(state.episodes) { state.episodes.mapNotNull { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })) }
-    val shown = state.episodes.filter { it.season == season }.sortedBy { it.episode ?: 0 }
+    val repository = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.harbor.android.HarborApp).repository
+    val playingMeta = state.meta
+    var entries by remember(playingMeta?.id) { mutableStateOf(listOfNotNull(playingMeta)) }
+    var browseId by remember(playingMeta?.id) { mutableStateOf(playingMeta?.id) }
+    var loading by remember(playingMeta?.id) { mutableStateOf(false) }
+    LaunchedEffect(playingMeta?.id) {
+        val meta = playingMeta ?: return@LaunchedEffect
+        if (meta.id.substringBefore(':') !in setOf("kitsu", "mal", "anilist")) return@LaunchedEffect
+        loading = true
+        try { entries = app.harbor.android.data.AnimeCours.entries(meta, repository.metaAddons()) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { state.hint = "Couldn't load related seasons" }
+        finally { loading = false }
+    }
+    val browsing = entries.firstOrNull { it.id == browseId } ?: playingMeta
+    val videos = if (browsing?.id == playingMeta?.id) state.episodes else browsing?.videos.orEmpty()
+    val current = videos.firstOrNull { it.id == state.videoId }
+    val seasons = remember(videos) { videos.mapNotNull { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })) }
+    var season by remember(browsing?.id, current?.season) { mutableStateOf(current?.season ?: seasons.firstOrNull()) }
+    val matching = videos.filter { it.season == season }.sortedBy { it.episode ?: 0 }
+    var page by androidx.compose.runtime.saveable.rememberSaveable(browsing?.id, season) {
+        mutableStateOf((matching.indexOfFirst { it.id == state.videoId }.coerceAtLeast(0)) / app.harbor.android.data.EpisodePages.SIZE)
+    }
+    val shown = app.harbor.android.data.EpisodePages.slice(matching, page)
     val listState = rememberLazyListState()
-    LaunchedEffect(season) {
+    LaunchedEffect(browsing?.id, season, page) {
         val index = shown.indexOfFirst { it.id == state.videoId }
         if (index > 0) listState.scrollToItem(index)
     }
     // One under another: the popover puts this in a Box, where they would sit on top of each other.
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (loading) Muted("Loading seasons…")
+    if (entries.size > 1) {
+        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(entries, key = { it.id }) { entry -> Pill(entry.name, primary = entry.id == browsing?.id) { browseId = entry.id } }
+        }
+    }
     Pill(if (state.settings.autoDownloadNext) "Auto-download next: On" else "Auto-download next: Off", primary = state.settings.autoDownloadNext) {
         actions.updateSettings { it.copy(autoDownloadNext = !it.autoDownloadNext) }
     }
@@ -735,13 +782,17 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
             items(seasons) { s -> Pill(if (s == 0) "Specials" else "Season $s", primary = s == season) { season = s } }
         }
     }
+    app.harbor.android.ui.EpisodePager(page, matching.size) { page = it }
     LazyColumn(Modifier.weight(1f, fill = false), state = listState, contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(shown, key = { it.id }) { video ->
             val playing = video.id == state.videoId
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                     .background(if (playing) Color(0x33F0A35E) else Color.Transparent)
-                    .clickable(enabled = !playing) { actions.playEpisode(video) }.padding(8.dp),
+                    .clickable(enabled = !playing) {
+                        if (browsing != null && browsing.id != playingMeta?.id) actions.playRelatedEpisode(browsing, video)
+                        else actions.playEpisode(video)
+                    }.padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -754,7 +805,7 @@ internal fun EpisodesPanel(state: PlayerState, actions: PlayerActions) {
                     app.harbor.android.ui.EpisodeReleaseCountdown(video.released)
                     if (playing) Text("Playing", color = Color(0xCCFFFFFF), fontSize = 12.sp)
                 }
-                Pill("Download", primary = false) { actions.downloadEpisode(video) }
+                if (browsing?.id == playingMeta?.id) Pill("Download", primary = false) { actions.downloadEpisode(video) }
             }
         }
     }
@@ -815,11 +866,14 @@ private fun Muted(text: String) {
 }
 
 @Composable
-private fun Pill(label: String, primary: Boolean, onClick: () -> Unit) {
+private fun Pill(label: String, primary: Boolean, progress: Float? = null, onClick: () -> Unit) {
     Box(
         // A dark glass with a light edge: readable over bright scenes too (white on 15% white vanished there).
         Modifier.clip(RoundedCornerShape(50)).background(if (primary) Color.White else Color(0xB3121316))
             .then(if (primary) Modifier else Modifier.border(1.dp, Color(0x40FFFFFF), RoundedCornerShape(50)))
+            .drawBehind {
+                progress?.let { drawRect(Color(0x40FFFFFF), size = androidx.compose.ui.geometry.Size(size.width * it, size.height)) }
+            }
             .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
     ) {
         Text(label, color = if (primary) Color.Black else Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -895,7 +949,9 @@ private fun CastingScreen(device: String, state: PlayerState, actions: PlayerAct
             Text(state.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
             state.episodeLine?.let { Text(it, color = Color(0xCCFFFFFF), fontSize = 14.sp) }
             Row(horizontalArrangement = Arrangement.spacedBy(36.dp), verticalAlignment = Alignment.CenterVertically) {
-                RoundIcon(Icons.Rounded.Replay10, "Back 10 seconds") { actions.castSeekBy(-10_000) }
+                RoundIcon(seekIcon(state.settings.seekBackSec, forward = false), "Back ${app.harbor.android.data.PlaybackSteps.label(state.settings.seekBackSec)} seconds") {
+                    actions.castSeekBy(-(state.settings.seekBackSec * 1_000).toLong())
+                }
                 Box(
                     Modifier.size(76.dp).clip(CircleShape).background(Color(0x33FFFFFF)).clickable { actions.castTogglePlay() },
                     contentAlignment = Alignment.Center,
@@ -907,7 +963,9 @@ private fun CastingScreen(device: String, state: PlayerState, actions: PlayerAct
                         modifier = Modifier.size(46.dp),
                     )
                 }
-                RoundIcon(Icons.Rounded.Forward10, "Forward 10 seconds") { actions.castSeekBy(10_000) }
+                RoundIcon(seekIcon(state.settings.seekForwardSec, forward = true), "Forward ${app.harbor.android.data.PlaybackSteps.label(state.settings.seekForwardSec)} seconds") {
+                    actions.castSeekBy((state.settings.seekForwardSec * 1_000).toLong())
+                }
             }
             Pill("Stop casting", primary = true) { actions.stopCasting() }
         }

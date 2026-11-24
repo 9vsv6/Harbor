@@ -42,6 +42,12 @@ import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.automirrored.rounded.Send
+import app.harbor.android.i18n.I18n
 import app.harbor.android.i18n.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -57,6 +63,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import app.harbor.android.R
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -76,8 +84,7 @@ private val Scrim = Color(0xE625262A)
 private val InkOn = Color(0x26F4F5F7)
 
 /**
- * Harbor's action row: Play, Add to Watchlist, then round buttons to rate, favourite,
- * add to a list, mark a film watched, watch the trailer and download a film.
+ * The library split button and rate stay visible while secondary actions fold by measured width.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -93,17 +100,22 @@ fun HeroActions(
     download: () -> Unit,
 ) {
     val myList by repository.myList.collectAsState()
+    val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
     val shelves by repository.shelves.collectAsState()
     val queue by app.harbor.android.data.PlayQueue.items.collectAsState()
-    val listed = myList.any { it.id == meta.id }
+    val listed = (if (repository.accounts.nuvioActive) nuvioLibrary else myList).any { it.id == meta.id }
     val favourite = shelves.favorites.any { it.id == meta.id }
     val watched = meta.id in shelves.watched
     val rating = shelves.ratings[meta.id]
     var rateOpen by remember { mutableStateOf(false) }
     var listOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember(meta.id) { mutableStateOf(false) }
+    var shareOpen by remember(meta.id) { mutableStateOf(false) }
+    var trackerVersion by remember(meta.id) { mutableIntStateOf(0) }
+    var actionStage by remember(meta.id) { mutableIntStateOf(0) }
     val poster = meta.poster ?: details?.posters?.firstOrNull()
-
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val queued = queue.any { it.meta.id == meta.id && it.season == null }
+    HeroActionLayout(onStage = { actionStage = it }, play = {
         Row(
             Modifier.height(48.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = play).padding(horizontal = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -112,55 +124,82 @@ fun HeroActions(
             Icon(painterResource(R.drawable.ui_play_filled), null, tint = HarborColors.Canvas, modifier = Modifier.size(18.dp))
             Text(playLabel, color = HarborColors.Canvas, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
-        Row(
-            Modifier.height(48.dp).clip(CircleShape).background(if (listed) InkOn else Scrim).clickable { repository.toggleMyList(meta) }.padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(if (listed) Icons.Rounded.Check else Icons.Rounded.Add, null, tint = HarborColors.Ink, modifier = Modifier.size(18.dp))
-            Text(if (listed) "In Watchlist" else "Add to Watchlist", color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-        }
-        // PublicMetaDB's watchlist, when connected (add-to-publicmetadb-button.tsx).
-        AddToPmdbButton(repository, meta)
+    }, library = {
+        LibrarySplitButton(repository, meta, listed) { trackerVersion++ }
+    }, trackers = {
+        HeroTrackerControls(repository, meta, trackerVersion, asMenu = false) { trackerVersion++ }
+    }, rate = {
         // Rate: the star, or your score once you've rated it.
         Box(
-            Modifier.size(48.dp).clip(CircleShape).background(if (rating != null) InkOn else Scrim).clickable { rateOpen = true },
+            Modifier.size(48.dp).clip(CircleShape).background(if (rating != null) InkOn else Scrim)
+                .then(Modifier.semantics { contentDescription = I18n.tr("Rate this") }).clickable { rateOpen = true },
             contentAlignment = Alignment.Center,
         ) {
             if (rating != null) Text("$rating", color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             else Icon(painterResource(R.drawable.ui_rate), "Rate this", tint = HarborColors.Ink, modifier = Modifier.size(20.dp))
         }
-        RoundButton(painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), if (favourite) "Remove from favorites" else "Add to favorites", favourite) {
-            repository.toggleFavorite(meta)
+    }, circles = {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            RoundButton(painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), if (favourite) "Remove from favorites" else "Add to favorites", favourite) {
+                repository.toggleFavorite(meta)
+            }
+            RoundButton(painterResource(R.drawable.ui_list), "Add to list", false) { listOpen = true }
+            // Harbor's play queue: a movie, or a series from your next episode.
+            RoundButton(rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), if (queued) "In your queue" else "Add to queue", queued) {
+                app.harbor.android.data.PlayQueue.toggle(meta)
+            }
+            if (!isSeries) {
+                RoundButton(painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched), if (watched) "Marked watched" else "Mark watched", watched) {
+                    repository.toggleWatched(meta)
+                }
+            }
+            trailer?.let { RoundButton(painterResource(R.drawable.ui_trailer), "Watch trailer", false, it) }
+            if (!isSeries) RoundButton(rememberVectorPainter(Icons.Rounded.Download), "Download for offline", false, download)
         }
-        RoundButton(painterResource(R.drawable.ui_list), "Add to list", false) { listOpen = true }
-        // Harbor's play queue: a movie, or a series from your next episode.
-        val queued = queue.any { it.meta.id == meta.id && it.season == null }
-        RoundButton(rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), if (queued) "In your queue" else "Add to queue", queued) {
-            app.harbor.android.data.PlayQueue.toggle(meta)
-        }
-        if (!isSeries) {
-            RoundButton(painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched), if (watched) "Marked watched" else "Mark watched", watched) {
-                repository.toggleWatched(meta)
+    }, overflow = {
+        Box {
+            RoundButton(rememberVectorPainter(Icons.Rounded.MoreHoriz), "More actions", false) { moreOpen = !moreOpen }
+            HeroOverflowMenu(moreOpen, { moreOpen = false }) {
+                if (actionStage >= 2) {
+                    // The divider only under tracker rows that are actually there.
+                    var trackerRows by remember { mutableStateOf(false) }
+                    Column(Modifier.onSizeChanged { trackerRows = it.height > 0 }) {
+                        HeroTrackerControls(repository, meta, trackerVersion, asMenu = true) { trackerVersion++; moreOpen = false }
+                    }
+                    if (trackerRows) HorizontalDivider(Modifier.padding(vertical = 4.dp), color = HarborColors.EdgeSoft)
+                }
+                // PC's rows and icons (hero-action-overflow.tsx), in its order.
+                HeroMenuItem(if (favourite) "Favorited" else "Favorite", favourite, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite)) { repository.toggleFavorite(meta); moreOpen = false }
+                HeroMenuItem("Add to list", icon = painterResource(R.drawable.ui_list)) { moreOpen = false; listOpen = true }
+                HeroMenuItem(if (queued) "In your queue" else "Add to queue", queued, icon = rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd)) { app.harbor.android.data.PlayQueue.toggle(meta); moreOpen = false }
+                if (!isSeries) HeroMenuItem(if (watched) "Marked watched" else "Mark watched", watched, icon = painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched)) { repository.toggleWatched(meta); moreOpen = false }
+                trailer?.let { HeroMenuItem("Watch trailer", icon = painterResource(R.drawable.ui_trailer)) { moreOpen = false; it() } }
+                if (!isSeries) HeroMenuItem("Download for offline", icon = rememberVectorPainter(Icons.Rounded.Download)) { moreOpen = false; download() }
             }
         }
-        trailer?.let { RoundButton(painterResource(R.drawable.ui_trailer), "Watch trailer", false, it) }
-        if (!isSeries) RoundButton(rememberVectorPainter(Icons.Rounded.Download), "Download", false, download)
-    }
+    }, share = {
+        Row(Modifier.height(48.dp).clip(CircleShape).background(Scrim).clickable { shareOpen = true }.padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.AutoMirrored.Rounded.Send, I18n.tr("Send to a friend"), tint = HarborColors.InkMuted, modifier = Modifier.size(16.dp))
+            Text("Send to a friend", color = HarborColors.InkMuted, fontSize = 14.sp, maxLines = 1)
+        }
+    })
 
     if (rateOpen) RatingDialog(meta.name, poster, rating, onClose = { rateOpen = false }) { value ->
         repository.rate(meta, value)
         rateOpen = false
     }
     if (listOpen) AddToListDialog(repository, meta) { listOpen = false }
+    if (shareOpen) HeroShareDialog(repository, meta) { shareOpen = false }
 }
 
 @Composable
 private fun RoundButton(icon: Painter, description: String, active: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.size(48.dp).clip(CircleShape).background(if (active) HarborColors.Accent.copy(alpha = 0.2f) else Scrim).clickable(onClick = onClick),
+        Modifier.size(48.dp).clip(CircleShape).background(if (active) HarborColors.Accent.copy(alpha = 0.2f) else Scrim)
+            .semantics { contentDescription = I18n.tr(description) }.clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, description, tint = if (active) HarborColors.Accent else HarborColors.Ink, modifier = Modifier.size(20.dp)) }
+    ) { Icon(icon, null, tint = if (active) HarborColors.Accent else HarborColors.Ink, modifier = Modifier.size(20.dp)) }
 }
 
 /** components/ratings/rating-modal.tsx: the poster and title, a big n/10, ten stars, Save. */
@@ -281,9 +320,10 @@ fun TvHeroActions(
     playFocus: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     val myList by repository.myList.collectAsState()
+    val nuvioLibrary by repository.accounts.nuvioLibrary.collectAsState()
     val shelves by repository.shelves.collectAsState()
     val queue by app.harbor.android.data.PlayQueue.items.collectAsState()
-    val listed = myList.any { it.id == meta.id }
+    val listed = (if (repository.accounts.nuvioActive) nuvioLibrary else myList).any { it.id == meta.id }
     val favourite = shelves.favorites.any { it.id == meta.id }
     val watched = meta.id in shelves.watched
     val rating = shelves.ratings[meta.id]
@@ -295,7 +335,7 @@ fun TvHeroActions(
     Column {
         Row(horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f)), verticalAlignment = Alignment.CenterVertically) {
             BpAction(h, playLabel = playLabel, progress = progress, requester = playFocus, onFocus = { hint = "" }, onClick = play)
-            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In Watchlist" else "Add to Watchlist", active = listed, onFocus = { hint = it }) { repository.toggleMyList(meta) }
+            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In library" else "Save to library", active = listed, onFocus = { hint = it }) { repository.toggleMyList(meta) }
             BpAction(h, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), label = if (favourite) "Remove from favorites" else "Add to favorites", active = favourite, onFocus = { hint = it }) { repository.toggleFavorite(meta) }
             BpAction(h, icon = painterResource(R.drawable.ui_rate), badge = rating?.toString(), label = if (rating != null) "Your rating: $rating" else "Rate this", active = rating != null, onFocus = { hint = it }) { rateOpen = true }
             BpAction(h, icon = painterResource(R.drawable.ui_list), label = "Add to list", onFocus = { hint = it }) { listOpen = true }

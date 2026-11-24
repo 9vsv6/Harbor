@@ -109,6 +109,8 @@ object AudioSync {
         useSpeech: Boolean = true,
         forceSpeech: Boolean = false,
         audioLanguage: String = "",
+        /** The Moonshine model language for this audio (Moonshine.resolve), or null for Whisper. */
+        moonshineLanguage: String? = null,
         onSpeech: (Int, Int) -> Unit = { _, _ -> },
         ensureSpeechResources: () -> Unit = {},
         caFile: File? = null,
@@ -120,7 +122,7 @@ object AudioSync {
         val detector = SpeechDetector()
         try {
             return analyze(url, headers, audioTrack, durationMs, cues, cacheDir, onStep, useSpeech,
-                forceSpeech, audioLanguage, onSpeech, ensureSpeechResources, caFile, onHold, detector)
+                forceSpeech, audioLanguage, moonshineLanguage, onSpeech, ensureSpeechResources, caFile, onHold, detector)
         } finally {
             try { detector.close() } finally { session.unlock() }
         }
@@ -137,6 +139,7 @@ object AudioSync {
         useSpeech: Boolean,
         forceSpeech: Boolean,
         audioLanguage: String,
+        moonshineLanguage: String?,
         onSpeech: (Int, Int) -> Unit,
         ensureSpeechResources: () -> Unit,
         caFile: File?,
@@ -159,9 +162,11 @@ object AudioSync {
         // A slow 32-bit box (armeabi-v7a: no fast path for Whisper's maths) took over three minutes
         // to recognize one 12 s sentence, even with the film paused. There sync goes by when people
         // speak alone (whole minutes, read in seconds) and never by words.
-        val noWords = slow && android.os.Build.SUPPORTED_64_BIT_ABIS.isEmpty()
+        val moonshine = moonshineLanguage?.takeIf { app.harbor.android.data.Moonshine.available && app.harbor.android.data.MoonshineModels.installed(it) }
+        val noWords = slow && android.os.Build.SUPPORTED_64_BIT_ABIS.isEmpty() && moonshine == null
         val light = slow && !noWords
-        val speechFirst = !noWords && (forceSpeech || (light && useSpeech && app.harbor.android.data.WhisperModel.state.value.installed))
+        val speechReady = moonshine != null || app.harbor.android.data.WhisperModel.state.value.installed
+        val speechFirst = !noWords && (forceSpeech || (light && useSpeech && speechReady))
         val windows = if (light) pickWindows(cues, total, count = LIGHT_WINDOWS, length = LIGHT_WINDOW_SEC) else pickWindows(cues, total)
         // Lines that run into each other hide the pauses that timing is matched by.
         val timingCues = if (SpeechTiming.gapless(cues)) SpeechTiming.spoken(cues) else cues
@@ -242,16 +247,23 @@ object AudioSync {
             coroutineContext.ensureActive()
             if (noWords) throw Failure("Couldn't match when people speak to this subtitle. Try another subtitle, or live sync. (This TV is too slow to recognize speech.)")
             if (!useSpeech) throw Failure("Couldn't find a reliable audio match. Try live sync, or enable speech recognition in Subtitle timing.")
-            if (!withContext(Dispatchers.IO) { WhisperNative.available }) throw Failure("Speech recognition isn't available on this device. Try live sync.")
+            // A Moonshine language without its model: offer that model (as PC) unless Whisper can listen instead.
+            if (moonshine == null && moonshineLanguage != null && app.harbor.android.data.Moonshine.available &&
+                !app.harbor.android.data.WhisperModel.state.value.installed) throw Failure(app.harbor.android.data.Moonshine.missingModelMessage(moonshineLanguage))
+            if (moonshine == null && !withContext(Dispatchers.IO) { WhisperNative.available }) throw Failure("Speech recognition isn't available on this device. Try live sync.")
             ensureSpeechResources()
-            val model = app.harbor.android.data.WhisperModel.acquire() ?: throw Failure(
-                if (app.harbor.android.data.WhisperModel.state.value.inUse) "Speech recognition is still finishing the last sync. Try again in a moment."
-                else "Couldn't find a reliable audio match. Download Whisper Tiny on this device in Settings → Subtitle timing, then try again.")
-            var handle = 0L
+            val recognizer: Recognizer = if (moonshine != null) {
+                MoonshineRecognizer(app.harbor.android.data.MoonshineModels.acquire(moonshine)
+                    ?: throw Failure("Speech recognition is still finishing the last sync. Try again in a moment."))
+            } else {
+                WhisperRecognizer(app.harbor.android.data.WhisperModel.acquire() ?: throw Failure(
+                    if (app.harbor.android.data.WhisperModel.state.value.inUse) "Speech recognition is still finishing the last sync. Try again in a moment."
+                    else "Couldn't find a reliable audio match. Download Whisper Tiny on this device in Settings → Subtitle timing, then try again."))
+            }
             var translation: kotlinx.coroutines.Deferred<Map<String, String>>? = null
             try {
                 onSpeech(0, windows.size)
-                withContext(listening) { handle = WhisperNative.open(model.path) }
+                recognizer.open()
                 coroutineContext.ensureActive()
                 val transcribed = mutableListOf<SpeechAlignment.Window>()
                 val speech = mutableListOf<Float>()
@@ -285,10 +297,9 @@ object AudioSync {
                         detector.speech(pcm, start).forEach { speech += it }
                         heard += start; heard += start + pcm.size / 16_000f
                         val began = System.currentTimeMillis()
-                        val bytes = withContext(listening) { WhisperNative.transcribe(handle, pcm, audioLanguage, threads) }
-                        android.util.Log.i("HarborSync", "heard ${pcm.size / 16_000} s at ${start.toInt()} s in ${(System.currentTimeMillis() - began) / 1000} s")
+                        val words = recognizer.words(pcm, start, audioLanguage, threads)
+                        android.util.Log.i("HarborSync", "${recognizer.name} heard ${pcm.size / 16_000} s at ${start.toInt()} s in ${(System.currentTimeMillis() - began) / 1000} s: ${words.size} words")
                         coroutineContext.ensureActive()
-                        val words = WhisperNative.words(bytes, (start * 1000).toLong())
                         transcribed += SpeechAlignment.Window(i, words)
                         SpeechTiming.intervals(words, start, start + pcm.size / 16_000f).forEach { recognizedSpeech += it }
                     }
@@ -321,12 +332,47 @@ object AudioSync {
             } finally {
                 if (light) onHold(false)
                 translation?.cancel()
-                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                    try { if (handle != 0L) WhisperNative.close(handle) }
-                    finally { app.harbor.android.data.WhisperModel.release() }
-                }
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { recognizer.close() }
             }
         } finally { }
+    }
+
+    /** Speech to timed words: Whisper Tiny (any language) or Moonshine (its languages, faster). */
+    private interface Recognizer {
+        val name: String
+        suspend fun open()
+        suspend fun words(pcm: FloatArray, startSec: Float, language: String, threads: Int): List<WhisperNative.Word>
+        /** Frees the engine and returns the model lease, whatever happened. */
+        fun close()
+    }
+
+    private class WhisperRecognizer(private val model: File) : Recognizer {
+        override val name = "Whisper"
+        private var handle = 0L
+        override suspend fun open() = withContext(listening) { handle = WhisperNative.open(model.path) }
+        override suspend fun words(pcm: FloatArray, startSec: Float, language: String, threads: Int): List<WhisperNative.Word> {
+            val bytes = withContext(listening) { WhisperNative.transcribe(handle, pcm, language, threads) }
+            return WhisperNative.words(bytes, (startSec * 1000).toLong())
+        }
+        override fun close() {
+            try { if (handle != 0L) WhisperNative.close(handle) } finally { app.harbor.android.data.WhisperModel.release() }
+        }
+    }
+
+    private class MoonshineRecognizer(private val dir: File) : Recognizer {
+        override val name = "Moonshine"
+        private var engine: ai.moonshine.voice.Transcriber? = null
+        override suspend fun open() = withContext(listening) {
+            engine = ai.moonshine.voice.Transcriber(listOf(ai.moonshine.voice.TranscriberOption("word_timestamps", "true")))
+                .also { it.loadFromFiles(dir.path, app.harbor.android.data.Moonshine.ARCH) }
+        }
+        override suspend fun words(pcm: FloatArray, startSec: Float, language: String, threads: Int): List<WhisperNative.Word> = withContext(listening) {
+            val transcript = engine?.transcribeWithoutStreaming(pcm, 16_000)
+            MoonshineSpeech.words(MoonshineSpeech.lines(transcript), startSec, pcm.size / 16_000f)
+        }
+        override fun close() {
+            try { engine?.close() } finally { app.harbor.android.data.MoonshineModels.release() }
+        }
     }
 
     /** The decoder and detector stay leased until background cleanup finishes, including cancellation. */

@@ -47,6 +47,13 @@ object UiLanguages {
     )
 
     fun of(code: String): UiLanguage = all.firstOrNull { it.code == code } ?: all.first()
+
+    fun isRtl(code: String): Boolean {
+        val parts = code.lowercase(java.util.Locale.ROOT).replace('_', '-').split('-')
+        val script = parts.drop(1).firstOrNull { it.length == 4 }
+        if (script != null) return script in setOf("arab", "hebr", "thaa", "nkoo", "adlm")
+        return parts.firstOrNull() in setOf("ar", "he", "iw", "fa", "ur", "ps", "dv", "yi", "ug", "sd", "ckb")
+    }
 }
 
 /**
@@ -59,7 +66,7 @@ object I18n {
         private set
     private var table by mutableStateOf<Map<String, String>>(emptyMap())
 
-    val rtl: Boolean get() = UiLanguages.of(code).rtl
+    val rtl: Boolean get() = UiLanguages.isRtl(code)
 
     /** Each language's name for itself and its greeting stay as they are, whatever the display language. */
     private val ownNames: Set<String> = UiLanguages.all.flatMap { listOf(it.native, it.greeting) }.toSet()
@@ -119,7 +126,7 @@ fun Text(
     val shown = I18n.tr(text)
     val joined = I18n.joinsLetters(shown)
     androidx.compose.material3.Text(
-        shown, modifier, color, fontSize, fontStyle, fontWeight, fontFamily, if (joined) 0.sp else letterSpacing, textDecoration, textAlign,
+        shown, modifier, color, fontSize, fontStyle, fontWeight, fontFamily, if (joined) 0.sp else letterSpacing, textDecoration, textAlign ?: style.textAlign.takeUnless { it == TextAlign.Unspecified } ?: TextAlign.Start,
         lineHeight, overflow, softWrap, maxLines, minLines, onTextLayout, if (joined) style.copy(letterSpacing = 0.sp) else style,
     )
 }
@@ -145,6 +152,6 @@ fun Text(
     onTextLayout: (TextLayoutResult) -> Unit = {},
     style: TextStyle = LocalTextStyle.current,
 ) = androidx.compose.material3.Text(
-    text, modifier, color, fontSize, fontStyle, fontWeight, fontFamily, letterSpacing, textDecoration, textAlign,
+    text, modifier, color, fontSize, fontStyle, fontWeight, fontFamily, letterSpacing, textDecoration, textAlign ?: style.textAlign.takeUnless { it == TextAlign.Unspecified } ?: TextAlign.Start,
     lineHeight, overflow, softWrap, maxLines, minLines, inlineContent, onTextLayout, style,
 )

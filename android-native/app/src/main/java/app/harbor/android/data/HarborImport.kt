@@ -113,7 +113,12 @@ class HarborImport(private val repository: Repository, private val context: Cont
             )
         }
         repository.updateSettings { a ->
+            val tv = s["tvCardOptions"] as? JsonObject
+            val tvFlags = mapOf("imdb" to "showImdbBadge", "tmdb" to "showTmdbBadge", "rt" to "showRtBadge", "audience" to "showPopcornBadge", "mal" to "showMalBadge",
+                "metacritic" to "showMetacriticBadge", "letterboxd" to "showLetterboxdBadge", "mdblist" to "showMdblistBadge", "trakt" to "showTraktBadge", "simkl" to "showSimklBadge")
             a.copy(
+                tvScaleScoreBadges = tv?.bool("scaleScoreStack") ?: a.tvScaleScoreBadges,
+                tvScoreSources = if (tv == null) a.tvScoreSources else tvFlags.filter { (key, flag) -> tv.bool(flag) ?: (key in a.tvScoreSources) }.keys,
                 audioLanguages = s.strList("preferredAudioLangs")?.let(LanguageCodes::codes) ?: a.audioLanguages,
                 subtitleFallbacks = subLangs?.drop(1) ?: a.subtitleFallbacks,
                 secondarySubLanguage = s.str("secondarySubLang")?.let(LanguageCodes::code) ?: a.secondarySubLanguage,
@@ -191,8 +196,13 @@ class HarborImport(private val repository: Repository, private val context: Cont
                 keepSourceNextEpisode = s.bool("keepSourceNextEpisode") ?: a.keepSourceNextEpisode,
                 rememberLastStream = s.bool("rememberLastStream") ?: a.rememberLastStream,
                 resumePlayback = s.bool("resumePlayback") ?: a.resumePlayback,
-                seekBackSec = s.int("seekBackStepSec") ?: a.seekBackSec,
-                seekForwardSec = s.int("seekForwardStepSec") ?: a.seekForwardSec,
+                seekBackSec = s.num("seekBackStepSec")?.toString()?.let(PlaybackSteps::seek) ?: a.seekBackSec,
+                seekForwardSec = s.num("seekForwardStepSec")?.toString()?.let(PlaybackSteps::seek) ?: a.seekForwardSec,
+                seekBackLongSec = s.num("seekBackStepLongSec")?.toString()?.let(PlaybackSteps::seek) ?: a.seekBackLongSec,
+                seekForwardLongSec = s.num("seekForwardStepLongSec")?.toString()?.let(PlaybackSteps::seek) ?: a.seekForwardLongSec,
+                slowSpeed = s.num("halfSpeedRate")?.toString()?.let { PlaybackSteps.parse(it, 0.1f, 0.99f) } ?: a.slowSpeed,
+                speedDownStep = s.num("speedDownStep")?.toString()?.let { PlaybackSteps.parse(it, 0.01f, 1f) } ?: a.speedDownStep,
+                speedUpStep = s.num("speedUpStep")?.toString()?.let { PlaybackSteps.parse(it, 0.01f, 1f) } ?: a.speedUpStep,
                 playbackSpeeds = (s["customPlaybackSpeeds"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.doubleOrNull?.toFloat() }?.takeIf { it.isNotEmpty() } ?: a.playbackSpeeds,
                 sleepMinutes = (s["customSleepMinutes"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.intOrNull }?.takeIf { it.isNotEmpty() } ?: a.sleepMinutes,
                 mpvHwdec = s.str("mpvHwdec") ?: a.mpvHwdec,

@@ -111,6 +111,7 @@ fun SearchScreen(repository: Repository, onOpen: (Meta) -> Unit, onGenre: (type:
     Column(Modifier.fillMaxSize().background(HarborColors.Canvas).statusBarsPadding()) {
         OutlinedTextField(
             value = query,
+            textStyle = androidx.compose.ui.text.TextStyle(textAlign = androidx.compose.ui.text.style.TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content),
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             placeholder = { Text(if (aiMode) "Describe what you want to watch" else "Movies, shows, anime") },

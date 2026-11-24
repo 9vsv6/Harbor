@@ -96,6 +96,7 @@ data class Meta(
     val runtime: String? = null,
     val genres: List<String>? = null,
     val videos: List<Video>? = null,
+    val links: JsonElement? = null,
     // Cinemeta's extras; loosely typed, since other addons send them in other shapes.
     val cast: JsonElement? = null,
     val director: JsonElement? = null,
@@ -173,6 +174,7 @@ data class Stream(
 @Serializable
 data class StreamHints(
     val notWebReady: Boolean? = null,
+    val bingeGroup: String? = null,
     val filename: String? = null,
     val videoSize: Long? = null,
     val proxyHeaders: ProxyHeaders? = null,
@@ -201,10 +203,13 @@ data class Subtitle(
     @kotlinx.serialization.Transient val downloads: Int = 0,
     @kotlinx.serialization.Transient val hearingImpaired: Boolean = false,
     @kotlinx.serialization.Transient val forced: Boolean = false,
+    @kotlinx.serialization.Transient val searchSeason: Int? = null,
+    @kotlinx.serialization.Transient val searchEpisode: Int? = null,
 )
 
 @Serializable
 data class LibraryState(
+    val watched: String? = null,
     val timeOffset: Long = 0,
     val duration: Long = 0,
     @SerialName("video_id") val videoId: String? = null,

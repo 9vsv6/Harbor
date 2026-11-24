@@ -396,6 +396,30 @@ object PublicMetaDb {
         return null
     }
 
+    /**
+     * Clears the resume point for exactly `target` (Continue watching's "Also clear provider playback
+     * progress"). True when it's gone or was never there; false when the list couldn't be read to the end.
+     * Errors are thrown, so a failed request is retried rather than taken for "nothing to clear".
+     */
+    suspend fun clearResume(session: PmdbSession, target: PmdbTarget): Boolean {
+        val movie = target.mediaType == "movie"
+        for (page in 1..5) {
+            val res = parse(request(session, "/api/external/resume?page=$page&perPage=100"))
+            val id = items(res).firstOrNull { o ->
+                o.int("tmdb_id") == target.tmdbId && o.str("media_type") == target.mediaType &&
+                    (o.int("season") ?: 0) == (if (movie) 0 else target.season ?: 0) &&
+                    (o.int("episode") ?: 0) == (if (movie) 0 else target.episode ?: 0)
+            }?.str("id")
+            if (id != null) {
+                try { request(session, "/api/external/resume/${enc(id)}", "DELETE") }
+                catch (e: ApiError) { if (e.status != 404) throw e }
+                return true
+            }
+            if (page >= totalPages(res)) return true
+        }
+        return false
+    }
+
     /** PMDB's resume points as Continue watching cards, "Paused on PublicMetaDB". */
     suspend fun continueWatching(session: PmdbSession): List<CwItem> = coroutineScope {
         val points = resumePoints(session).filter { p ->

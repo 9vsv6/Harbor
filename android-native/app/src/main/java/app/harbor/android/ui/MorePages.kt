@@ -109,7 +109,7 @@ internal fun AdSkipPage(settings: AppSettings, set: ((AppSettings) -> AppSetting
 
 @Composable
 internal fun MotionPage(settings: AppSettings, set: ((AppSettings) -> AppSettings) -> Unit) {
-    if (settings.engine != "mpv") Text("Motion smoothing needs the mpv engine.", color = HarborColors.InkMuted, fontSize = 15.sp)
+    if (settings.engine != "mpv") Text("Motion smoothing applies when mpv is in use, including under Automatic.", color = HarborColors.InkMuted, fontSize = 15.sp)
     HarborHeading("Smooth motion", null)
     ToggleRow(
         "Motion smoothing",
@@ -129,7 +129,8 @@ internal fun MoreShadersPage(settings: AppSettings, set: ((AppSettings) -> AppSe
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    if (settings.engine != "mpv") Text("Picture shaders need the mpv engine.", color = HarborColors.InkMuted, fontSize = 15.sp)
+    if (settings.engine == "media3") Text("Picture shaders need the mpv engine.", color = HarborColors.InkMuted, fontSize = 15.sp)
+    if (settings.engine == "auto") Text("Automatic uses mpv for titles with picture shaders applied.", color = HarborColors.InkMuted, fontSize = 15.sp)
     HarborHeading("More picture shaders", "Optional video effects downloaded from their authors. Harbor applies enabled shaders in the order shown below.")
     MoreShaders.Stage.entries.forEach { stage ->
         val entries = MoreShaders.CATALOG.filter { it.stage == stage }

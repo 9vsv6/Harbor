@@ -203,7 +203,7 @@ fun StreamsScreen(
     fun play(item: RankedStream) {
         val stream = item.stream
         connecting = item
-        repository.rememberStream(metaId, item.addon.manifest.id, Playback.streamKey(stream))
+        repository.rememberRelease(metaId, videoId, stream, item.addon.manifest.id)
         job?.cancel()
         error = null
         status = when {
@@ -217,6 +217,8 @@ fun StreamsScreen(
             // play's Connecting state is left alone.
             if (!isActive) return@launch
             result.onSuccess { onPlay(it) }.onFailure { if (it !is kotlinx.coroutines.CancellationException) error = it.message }
+            // The Connecting screen stays up until the player covers it, so the list doesn't flash.
+            if (result.isSuccess && !app.harbor.android.perf.Perf.isTv) kotlinx.coroutines.delay(1500)
             status = null
             connecting = null
         }
@@ -233,7 +235,7 @@ fun StreamsScreen(
         }
         if (refreshKey > 0) ranked = null
         loading = true
-        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, onFailures = { failures = it }, onPartial = { ranked = it }, accounts = repository.debridAccounts())
+        val list = Playback.ranked(addons, type, videoId, debrid, settings, prefer = remembered, preferred = repository.preferredRelease(metaId, videoId), onFailures = { failures = it }, onPartial = { ranked = it }, accounts = repository.debridAccounts())
         loading = false
         ranked = list
         // Nothing that can play here: the empty list says so, without a "wouldn't open" error on top.
@@ -241,9 +243,13 @@ fun StreamsScreen(
             autoPlayed = true
             status = "Playing the best source…"
             job = scope.launch {
-                val best = Playback.best(list, debrid, accounts = repository.debridAccounts())
+                val best = Playback.best(list, debrid, accounts = repository.debridAccounts(), preferred = repository.preferredRelease(metaId, videoId), videoId = videoId)
+                if (best != null) {
+                    onPlay(best)
+                    // As above: the player covers the Connecting screen before it goes.
+                    kotlinx.coroutines.delay(1500)
+                } else error = "None of the top sources would open. Pick one below."
                 status = null
-                if (best != null) onPlay(best) else error = "None of the top sources would open. Pick one below."
             }
         }
     }
@@ -458,6 +464,15 @@ fun StreamsScreen(
                 Text("Top", color = Color(0xFF1A1206), fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
         }
+        // PC's Connecting screen while a link is fetched, or while auto-play finds the best source.
+        val autoPlaying = (autoPlay || forceAutoPlay) && !autoPlayed && loading && error == null
+        if (status != null || autoPlaying) {
+            val episode = remember(meta, videoId) { meta?.videos?.firstOrNull { it.id == videoId } }
+            HarborConnecting(meta, episode, onCancel = {
+                job?.cancel(); status = null; connecting = null
+                if (autoPlaying) { autoPlayed = true }
+            })
+        }
     }
 }
 
@@ -565,11 +580,11 @@ private fun FacetMenuItem(label: String, count: Int, selected: Boolean, badge: I
     DropdownMenuItem(
         // The badge column keeps every label lined up, All's too.
         leadingIcon = if (badgeSlot) ({
-            Box(Modifier.width(44.dp).height(18.dp), contentAlignment = Alignment.CenterStart) {
+            Box(Modifier.width(92.dp).heightIn(min = 24.dp), contentAlignment = Alignment.CenterStart) {
                 badge?.let {
                     androidx.compose.foundation.Image(
                         androidx.compose.ui.res.painterResource(it), label,
-                        modifier = Modifier.height(16.dp).widthIn(max = 44.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        modifier = Modifier.widthIn(max = 92.dp).height(20.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                     )
                 }
             }

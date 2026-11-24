@@ -282,8 +282,11 @@ object Discover {
             async {
                 gate.withPermit {
                     val meta = runCatching { AddonClient.meta(metaAddons, "series", show.id) }.getOrNull() ?: return@withPermit emptyList()
+                    // Anime: the Kitsu addon's dates are often a day or more off; AniList's schedule has the airing time.
+                    val aired = if (show.id.substringBefore(':') in setOf("kitsu", "mal", "anilist")) AniListSchedule.times(show.id) else emptyMap()
                     meta.videos.orEmpty().mapNotNull { v ->
-                        val (date, time, at) = whenOf(v.released) ?: return@mapNotNull null
+                        val (date, time, at) = v.episode?.let { aired[it] }?.let { whenOf(Instant.ofEpochSecond(it).toString()) }
+                            ?: whenOf(v.released) ?: return@mapNotNull null
                         if (YearMonth.from(date) != month || (v.season ?: 0) == 0) return@mapNotNull null
                         CalendarItem(date, meta.copy(videos = null), episodeLabel(v.season ?: 0, v.episode ?: 0, v.title), "episode", v.id, time, at, meta.description, meta.imdbRating?.toDoubleOrNull() ?: 0.0)
                     }
@@ -300,7 +303,22 @@ object Discover {
                 }
             }
         }
-        episodes.awaitAll().flatten() + films.awaitAll().filterNotNull()
+        dedupeParentSeasons(episodes.awaitAll().flatten()) + films.awaitAll().filterNotNull()
+    }
+
+    /**
+     * An anime in the library both as its own entry (Kitsu) and as its parent IMDb show lists each
+     * episode twice on the same day: the anime entry's stays (PC 1.0.4's calendar fix).
+     */
+    internal fun dedupeParentSeasons(items: List<CalendarItem>): List<CalendarItem> {
+        fun anime(item: CalendarItem) = item.meta.id.substringBefore(':') in setOf("kitsu", "mal", "anilist")
+        val animeDays = items.filter(::anime).groupBy({ it.date }, { ContinueWatching.titleKey(it.meta.name) })
+        // A cour's title starts with its parent's ("Bleach: Thousand-Year Blood War" under "Bleach").
+        fun parentOfAnime(item: CalendarItem): Boolean {
+            val key = ContinueWatching.titleKey(item.meta.name).takeIf { it.length >= 4 } ?: return false
+            return animeDays[item.date].orEmpty().any { it.startsWith(key) }
+        }
+        return items.filter { anime(it) || !parentOfAnime(it) }
     }
 
     /** Home's "New Episodes": the shows with an episode out in the last [days], newest first. */
@@ -398,21 +416,37 @@ object Discover {
     private const val AIRING ="query(\$s:Int,\$e:Int,\$p:Int){Page(page:\$p,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater:\$s,airingAt_lesser:\$e,sort:TIME){airingAt episode media{id isAdult popularity format title{english romaji} coverImage{large} bannerImage}}}}"
 
     /** Anime, Sub: what AniList's schedule airs this month, opened through the Kitsu addon. */
-    suspend fun animeCalendar(month: YearMonth): List<CalendarItem> {
+    /**
+     * `anilistToken`: your AniList sign-in, when connected (its own rate limit); refused, the
+     * request goes again without it. A busy month reads up to 20 pages. A failed or rate-limited
+     * request is reported, never shown as a month with nothing airing (PC 1.0.4).
+     */
+    suspend fun animeCalendar(month: YearMonth, anilistToken: String? = null): List<CalendarItem> {
         val zone = ZoneId.systemDefault()
         val start = month.atDay(1).atStartOfDay(zone).toEpochSecond()
         val end = month.plusMonths(1).atDay(1).atStartOfDay(zone).toEpochSecond()
         val rows = mutableListOf<JsonObject>()
-        for (page in 1..8) {
+        var token = anilistToken
+        suspend fun page(page: Int): JsonObject {
             val body = buildJsonObject {
                 put("query", AIRING)
                 put("variables", buildJsonObject { put("s", start); put("e", end); put("p", page) })
             }.toString()
-            val pageObj = runCatching {
-                Net.json.parseToJsonElement(
-                    Net.call(Request.Builder().url("https://graphql.anilist.co").post(body.toRequestBody("application/json".toMediaType())).build()),
-                ).jsonObject["data"]!!.jsonObject["Page"]!!.jsonObject
-            }.getOrNull() ?: break
+            fun request() = Request.Builder().url("https://graphql.anilist.co")
+                .apply { token?.let { header("Authorization", "Bearer $it") } }
+                .post(body.toRequestBody("application/json".toMediaType())).build()
+            val text = try { Net.call(request()) } catch (e: Net.HttpError) {
+                when {
+                    (e.code == 401 || e.code == 400) && token != null -> { token = null; Net.call(request()) }
+                    e.code == 429 -> throw java.io.IOException("AniList is limiting requests right now. Try again in a minute.")
+                    else -> throw java.io.IOException("AniList's schedule didn't load (HTTP ${e.code}). Try again.")
+                }
+            }
+            return (Net.json.parseToJsonElement(text).jsonObject["data"] as? JsonObject)?.get("Page") as? JsonObject
+                ?: throw java.io.IOException("AniList's schedule didn't load. Try again.")
+        }
+        for (p in 1..20) {
+            val pageObj = page(p)
             (pageObj["airingSchedules"] as? JsonArray)?.forEach { (it as? JsonObject)?.let(rows::add) }
             if (pageObj["pageInfo"].objectOrNull?.get("hasNextPage")?.jsonPrimitive?.content != "true") break
         }
@@ -463,5 +497,38 @@ object Discover {
                 "Episode ${d.episode}", "anime", "$id:${d.episode}", d.time, d.at)
         }.distinctBy { it.videoId }
 
+    }
+}
+
+/** AniList's airing times per episode for one anime, by its Kitsu/MAL/AniList id (cached for the session). */
+internal object AniListSchedule {
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Map<Int, Long>>()
+    private const val QUERY = "query(\$id:Int,\$p:Int){Media(id:\$id,type:ANIME){airingSchedule(page:\$p,perPage:50){pageInfo{hasNextPage} nodes{episode airingAt}}}}"
+
+    /** Episode number → airing time (epoch seconds); empty when unknown. */
+    suspend fun times(metaId: String): Map<Int, Long> {
+        cache[metaId]?.let { return it }
+        val anilist = (if (metaId.startsWith("anilist:")) metaId.substringAfter(':').substringBefore(':').toIntOrNull() else AnimeInfo.ids(metaId)?.anilist)
+            ?: return emptyMap()
+        val out = mutableMapOf<Int, Long>()
+        for (page in 1..4) {
+            val body = buildJsonObject {
+                put("query", QUERY)
+                put("variables", buildJsonObject { put("id", anilist); put("p", page) })
+            }.toString()
+            val schedule = runCatching {
+                (Net.json.parseToJsonElement(Net.call(Request.Builder().url("https://graphql.anilist.co").post(body.toRequestBody("application/json".toMediaType())).build()))
+                    .jsonObject["data"]?.jsonObject?.get("Media") as? JsonObject)?.get("airingSchedule") as? JsonObject
+            }.getOrNull() ?: return out // A failed lookup isn't cached: the addon's dates are used this time.
+            (schedule["nodes"] as? JsonArray)?.forEach { node ->
+                val o = node as? JsonObject ?: return@forEach
+                val ep = o["episode"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                val at = o["airingAt"]?.jsonPrimitive?.longOrNull ?: return@forEach
+                out[ep] = at
+            }
+            if (schedule["pageInfo"].objectOrNull?.get("hasNextPage")?.jsonPrimitive?.content != "true") break
+        }
+        cache[metaId] = out
+        return out
     }
 }

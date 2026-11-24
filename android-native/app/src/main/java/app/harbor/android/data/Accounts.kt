@@ -110,7 +110,13 @@ class Accounts(private val repository: Repository) {
             refreshNuvio()
             if (_nuvio.value.session != null) syncNuvioAddons()
         }
-        scope.launch { _harbor.value?.let { s -> HarborAccount.me(s)?.let { saveHarbor(s.copy(user = it)) } } }
+        // An expired token is renewed now, not left until a Harbor feature fails (PC 1.0.4's session recovery).
+        scope.launch {
+            val s = _harbor.value ?: return@launch
+            val user = HarborAccount.me(s)
+            if (user != null) saveHarbor(s.copy(user = user))
+            else renewHarbor(s)?.let { fresh -> HarborAccount.me(fresh)?.let { saveHarbor(fresh.copy(user = it)) } }
+        }
     }
 
     private fun <T> save(key: Preferences.Key<String>, serializer: KSerializer<T>, value: T?) {
@@ -152,10 +158,22 @@ class Accounts(private val repository: Repository) {
         return try {
             block(s)
         } catch (e: Exception) {
-            val fresh = HarborAccount.refresh(s) ?: throw e
-            saveHarbor(fresh)
+            val fresh = renewHarbor(s) ?: throw e
             block(fresh)
         }
+    }
+
+    private val harborRenewal = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * One renewal at a time: a refresh token works once, so two calls renewing together could
+     * spend it twice and lose the session. A token another call already renewed is just used.
+     * A failed renewal (offline, say) keeps the saved session for next time.
+     */
+    private suspend fun renewHarbor(stale: HarborSession): HarborSession? = harborRenewal.withLock {
+        val current = _harbor.value ?: return@withLock null
+        if (current.token != stale.token) return@withLock current
+        HarborAccount.refresh(current)?.also { saveHarbor(it) }
     }
 
     // ---- Nuvio ----
@@ -321,6 +339,8 @@ class Accounts(private val repository: Repository) {
         if (_pmdb.value == s) _pmdbCw.value = cw
     }
 
+    /** Videos whose finish was already sent to PMDB/Nuvio in this viewing. */
+    private val finishSent = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val lastPush = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
@@ -330,6 +350,10 @@ class Accounts(private val repository: Repository) {
     fun playbackSaved(videoId: String, positionMs: Long, durationMs: Long, meta: Meta?, video: Video?) {
         val now = System.currentTimeMillis()
         val finished = durationMs > 0 && positionMs >= durationMs * 0.9
+        // The finish goes once per viewing: every later pause or sync past 90% used to send it
+        // again, and PMDB marked the episode watched each time. Going back below 90% re-arms it.
+        if (finished && !finishSent.add(videoId)) return
+        if (!finished) finishSent.remove(videoId)
         if (!finished && now - (lastPush[videoId] ?: 0) < 60_000) return
         lastPush[videoId] = now
         val metaId = meta?.id ?: videoId.substringBefore(':')

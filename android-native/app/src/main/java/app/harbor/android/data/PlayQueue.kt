@@ -20,14 +20,20 @@ object PlayQueue {
         val season: Int? = null,
         val episode: Int? = null,
         val videoId: String? = null,
-        val addedAt: Long = System.currentTimeMillis(),
+        @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class) @kotlinx.serialization.EncodeDefault val addedAt: Long = System.currentTimeMillis(),
     ) {
         val key: String get() = meta.id + (if (season != null && episode != null) ":$season:$episode" else "")
         val episodeLabel: String? get() = if (season != null && episode != null) "S$season · E$episode" else null
     }
 
     @Serializable
-    private data class Saved(val items: List<Item> = emptyList(), val resumeItemId: String? = null)
+    internal data class Saved(val items: List<Item> = emptyList(), val resumeItemId: String? = null, val history: List<HistoryItem> = emptyList())
+
+    @Serializable
+    data class HistoryItem(val item: Item, val recordedAt: Long, val reason: String)
+
+    private val _history = MutableStateFlow<List<HistoryItem>>(emptyList())
+    val history: StateFlow<List<HistoryItem>> = _history.asStateFlow()
 
     private val _items = MutableStateFlow<List<Item>>(emptyList())
     val items: StateFlow<List<Item>> = _items.asStateFlow()
@@ -62,6 +68,7 @@ object PlayQueue {
         val saved = prefs?.getString(key(next), null)?.let { runCatching { Net.json.decodeFromString(Saved.serializer(), it) }.getOrNull() } ?: Saved()
         _items.value = saved.items
         _resumeId.value = saved.resumeItemId
+        _history.value = recentHistory(saved.history)
     }
 
     private fun key(id: String) = "queue.$id"
@@ -80,7 +87,31 @@ object PlayQueue {
         }
         _items.value = items
         _resumeId.value = resume
-        prefs?.edit()?.putString(key(profile), Net.json.encodeToString(Saved.serializer(), Saved(items, resume)))?.apply()
+        prefs?.edit()?.putString(key(profile), Net.json.encodeToString(Saved.serializer(), Saved(items, resume, _history.value)))?.apply()
+    }
+
+    internal fun recentHistory(history: List<HistoryItem>): List<HistoryItem> = history
+        .filter { it.reason in setOf("completed", "skipped") && it.recordedAt > 0 }
+        .sortedByDescending { it.recordedAt }.take(20)
+
+    fun archive(id: String, reason: String) {
+        if (reason !in setOf("completed", "skipped")) return
+        val item = _items.value.firstOrNull { it.id == id } ?: return
+        _history.value = recentHistory(listOf(HistoryItem(item.copy(id = UUID.randomUUID().toString()), System.currentTimeMillis(), reason)) + _history.value)
+        if (playingId == id) playingId = null
+        save(_items.value.filter { it.id != id }, _resumeId.value)
+    }
+
+    fun clearHistory() {
+        _history.value = emptyList()
+        save(_items.value, _resumeId.value)
+    }
+
+    fun replay(entry: HistoryItem): Item {
+        _items.value.firstOrNull { it.key == entry.item.key }?.let { return it }
+        val item = entry.item.copy(id = UUID.randomUUID().toString(), addedAt = System.currentTimeMillis())
+        save(_items.value + item, _resumeId.value)
+        return item
     }
 
     /** Queued titles keep only what the queue shows, not their episode lists. */

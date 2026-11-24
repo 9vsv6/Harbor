@@ -54,3 +54,12 @@
 # Subtitle sync entry points are looked up by their JNI names.
 -keep class app.harbor.android.player.AudioSync { native <methods>; }
 -keep class app.harbor.android.player.WhisperNative { native <methods>; }
+
+# Moonshine's native code builds its transcript objects (Transcript, TranscriptLine, WordTiming…)
+# and calls back into the library by name.
+-keep class ai.moonshine.voice.** { *; }
+-dontwarn ai.moonshine.voice.**
+
+# zstd-jni's native code reaches its Java classes by name (anime identity database).
+-keep class com.github.luben.zstd.** { *; }
+-dontwarn com.github.luben.zstd.**

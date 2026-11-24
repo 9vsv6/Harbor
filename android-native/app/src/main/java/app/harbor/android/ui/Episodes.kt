@@ -127,18 +127,21 @@ fun LazyListScope.episodesSection(
     listGap: Dp,
     /** The Season Explorer's names, so the season menu reads the same (Harbor's season pills). */
     seasonItems: List<SeasonItem> = emptyList(),
+    page: Int = 0,
+    onPage: (Int) -> Unit = {},
 ) {
     val display = HarborDisplay.settings
     // Absolute numbers ("Abs E13"): the episode's place in the whole run, specials aside.
     val absolute = videos.filter { (it.season ?: 0) > 0 }.sortedWith(compareBy({ it.season }, { it.episode })).mapIndexed { i, v -> v.id to i + 1 }.toMap()
     val inSeason = videos.filter { it.season == season }.sortedBy { it.episode ?: 0 }
-    val shown = query.value?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
+    val matching = query.value?.trim()?.takeIf { it.isNotEmpty() }?.let { q ->
         // Searching looks across every season: number, title, story or "s2e5" (episode-search.ts).
         videos.filter { v -> (v.season ?: 0) >= 1 && v.episode != null }.filter { v ->
             absolute[v.id]?.toString() == q || listOfNotNull(v.name, v.title, v.overview, v.episode?.toString(), "s${v.season}e${v.episode}").any { it.contains(q, ignoreCase = true) }
         }
             .sortedWith(compareBy({ it.season }, { it.episode }))
     } ?: inSeason.let { if (display.episodesNewestFirst) it.reversed() else it }
+    val shown = app.harbor.android.data.EpisodePages.slice(matching, page)
     val upTo = next?.let { (it.season ?: 0) * 10_000 + (it.episode ?: 0) } ?: 0
     fun spoiler(v: Video) = display.hideSpoilers && (v.season ?: 0) > 0 && (v.season ?: 0) * 10_000 + (v.episode ?: 0) > upTo
 
@@ -146,6 +149,7 @@ fun LazyListScope.episodesSection(
     val previewOf: (Video) -> (() -> Unit)? = { v -> if (spoiler(v)) null else ({ query.preview = v }) }
     item(key = "seasons") {
         EpisodesHeader(query, repository, meta, videos, seasons, season, onSeason, inSeason, side, wide, onPlay, set, seasonItems)
+        Box(Modifier.padding(horizontal = side)) { EpisodePager(page, matching.size, onPage) }
         query.preview?.let { v -> EpisodePreviewFor(query, repository, meta, v, rating(v), onPlay) }
     }
     when {
@@ -179,13 +183,14 @@ fun LazyListScope.episodesSection(
             }
         }
     }
+    item(key = "episodes-pages-bottom") { Box(Modifier.padding(horizontal = side)) { EpisodePager(page, matching.size, onPage) } }
 }
 
 /** Reports `gap` less height, centred on the content, so the list's spacing between rows closes up. */
 private fun Modifier.closeGap(gap: Dp) = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
     val px = gap.roundToPx().coerceIn(0, placeable.height)
-    layout(placeable.width, placeable.height - px) { placeable.place(0, -px / 2) }
+    layout(placeable.width, placeable.height - px) { placeable.placeRelative(0, -px / 2) }
 }
 
 @Composable
@@ -225,7 +230,7 @@ private fun EpisodesHeader(
                 repository.setWatched(inSeason.map { it.id }, !allWatched)
             }
             ToolButton(Icons.Rounded.Search, "Search by episode number or title", active = query.value != null) { query.value = if (query.value == null) "" else null }
-            SeasonMenu(seasons, season, videos, seasonItems, onSeason)
+            if (wide) SeasonMenu(seasons, season, videos, seasonItems, onSeason)
         }
         val title: @Composable () -> Unit = {
             Text("Episodes", color = HarborColors.Ink, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp)
@@ -237,8 +242,12 @@ private fun EpisodesHeader(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), content = tools)
             }
         } else {
-            Box(Modifier.padding(horizontal = side)) { title() }
-            // On a phone the tools get their own row, scrolling sideways.
+            // On a phone the season menu sits beside the title, where it can't scroll out of sight.
+            Row(Modifier.fillMaxWidth().padding(horizontal = side), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { title() }
+                SeasonMenu(seasons, season, videos, seasonItems, onSeason)
+            }
+            // The other tools get their own row, scrolling sideways.
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = side),
                 verticalAlignment = Alignment.CenterVertically,

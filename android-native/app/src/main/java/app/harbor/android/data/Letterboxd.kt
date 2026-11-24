@@ -190,6 +190,22 @@ object Letterboxd {
         }.awaitAll().filterNotNull()
     }
 
+    /**
+     * Your Letterboxd watchlist, for Library → Letterboxd (library/letterboxd-tab.tsx): the
+     * watchlist catalog itself, whichever lists Home shows. Throws when Letterboxd can't be reached.
+     */
+    suspend fun watchlist(s: LetterboxdSettings, session: LetterboxdSession?): List<Meta> {
+        // As PC (letterboxd-tab.tsx): the signed-in account whenever there is one.
+        val full = session != null
+        // As PC (provider.tsx isActive): Full mode needs its sign-in finished; Public needs a username.
+        if (!full && s.mode == "full") error("Finish connecting Letterboxd: sign in under Full mode in Settings → Letterboxd, or switch to Public.")
+        if (!full && s.username.isBlank()) error("Add your Letterboxd username in Settings → Letterboxd.")
+        // The watchlist is asked for even when Home doesn't show it.
+        val url = if (full) "$BASE/stremio/${session!!.userId}/catalog/movie/letterboxd-watchlist.json"
+            else "$BASE/${config(s.copy(selectedCatalogs = (s.selectedCatalogs + "letterboxd-watchlist").distinct()))}/catalog/movie/letterboxd-watchlist.json"
+        return (getJson(url)["metas"] as? JsonArray).orEmpty().mapNotNull { toMeta(it.jsonObject) }
+    }
+
     /** What the signed-in member has done with a film, and the signed links that change it. */
     data class FilmStatus(
         val communityRating: Double?,

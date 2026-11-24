@@ -75,6 +75,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -459,6 +460,7 @@ private fun TvRailRow(
     onResume: (CwItem) -> Unit,
 ) {
     val seeAll = remember { FocusRequester() }
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
     // The header's link takes focus only from Right at the row's end, never from Up out of the next row.
     var armed by remember { mutableStateOf(false) }
     LaunchedEffect(armed) { if (armed) runCatching { seeAll.requestFocus() } }
@@ -499,7 +501,7 @@ private fun TvRailRow(
                 horizontalArrangement = Arrangement.spacedBy(u(when { row.services.isNotEmpty() -> 10f; row.cw.isNotEmpty() -> 23f; else -> 21f })),
                 modifier = Modifier.onPreviewKeyEvent { e ->
                     // Right from the last card reaches the header's link (bp-row-header's see-all).
-                    if (e.type == KeyEventType.KeyDown && e.key.nativeKeyCode == KeyEvent.KEYCODE_DPAD_RIGHT &&
+                    if (e.type == KeyEventType.KeyDown && e.key.nativeKeyCode == (if (rtl) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT) &&
                         focusedIndex == count - 1 && row.onAction != null
                     ) { armed = true; true } else false
                 },
@@ -619,6 +621,11 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
     var serviceFailed by remember(service) { mutableStateOf(false) }
     val poster = if (serviceFailed) ownPoster else service ?: ownPoster
     val title = local?.first ?: meta.name
+    var scoreHeight by remember(meta.id) { mutableIntStateOf(0) }
+    LaunchedEffect(HarborDisplay.settings.tvScoreSources) {
+        if (HarborDisplay.settings.tvScoreSources.isEmpty()) scoreHeight = 0
+    }
+    val density = LocalDensity.current
     // The card's grey shows only until its poster arrives: under a loaded poster it would be one more
     // full-card pass for the TV's GPU on every frame.
     TvTileBox(
@@ -638,9 +645,10 @@ internal fun PosterTile(meta: Meta, focus: FocusRequester?, onFocused: () -> Uni
             Text(
                 title, color = HarborColors.Ink, fontSize = s(9f), fontWeight = FontWeight.Bold, lineHeight = s(11f),
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = u(6f), vertical = u(5f)),
+                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = with(density) { scoreHeight.toDp() }).padding(horizontal = u(6f), vertical = u(5f)),
             )
         }
+        TvScoreBadges(meta, Modifier.align(Alignment.BottomEnd).padding(u(5f)).onSizeChanged { scoreHeight = it.height })
     }
     if (restore) LaunchedEffect(meta.id) { if (TvReturnFocus.consume(meta.id)) runCatching { requester.requestFocus() } }
 }
@@ -726,7 +734,8 @@ private fun lerpColor(a: Color, b: Color, t: Float) = Color(
 )
 
 private fun leftLabel(ms: Long): String {
-    val minutes = (ms / 60_000).coerceAtLeast(0)
+    // Rounded up: the last seconds read "1m left", never "0m left".
+    val minutes = ((ms + 59_999) / 60_000).coerceAtLeast(1)
     if (minutes < 60) return "${minutes}m left"
     val hours = minutes / 60
     val rest = minutes % 60

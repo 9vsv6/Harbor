@@ -50,14 +50,14 @@ import kotlinx.coroutines.delay
  * each, the rating, and "Ignore this title". It holds 8 s, longer while touched.
  */
 
-private val SEVERITY_RANK = mapOf("None" to 0, "Mild" to 1, "Moderate" to 2, "Severe" to 3)
+internal val SEVERITY_RANK = mapOf("None" to 0, "Mild" to 1, "Moderate" to 2, "Severe" to 3)
 
 /** Harbor's danger red (--color-danger). */
 private val Danger = Color(0xFFC4363A)
 
-private class SeverityStyle(val text: Color, val bar: Color, val weight: FontWeight)
+internal class SeverityStyle(val text: Color, val bar: Color, val weight: FontWeight)
 
-private fun severityStyle(severity: String, monochrome: Boolean): SeverityStyle = if (monochrome) when (severity) {
+internal fun severityStyle(severity: String, monochrome: Boolean): SeverityStyle = if (monochrome) when (severity) {
     "Severe" -> SeverityStyle(Color(0xE6FFFFFF), Color(0xE6FFFFFF), FontWeight.Bold)
     "Moderate" -> SeverityStyle(Color(0xA6FFFFFF), Color(0xA6FFFFFF), FontWeight.Medium)
     "Mild" -> SeverityStyle(Color(0x73FFFFFF), Color(0x73FFFFFF), FontWeight.Medium)
@@ -182,7 +182,7 @@ internal fun ContentAdvisoryLayer(state: PlayerState, actions: PlayerActions) {
         delay(if (touched) 2_500 else 8_000)
         state.advisoryOpen = false
     }
-    Box(Modifier.fillMaxSize().padding(top = 72.dp, end = 24.dp, start = 24.dp), contentAlignment = Alignment.TopEnd) {
+    Box(Modifier.fillMaxSize().padding(top = if (!state.tv && state.controlsVisible) 128.dp else 24.dp, end = 24.dp, start = 24.dp), contentAlignment = Alignment.TopEnd) {
         AnimatedVisibility(
             open,
             enter = fadeIn() + slideInVertically { -it / 8 },

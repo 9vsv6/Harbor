@@ -218,7 +218,7 @@ private fun NameDialog(title: String, initial: String, onDone: (String?) -> Unit
         containerColor = HarborColors.Elevated,
         title = { Text(title) },
         text = {
-            OutlinedTextField(value = name, onValueChange = { name = it.take(24) }, singleLine = true, label = { Text("Name") })
+            OutlinedTextField(textStyle = androidx.compose.ui.text.TextStyle(textAlign = TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content), value = name, onValueChange = { name = it.take(24) }, singleLine = true, label = { Text("Name") })
         },
         confirmButton = { TextButton(onClick = { onDone(name) }, enabled = name.isNotBlank()) { Text("Save") } },
         dismissButton = { TextButton(onClick = { onDone(null) }) { Text("Cancel") } },
@@ -241,7 +241,7 @@ private fun EditProfileDialog(profile: Profile, onDismiss: () -> Unit, onSave: (
                 Text("Its My List, Continue watching, settings and tracker sign-ins are removed from this device.")
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it.take(24) }, singleLine = true, label = { Text("Name") })
+                    OutlinedTextField(textStyle = androidx.compose.ui.text.TextStyle(textAlign = TextAlign.Start, textDirection = androidx.compose.ui.text.style.TextDirection.Content), value = name, onValueChange = { name = it.take(24) }, singleLine = true, label = { Text("Name") })
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         PROFILE_COLORS.forEach { option ->
                             Box(
