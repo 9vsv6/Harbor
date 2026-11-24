@@ -343,8 +343,8 @@ fun TvHeroActions(
         Row(horizontalArrangement = Arrangement.spacedBy(app.harbor.android.ui.tv.u(4f)), verticalAlignment = Alignment.CenterVertically) {
             BpAction(h, playLabel = playLabel, progress = progress, requester = playFocus, onFocus = { hint = "" }, onClick = play)
             // The phone's split button: saving goes through the library action (and your trackers, as
-            // chosen); once saved, OK opens the menu with the removals.
-            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In library" else if (saveScope == "all") "Add to all trackers" else "Save to library", active = listed, onFocus = { hint = it }) {
+            // chosen); once saved, OK opens the library menu: the removals and each tracker's status.
+            BpAction(h, icon = rememberVectorPainter(if (listed) Icons.Rounded.Check else Icons.Rounded.Add), label = if (listed) "In library" else "Save to library", active = listed, onFocus = { hint = it }) {
                 if (listed) moreOpen = true
                 else if (!saving) {
                     saving = true
@@ -366,8 +366,6 @@ fun TvHeroActions(
             }
             trailer?.let { BpAction(h, icon = painterResource(R.drawable.ui_trailer), label = "Watch trailer", onFocus = { l -> hint = l }, onClick = it) }
             if (!isSeries) BpAction(h, icon = rememberVectorPainter(Icons.Rounded.Download), label = "Download", onFocus = { hint = it }, onClick = download)
-            // The phone's ⋯: the library menu and each connected tracker's status for this title.
-            BpAction(h, icon = rememberVectorPainter(Icons.Rounded.MoreHoriz), label = "More actions", onFocus = { hint = it }) { moreOpen = true }
         }
         Text(
             hint, color = HarborColors.InkSubtle, fontSize = app.harbor.android.ui.tv.s(9f), fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp,

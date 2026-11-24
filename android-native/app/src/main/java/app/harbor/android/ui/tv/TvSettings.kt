@@ -94,7 +94,7 @@ import kotlinx.coroutines.launch
 // Harbor PC's Big Picture settings (bp-settings.tsx, bp-settings-catalog.ts, bp-settings-parts.tsx,
 // bp-settings-pane.tsx) and its Accounts and TMDB page with phone setup (bp-connect.tsx).
 
-private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Audio("Audio"), Sources("Sources"), Home("Home"), Services("Your services"), Trackers("Trackers"), Setup("Setup"), More("More") }
+private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Audio("Audio"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
 
 private class Opt(val value: String, val label: String)
 
@@ -190,7 +190,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val subLangs = (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct()
         val subPx = nearest(SubSizes, (prefs.subScale * 46f))
         // Worked out once per change of settings, not again for every row on every focus move.
-        val summaries = remember(settings, prefs, autoPlay, connected, trackers) { Cat.entries.associateWith { c ->
+        val summaries = remember(settings, prefs, autoPlay, connected) { Cat.entries.associateWith { c ->
             when (c) {
                 Cat.Picture -> overscanLabel(settings.tvOverscan)
                 Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
@@ -200,7 +200,6 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.Sources -> if (settings.streamFilter.active) "Filters on" else "All resolutions and codecs"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
                 Cat.Services -> "${StreamingServices.enabled(settings).size} on"
-                Cat.Trackers -> TvTrackers.filter { trackerAuth(it, trackers)?.accessToken != null }.joinToString(", ") { it.label }.ifEmpty { "Nothing connected" }
                 Cat.Setup -> connected.joinToString(", ").ifEmpty { "Nothing connected" }
                 Cat.More -> "Every setting"
             }
@@ -216,7 +215,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.Subtitles && settings.autoSyncExperimental) listOf(
                 Control.Push("whisper", "Speech models", "Whisper Tiny and Silero speech detector")) else emptyList()) + (if (active == Cat.Setup) listOfNotNull(
                 Control.Push("updates", "Updates", updateLine(version, update)),
-            ) else emptyList()) + (if (active == Cat.Trackers) trackerControls(trackers) else emptyList()) +
+            ) else emptyList()) + (if (active == Cat.Setup) trackerControls(trackers) else emptyList()) +
                 if (active == Cat.Home) homeExtras(settings, identity) else emptyList()
         }
         val firstFocus = remember { FocusRequester() }
@@ -294,7 +293,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             // The side pane (a picture, a subtitle sample) arrives a frame after the list, so a TV box
             // shows the menu at once instead of building the whole page in one long frame.
             if (!wide) {
-                if (paneReady) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f), trackers)
+                if (paneReady) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f))
                 else Spacer(Modifier.weight(1f))
             }
         }
@@ -801,7 +800,6 @@ private fun SettingsPane(
     autoPlay: Boolean,
     connected: List<String>,
     modifier: Modifier,
-    trackers: app.harbor.android.data.TrackerSettings = app.harbor.android.data.TrackerSettings(),
 ) {
     // Big Picture's preview still (bp-settings-pane.tsx's STILL), the same on every TV.
     val art = PREVIEW_STILL
@@ -871,7 +869,6 @@ private fun SettingsPane(
                         "Menu position" to if (s.tvNavSide == "left") "Left side" else "Top bar",
                     )
                     Cat.Services -> StreamingServices.enabled(s).map { it.name to "On" }.take(10)
-                    Cat.Trackers -> TvTrackers.map { t -> t.label to (trackerAuth(t, trackers)?.takeIf { it.accessToken != null }?.let { a -> a.user?.let { "@$it" } ?: "Connected" } ?: "Not connected") }
                     Cat.Setup -> listOf(
                         "TMDB" to if ("TMDB" in connected) "On" else "Off",
                         "Stremio" to if ("Stremio" in connected) "Signed in" else "Signed out",

@@ -570,7 +570,7 @@ fun TvLibrary(repository: Repository, onOpen: (Meta) -> Unit) = withUnit {
             }
             TvPill("Tabs", showTabs) { showTabs = !showTabs }
             Spacer(Modifier.weight(1f))
-            Text(if (count > 0) "$count TITLES" else "", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+            Text("$count TITLES", color = HarborColors.InkSubtle, fontSize = s(6.5f), fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
         }
         if (showTabs) Row(Modifier.padding(top = u(6f)), horizontalArrangement = Arrangement.spacedBy(u(5f)), verticalAlignment = Alignment.CenterVertically) {
             Text("Show tabs", color = HarborColors.InkMuted, fontSize = s(7f))
