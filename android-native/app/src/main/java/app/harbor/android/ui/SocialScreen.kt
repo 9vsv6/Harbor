@@ -891,10 +891,20 @@ private fun EditProfile(repository: Repository, harbor: HarborSession, onClose: 
     var showJoin by remember { mutableStateOf(true) }
     var accent by remember { mutableStateOf<String?>(null) }
     var loaded by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var reload by remember { mutableIntStateOf(0) }
     val handle = harbor.user.handle ?: harbor.user.username
-    LaunchedEffect(handle) {
-        HarborPeople.profile(handle, harbor.token)?.let { p -> slogan = p.slogan.orEmpty(); showJoin = p.showJoinDate }
-        loaded = true
+    LaunchedEffect(handle, reload) {
+        loadFailed = false
+        try {
+            repository.accounts.withHarbor { s -> HarborPeople.profile(handle, s.token) }?.let { p -> slogan = p.slogan.orEmpty(); showJoin = p.showJoinDate }
+            loaded = true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Offline or Harbor is down: saving now would overwrite the card with blanks, so it waits for a retry.
+            loadFailed = true
+        }
     }
     // PC's card theme accents (CARD_THEMES).
     val swatches = listOf("#7B5CFF", "#22D3EE", "#94A3B8", "#FB923C", "#34D399", "#FB7185", "#A3A3A3")
@@ -904,6 +914,10 @@ private fun EditProfile(repository: Repository, harbor: HarborSession, onClose: 
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Your profile", color = HarborColors.Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            if (loadFailed) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Couldn't load your profile. Check your connection.", color = HarborColors.InkSubtle, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                Pill(null, "Retry", color = HarborColors.InkMuted) { reload++ }
+            }
             HTextField(slogan, { slogan = it.take(120) }, Modifier.fillMaxWidth(), label = { Text("Bio") }, singleLine = true)
             ToggleRow("Show join date", "Others see when you joined Harbor on your profile card.", showJoin) { showJoin = it }
             HarborHeading("Card accent")
