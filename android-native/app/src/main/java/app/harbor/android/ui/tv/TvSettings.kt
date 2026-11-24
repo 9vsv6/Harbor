@@ -94,7 +94,7 @@ import kotlinx.coroutines.launch
 // Harbor PC's Big Picture settings (bp-settings.tsx, bp-settings-catalog.ts, bp-settings-parts.tsx,
 // bp-settings-pane.tsx) and its Accounts and TMDB page with phone setup (bp-connect.tsx).
 
-private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Audio("Audio"), Sources("Sources"), Home("Home"), Services("Your services"), Setup("Setup"), More("More") }
+private enum class Cat(val label: String) { Picture("Picture"), Language("Language"), Subtitles("Subtitles"), Playback("Playback"), Audio("Audio"), Sources("Sources"), Home("Home"), Services("Your services"), Trackers("Trackers"), Setup("Setup"), More("More") }
 
 private class Opt(val value: String, val label: String)
 
@@ -146,6 +146,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
     val tmdb by repository.tmdbKey.collectAsState()
     val account by repository.account.collectAsState()
     val harbor by repository.accounts.harbor.collectAsState()
+    val trackers by repository.trackers.collectAsState()
     var depth by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(1) }
     var active by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(Cat.Picture) }
     var pane by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
@@ -161,6 +162,12 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         if (pane == "connect") {
             BackHandler { pane = null }
             TvConnect(repository, connected.isNotEmpty(), tmdb != null, account?.email, harbor?.user?.username) { pane = null }
+            return@CompositionLocalProvider
+        }
+        val trackerPane = pane?.takeIf { it.startsWith("tracker:") }?.let { id -> TvTrackers.firstOrNull { it.name == id.removePrefix("tracker:") } }
+        if (trackerPane != null) {
+            BackHandler { pane = null }
+            TvTrackerPage(repository, trackerPane, onSendFromPhone = { pane = "connect" }) { pane = null }
             return@CompositionLocalProvider
         }
         if (pane == "whisper") {
@@ -183,7 +190,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val subLangs = (listOf(prefs.subLanguage) + settings.subtitleFallbacks).filter { it.isNotEmpty() }.distinct()
         val subPx = nearest(SubSizes, (prefs.subScale * 46f))
         // Worked out once per change of settings, not again for every row on every focus move.
-        val summaries = remember(settings, prefs, autoPlay, connected) { Cat.entries.associateWith { c ->
+        val summaries = remember(settings, prefs, autoPlay, connected, trackers) { Cat.entries.associateWith { c ->
             when (c) {
                 Cat.Picture -> overscanLabel(settings.tvOverscan)
                 Cat.Language -> app.harbor.android.i18n.UiLanguages.of(settings.appLanguage).native
@@ -193,6 +200,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                 Cat.Sources -> if (settings.streamFilter.active) "Filters on" else "All resolutions and codecs"
                 Cat.Home -> if (settings.heroAutoRotate) "Harbor" else "Still hero"
                 Cat.Services -> "${StreamingServices.enabled(settings).size} on"
+                Cat.Trackers -> TvTrackers.filter { trackerAuth(it, trackers)?.accessToken != null }.joinToString(", ") { it.label }.ifEmpty { "Nothing connected" }
                 Cat.Setup -> connected.joinToString(", ").ifEmpty { "Nothing connected" }
                 Cat.More -> "Every setting"
             }
@@ -202,12 +210,14 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
         val scope = androidx.compose.runtime.rememberCoroutineScope()
         val update = app.harbor.android.data.AppUpdate.status
         val version = remember { app.harbor.android.data.AppUpdate.installedVersion(context) }
+        val identity by app.harbor.android.data.AnimeIdentity.state.collectAsState()
         // Only once a category is open: on the list, every focus move would build options nobody sees.
-        val controls = if (depth != 2) emptyList() else remember(active, settings, prefs, autoPlay, connected, update) {
+        val controls = if (depth != 2) emptyList() else remember(active, settings, prefs, autoPlay, connected, update, identity, trackers) {
             controlsFor(active, settings, prefs, autoPlay, connected) + (if (active == Cat.Subtitles && settings.autoSyncExperimental) listOf(
-                Control.Push("whisper", "Speech models", "Whisper Tiny and Silero speech detector")) else emptyList()) + if (active == Cat.Setup) listOfNotNull(
+                Control.Push("whisper", "Speech models", "Whisper Tiny and Silero speech detector")) else emptyList()) + (if (active == Cat.Setup) listOfNotNull(
                 Control.Push("updates", "Updates", updateLine(version, update)),
-            ) else emptyList()
+            ) else emptyList()) + (if (active == Cat.Trackers) trackerControls(trackers) else emptyList()) +
+                if (active == Cat.Home) homeExtras(settings, identity) else emptyList()
         }
         val firstFocus = remember { FocusRequester() }
         var paneReady by remember { mutableStateOf(false) }
@@ -245,7 +255,11 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                         // instead of the next Up leaving for the top bar with the top still hidden.
                         Box(if (i == 0) Modifier.onFocusChanged { if (it.hasFocus) scope.launch { optionsScroll.animateScrollToItem(0) } } else Modifier) {
                         when (control) {
-                            is Control.Options -> OptionRow(control, f) { commit(repository, control.id, it) }
+                            is Control.Options -> OptionRow(control, f) {
+                                // Turning the anime identity database on downloads it, as on phones.
+                                if (control.id == "animeIdentity" && it == "on") app.harbor.android.data.AnimeIdentity.refreshIfStale(context)
+                                commit(repository, control.id, it)
+                            }
                             is Control.Multi -> MultiRow(control, f) { commit(repository, control.id, it) }
                             is Control.Push -> PushRow(control.label, control.detail, f) {
                                 when (control.id) {
@@ -256,6 +270,9 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                                         if (update is app.harbor.android.data.AppUpdate.Status.Available) app.harbor.android.data.AppUpdate.dismissed = null
                                         else if (update !is app.harbor.android.data.AppUpdate.Status.Checking && update !is app.harbor.android.data.AppUpdate.Status.Downloading)
                                             scope.launch { app.harbor.android.data.AppUpdate.check(context, manual = true) }
+                                    "animeIdentityDownload" ->
+                                        if (identity.busy) app.harbor.android.data.AnimeIdentity.cancel()
+                                        else app.harbor.android.data.AnimeIdentity.download(context)
                                     else -> pane = control.id
                                 }
                             }
@@ -264,6 +281,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
                                     "addons" -> onOpenAddons()
                                     "all" -> pane = "all"
                                     "setupAgain" -> scope.launch { repository.setSetupStep(0) }
+                                    "animeIdentityDelete" -> app.harbor.android.data.AnimeIdentity.remove(context)
                                     else -> commit(repository, control.id, "")
                                 }
                             }
@@ -276,7 +294,7 @@ fun TvSettings(repository: Repository, onOpenAddons: () -> Unit, onExit: () -> U
             // The side pane (a picture, a subtitle sample) arrives a frame after the list, so a TV box
             // shows the menu at once instead of building the whole page in one long frame.
             if (!wide) {
-                if (paneReady) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f))
+                if (paneReady) SettingsPane(active, settings, prefs, autoPlay, connected, Modifier.weight(1f), trackers)
                 else Spacer(Modifier.weight(1f))
             }
         }
@@ -456,6 +474,34 @@ private fun otherControls(cat: Cat, s: AppSettings, p: app.harbor.android.data.P
     else -> emptyList()
 }
 
+/**
+ * The end of Home: the phone's "Which order" (Settings → Detail pages) and "Anime identity
+ * (experimental)" (Settings → Home → Continue Watching), with the phone's texts.
+ */
+private fun homeExtras(s: AppSettings, identity: app.harbor.android.data.AnimeIdentity.State): List<Control> = buildList {
+    add(Control.Options(
+        "tvdbSeasonType", "Which order", s.tvdbSeasonType,
+        listOf(Opt("aired", "Aired"), Opt("official", "Official"), Opt("dvd", "DVD"), Opt("absolute", "Absolute"), Opt("alternate", "Alternate")),
+        detail = "How episodes are numbered on show pages, from TVDB (needs your TVDB key). Playback, watched marks and trackers keep the aired episodes.",
+    ))
+    add(Control.Options(
+        "animeIdentity", "Anime identity (experimental)", onOff(s.animeIdentityEnabled), OnOff,
+        detail = "Use the offline anime identity database. An offline map of which Kitsu, MyAnimeList, AniList, AniDB and Simkl entries are the same anime, from the anime-offline-database (ODbL). About 6 MB to download, checked before use, refreshed weekly while on. Off by default. Turning it on downloads the dataset.",
+    ))
+    if (!s.animeIdentityEnabled) return@buildList
+    val status = when {
+        identity.busy -> identity.progress ?: "Working…"
+        identity.installed -> "Installed · ${identity.entries} titles · built ${java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(identity.builtAt))}"
+        else -> "Not installed"
+    } + (identity.error?.let { " · $it" } ?: "")
+    add(Control.Push("animeIdentityDownload", if (identity.busy) "Cancel" else if (identity.installed) "Check for update" else "Download", status))
+    if (identity.installed && !identity.busy) add(Control.Action("animeIdentityDelete", "Delete"))
+    add(Control.Options("animeIdentityRepair", "Repair Continue Watching identities", onOff(s.animeIdentityRepairEnabled), OnOff,
+        detail = "Joins cards that name the same anime through different sites, using only verified matches."))
+    add(Control.Options("animeIdentityScrobble", "Validate tracker scrobble targets", onOff(s.animeIdentityLiveScrobbleEnabled), OnOff,
+        detail = "Before AniList or MyAnimeList records an episode, checks the title against the offline database and skips it when they disagree."))
+}
+
 private fun commit(repository: Repository, id: String, value: String) {
     if (id.startsWith("libraryTab:")) {
         val tab = id.substringAfter(':')
@@ -556,6 +602,10 @@ private fun commit(repository: Repository, id: String, value: String) {
         "hideWatched" -> repository.updateSettings { it.copy(hideWatched = value == "on") }
         "top10" -> repository.updateSettings { it.copy(showTop10 = value == "on") }
         "navSide" -> repository.updateSettings { it.copy(tvNavSide = value) }
+        "tvdbSeasonType" -> repository.updateSettings { it.copy(tvdbSeasonType = value) }
+        "animeIdentity" -> repository.updateSettings { it.copy(animeIdentityEnabled = value == "on") }
+        "animeIdentityRepair" -> repository.updateSettings { it.copy(animeIdentityRepairEnabled = value == "on") }
+        "animeIdentityScrobble" -> repository.updateSettings { it.copy(animeIdentityLiveScrobbleEnabled = value == "on") }
         "service" -> repository.updateSettings { s ->
             val svc = StreamingServices.all.first { it.key == value }
             s.copy(streaming = s.streaming + (value to !StreamingServices.isOn(s, svc)))
@@ -751,6 +801,7 @@ private fun SettingsPane(
     autoPlay: Boolean,
     connected: List<String>,
     modifier: Modifier,
+    trackers: app.harbor.android.data.TrackerSettings = app.harbor.android.data.TrackerSettings(),
 ) {
     // Big Picture's preview still (bp-settings-pane.tsx's STILL), the same on every TV.
     val art = PREVIEW_STILL
@@ -820,6 +871,7 @@ private fun SettingsPane(
                         "Menu position" to if (s.tvNavSide == "left") "Left side" else "Top bar",
                     )
                     Cat.Services -> StreamingServices.enabled(s).map { it.name to "On" }.take(10)
+                    Cat.Trackers -> TvTrackers.map { t -> t.label to (trackerAuth(t, trackers)?.takeIf { it.accessToken != null }?.let { a -> a.user?.let { "@$it" } ?: "Connected" } ?: "Not connected") }
                     Cat.Setup -> listOf(
                         "TMDB" to if ("TMDB" in connected) "On" else "Off",
                         "Stremio" to if ("Stremio" in connected) "Signed in" else "Signed out",
@@ -990,4 +1042,278 @@ internal fun TvSetupConnection(repository: Repository, onBack: () -> Unit) {
             TvConnect(repository, tmdb != null || account != null || harbor != null, tmdb != null, account?.email, harbor?.user?.username, backLabel = "Back to setup", onBack = onBack)
         }
     }
+}
+
+// ---- Trackers (the phone's Settings → Trackers, as a Big Picture page) ----
+
+/** The trackers a TV signs in to: Trakt and Simkl with a code; AniList and MyAnimeList come from a phone. */
+private val TvTrackers = listOf(app.harbor.android.ui.Tracker.Trakt, app.harbor.android.ui.Tracker.Simkl, app.harbor.android.ui.Tracker.AniList, app.harbor.android.ui.Tracker.Mal)
+
+private fun codeSignIn(t: app.harbor.android.ui.Tracker) = t == app.harbor.android.ui.Tracker.Trakt || t == app.harbor.android.ui.Tracker.Simkl
+
+private fun trackerAuth(t: app.harbor.android.ui.Tracker, s: app.harbor.android.data.TrackerSettings): app.harbor.android.data.TrackerAuth? = when (t) {
+    app.harbor.android.ui.Tracker.Trakt -> s.trakt
+    app.harbor.android.ui.Tracker.Simkl -> s.simkl
+    app.harbor.android.ui.Tracker.AniList -> s.anilist
+    app.harbor.android.ui.Tracker.Mal -> s.mal
+    else -> null
+}
+
+private fun trackerControls(trackers: app.harbor.android.data.TrackerSettings): List<Control> = TvTrackers.map { t ->
+    val auth = trackerAuth(t, trackers)?.takeIf { it.accessToken != null }
+    Control.Push(
+        "tracker:${t.name}", t.label,
+        when {
+            auth != null -> "Connected" + (auth.user?.let { " as @$it" } ?: "")
+            codeSignIn(t) -> "Not connected. OK shows a code to approve on your phone."
+            else -> "Not connected. Connect it on your phone or tablet, then send it to this TV."
+        },
+    )
+}
+
+/** One setting on a tracker page: its row, and what choosing a value does. */
+private class TrackerOption(val control: Control.Options, val pick: (String) -> Unit)
+
+private fun trackerOptions(t: app.harbor.android.ui.Tracker, s: AppSettings, signedIn: Boolean, repository: Repository): List<TrackerOption> {
+    fun toggle(id: String, label: String, detail: String?, on: Boolean, set: (AppSettings, Boolean) -> AppSettings) =
+        TrackerOption(Control.Options(id, label, onOff(on), OnOff, detail = detail)) { v -> repository.updateSettings { set(it, v == "on") } }
+    fun syncIndicator() = buildList {
+        add(toggle("syncIndicator", "Show sync indicator", "The badge that appears over the player when an episode syncs to your tracker. Turn off to hide the sync badge during playback.", s.syncIndicator) { a, v -> a.copy(syncIndicator = v) })
+        if (s.syncIndicator) add(TrackerOption(Control.Options(
+            "syncIndicatorPosition", "Sync indicator position", s.syncIndicatorPosition,
+            listOf(Opt("top-left", "Top left"), Opt("top-right", "Top right"), Opt("bottom-left", "Bottom left"), Opt("bottom-right", "Bottom right"), Opt("bottom-center", "Bottom center")),
+        )) { v -> repository.updateSettings { it.copy(syncIndicatorPosition = v) } })
+    }
+    val blur = toggle(
+        "blurComments", "Blur comments and reviews by default",
+        "Comments and reviews on detail pages stay blurred until you reveal them, even when they are not tagged as spoilers. This one switch covers Trakt and Letterboxd.",
+        s.blurComments,
+    ) { a, v -> a.copy(blurComments = v) }
+    val rewatches = "Watching an anime you already finished marks it as Rewatching and counts the rewatch, instead of resetting your progress."
+    return when (t) {
+        app.harbor.android.ui.Tracker.Trakt -> buildList {
+            if (signedIn) add(toggle("traktCw", "Show Trakt's paused titles", "What you paused on other devices, as Harbor's \"Paused on Trakt\".", s.traktInContinueWatching) { a, v -> a.copy(traktInContinueWatching = v) })
+            add(toggle("traktComments", "Show comments on detail pages", "Adds a comments section to movie, show, and episode pages. No Trakt account needed to read them.", s.showTraktComments) { a, v -> a.copy(showTraktComments = v) })
+            add(blur)
+        }
+        app.harbor.android.ui.Tracker.Simkl -> buildList {
+            if (signedIn) add(toggle("simklScrobble", "Scrobble to Simkl", "Automatically track what you are playing and save watch progress in real-time.", s.simklScrobble) { a, v -> a.copy(simklScrobble = v) })
+            add(toggle("simklBadge", "Display Simkl Community Ratings", "Display SIMKL community score badge on details pages.", s.showSimklBadge) { a, v -> a.copy(showSimklBadge = v) })
+            if (!signedIn) return@buildList
+            add(toggle("simklRails", "Show Simkl rails on Home", "Display your Watching and Plan to Watch rows on the home screen.", s.simklHomeRails) { a, v -> a.copy(simklHomeRails = v) })
+            add(toggle("simklTrending", "Show Simkl Trending Today rail", "Display today's trending movies, TV shows, and anime from Simkl.", s.simklTrendingRail) { a, v -> a.copy(simklTrendingRail = v) })
+            if (s.simklHomeRails) {
+                add(toggle("simklMoviesPlan", "Movies · Plan to Watch", "Show a row of the movies on your Simkl plan-to-watch list.", s.simklMoviesPlan) { a, v -> a.copy(simklMoviesPlan = v) })
+                add(toggle("simklShowsWatching", "TV Shows · Watching", "Show a row of the shows you are part way through.", s.simklShowsWatching) { a, v -> a.copy(simklShowsWatching = v) })
+                add(toggle("simklShowsPlan", "TV Shows · Plan to Watch", "Show a row of the shows on your Simkl plan-to-watch list.", s.simklShowsPlan) { a, v -> a.copy(simklShowsPlan = v) })
+                add(toggle("simklAnimeWatching", "Anime · Watching", "Show a row of the anime you are part way through.", s.simklAnimeWatching) { a, v -> a.copy(simklAnimeWatching = v) })
+                add(toggle("simklAnimePlan", "Anime · Plan to Watch", "Show a row of the anime on your Simkl plan-to-watch list.", s.simklAnimePlan) { a, v -> a.copy(simklAnimePlan = v) })
+            }
+            addAll(syncIndicator())
+        }
+        app.harbor.android.ui.Tracker.AniList -> buildList {
+            if (signedIn) {
+                add(toggle("anilistSync", "Sync watch progress", "Finishing an anime episode updates your AniList progress. Forward only: it never lowers a count you already have.", s.anilistAutoSync) { a, v -> a.copy(anilistAutoSync = v) })
+                if (s.anilistAutoSync) add(toggle("anilistRewatches", "Count AniList rewatches", rewatches, s.anilistCountRewatches) { a, v -> a.copy(anilistCountRewatches = v) })
+            }
+            add(toggle("anilistComments", "Show AniList comments", "Show forum threads and comments from AniList on anime detail pages.", s.showAnilistComments) { a, v -> a.copy(showAnilistComments = v) })
+            add(toggle("anilistBlur", "Blur comments by default", "Comments on anime pages are blurred until you reveal them, even if they are not tagged as spoilers.", s.anilistBlurComments) { a, v -> a.copy(anilistBlurComments = v) })
+            if (signedIn) addAll(syncIndicator())
+        }
+        app.harbor.android.ui.Tracker.Mal -> if (!signedIn) emptyList() else buildList {
+            add(toggle("malSync", "Sync watch progress", "Finishing an anime episode updates your MyAnimeList progress. Forward only: it never lowers a count you already have.", s.malAutoSync) { a, v -> a.copy(malAutoSync = v) })
+            if (s.malAutoSync) add(toggle("malRewatches", "Count MyAnimeList rewatches", rewatches, s.malCountRewatches) { a, v -> a.copy(malCountRewatches = v) })
+            addAll(syncIndicator())
+        }
+        else -> emptyList()
+    }
+}
+
+/**
+ * A tracker's page on a TV. Trakt and Simkl sign in with a code: OK on Connect shows it big, with
+ * the address and a QR code for a phone, and the page connects as soon as you approve it there.
+ * Signed in: the account, Disconnect (OK twice) and the phone page's settings. AniList and
+ * MyAnimeList sign in through a browser, so they come over from a phone with Send to a TV.
+ */
+@Composable
+private fun TvTrackerPage(repository: Repository, tracker: app.harbor.android.ui.Tracker, onSendFromPhone: () -> Unit, onBack: () -> Unit) {
+    val trackers by repository.trackers.collectAsState()
+    val settings by repository.settings.collectAsState()
+    val myList by repository.myList.collectAsState()
+    val auth = trackerAuth(tracker, trackers)
+    val signedIn = auth?.accessToken != null
+    val scope = rememberCoroutineScope()
+    var code by remember { mutableStateOf<app.harbor.android.data.DeviceCode?>(null) }
+    var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf<String?>(null) }
+    var confirmDisconnect by remember { mutableStateOf(false) }
+    val primary = remember { FocusRequester() }
+    var avatar by remember(auth?.accessToken) { mutableStateOf<String?>(null) }
+    LaunchedEffect(auth?.accessToken) {
+        avatar = auth?.takeIf { it.accessToken != null }?.let { a ->
+            runCatching {
+                when (tracker) {
+                    app.harbor.android.ui.Tracker.Trakt -> app.harbor.android.data.Trakt.avatar(a)
+                    app.harbor.android.ui.Tracker.Simkl -> app.harbor.android.data.Simkl.avatar(a)
+                    app.harbor.android.ui.Tracker.AniList -> app.harbor.android.data.AniList.avatar(a)
+                    app.harbor.android.ui.Tracker.Mal -> app.harbor.android.data.Mal.avatar(a)
+                    else -> null
+                }
+            }.getOrNull()
+        }
+    }
+    // Back with a code on screen stops waiting for it; the page stays.
+    BackHandler(enabled = code != null) { job?.cancel(); code = null }
+    DisposableEffect(Unit) { onDispose { job?.cancel() } }
+
+    fun connect() {
+        message = null
+        job?.cancel()
+        job = scope.launch {
+            runCatching {
+                // Harbor's own apps, as the phone's Connect button: nothing to set up first.
+                when (tracker) {
+                    app.harbor.android.ui.Tracker.Trakt -> {
+                        val device = app.harbor.android.data.Trakt.deviceCode(app.harbor.android.data.Trakt.HARBOR_CLIENT)
+                        code = device
+                        val signed = app.harbor.android.data.Trakt.awaitToken(app.harbor.android.data.Trakt.HARBOR_CLIENT, "", device)
+                        repository.updateTrackers { it.copy(trakt = signed) }
+                        repository.refreshTrackers()
+                    }
+                    app.harbor.android.ui.Tracker.Simkl -> {
+                        val device = app.harbor.android.data.Simkl.pin(app.harbor.android.data.Simkl.HARBOR_CLIENT)
+                        code = device
+                        val signed = app.harbor.android.data.Simkl.awaitToken(app.harbor.android.data.Simkl.HARBOR_CLIENT, device)
+                        repository.updateTrackers { it.copy(simkl = signed) }
+                    }
+                    else -> Unit
+                }
+            }.onFailure { if (it !is kotlinx.coroutines.CancellationException) message = it.message ?: "Sign-in failed" }
+            code = null
+        }
+    }
+    fun disconnect() {
+        val a = auth ?: return
+        val signedOut = a.copy(accessToken = null, refreshToken = null, user = null)
+        repository.updateSettings {
+            when (tracker) {
+                app.harbor.android.ui.Tracker.Trakt -> it.copy(useTraktAvatar = false)
+                app.harbor.android.ui.Tracker.Simkl -> it.copy(useSimklAvatar = false)
+                app.harbor.android.ui.Tracker.AniList -> it.copy(useAnilistAvatar = false)
+                app.harbor.android.ui.Tracker.Mal -> it.copy(useMalAvatar = false)
+                else -> it
+            }
+        }
+        repository.updateTrackers {
+            when (tracker) {
+                app.harbor.android.ui.Tracker.Trakt -> it.copy(trakt = signedOut)
+                app.harbor.android.ui.Tracker.Simkl -> it.copy(simkl = signedOut)
+                app.harbor.android.ui.Tracker.AniList -> it.copy(anilist = signedOut)
+                app.harbor.android.ui.Tracker.Mal -> it.copy(mal = signedOut)
+                else -> it
+            }
+        }
+        message = "Disconnected from ${tracker.label}."
+    }
+    val options = remember(tracker, settings, signedIn) { trackerOptions(tracker, settings, signedIn, repository) }
+    val pending = code
+
+    LazyColumn(Modifier.fillMaxSize().padding(top = u(8f)), contentPadding = PaddingValues(bottom = u(40f)), verticalArrangement = Arrangement.spacedBy(u(10f))) {
+        item(key = "head") {
+            Row(horizontalArrangement = Arrangement.spacedBy(u(14f)), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(u(54f)).clip(CircleShape).background(Panel), contentAlignment = Alignment.Center) {
+                    val picture = avatar
+                    if (picture != null) AsyncImage(picture, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    else Image(androidx.compose.ui.res.painterResource(tracker.logo), null, Modifier.size(u(28f)))
+                }
+                Column(Modifier.widthIn(max = u(520f)), verticalArrangement = Arrangement.spacedBy(u(3f))) {
+                    Text(
+                        tracker.label, color = HarborColors.Ink, fontSize = s(22f), fontWeight = FontWeight.SemiBold,
+                        fontFamily = HarborFonts.display(HarborDisplay.settings.fontPair),
+                    )
+                    Status(
+                        if (signedIn) auth?.user?.let { "@$it" } ?: "Connected" else "Not connected",
+                        if (signedIn) "${tracker.label} · Connected" else tracker.blurb,
+                        signedIn,
+                    )
+                }
+            }
+        }
+        if (pending != null) item(key = "code") {
+            Row(
+                Modifier.clip(RoundedCornerShape(u(12f))).background(Panel).padding(u(11f)),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(u(16f)),
+            ) {
+                Box(Modifier.size(u(120f)).clip(RoundedCornerShape(u(8f))).background(Color.White), contentAlignment = Alignment.Center) {
+                    val qr = remember(pending.url) { qrBitmap(pending.url, 512) }
+                    if (qr != null) Image(qr, "QR code for ${pending.url}", modifier = Modifier.fillMaxSize().padding(u(10f)))
+                }
+                Column(Modifier.widthIn(max = u(300f)), verticalArrangement = Arrangement.spacedBy(u(6f))) {
+                    Text("Approve Harbor on ${tracker.label}", color = HarborColors.InkMuted, fontSize = s(9.5f), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        pending.userCode, color = HarborColors.Ink, fontSize = s(30f), fontWeight = FontWeight.Bold, letterSpacing = 4.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                    Text(pending.url.removePrefix("https://").removePrefix("http://"), color = HarborColors.Ink, fontSize = s(12f), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Go to ${pending.url} and enter this code, or scan the QR code with your phone. Harbor connects as soon as you approve.",
+                        color = HarborColors.InkMuted, fontSize = s(9f), lineHeight = s(13f),
+                    )
+                }
+            }
+        }
+        if (!signedIn && !codeSignIn(tracker)) item(key = "note") {
+            Text(
+                "${tracker.label} signs in through a web browser, so connect it in Harbor on your phone or tablet first. Then choose Send from a phone " +
+                    "(Settings → Setup → Accounts and TMDB) and send your setup to this TV: the phone's sign-ins come over with it, " +
+                    "replacing this TV's setup. Sign-ins belong to the current profile.",
+                color = HarborColors.InkMuted, fontSize = s(9.5f), lineHeight = s(14f), modifier = Modifier.widthIn(max = u(520f)),
+            )
+        }
+        item(key = "buttons") {
+            Row(horizontalArrangement = Arrangement.spacedBy(u(10f))) {
+                Button("Settings", icon = true, onClick = onBack)
+                when {
+                    pending != null -> Button("Cancel", focus = primary) { job?.cancel(); code = null }
+                    signedIn -> Button(if (confirmDisconnect) "Press OK again to disconnect" else "Disconnect", focus = primary) {
+                        if (confirmDisconnect) { confirmDisconnect = false; disconnect() } else confirmDisconnect = true
+                    }
+                    codeSignIn(tracker) -> Button("Connect ${tracker.label}", primary = true, focus = primary) { connect() }
+                    else -> Button("Send from a phone", primary = true, focus = primary, onClick = onSendFromPhone)
+                }
+                // Trakt's "Move your watchlist": My List to Trakt, or Trakt's watchlist into My List.
+                if (signedIn && pending == null && tracker == app.harbor.android.ui.Tracker.Trakt && auth != null) {
+                    Button(if (busy == "export") "Exporting…" else "Export to Trakt") {
+                        if (busy != null) return@Button
+                        busy = "export"
+                        scope.launch {
+                            message = runCatching { app.harbor.android.data.Trakt.addToWatchlist(auth, myList) }
+                                .fold({ "Added $it ${if (it == 1) "title" else "titles"} to your Trakt watchlist." }, { "Trakt didn't take the list: ${it.message?.take(80)}" })
+                            busy = null
+                        }
+                    }
+                    Button(if (busy == "import") "Importing…" else "Import from Trakt") {
+                        if (busy != null) return@Button
+                        busy = "import"
+                        scope.launch {
+                            message = runCatching {
+                                val incoming = app.harbor.android.data.Trakt.watchlist(auth).filter { !repository.inMyList(it.id) }
+                                incoming.forEach { repository.toggleMyList(it) }
+                                incoming.size
+                            }.fold({ if (it == 0) "Your Harbor watchlist already has everything on Trakt's." else "Added $it ${if (it == 1) "title" else "titles"} from Trakt." }, { "Couldn't read your Trakt watchlist: ${it.message?.take(80)}" })
+                            busy = null
+                        }
+                    }
+                }
+            }
+        }
+        message?.let { m -> item(key = "message") { Text(m, color = HarborColors.InkMuted, fontSize = s(9.5f)) } }
+        items(options, key = { it.control.id }) { o -> OptionRow(o.control, null, o.pick) }
+        item(key = "profile") { Text("Sign-ins belong to the current profile.", color = HarborColors.InkSubtle, fontSize = s(8f)) }
+    }
+    // The ring on the page's main button: Connect, Cancel or Disconnect, whichever is showing.
+    LaunchedEffect(signedIn, pending != null) { withFrameNanos { }; runCatching { primary.requestFocus() } }
+    LaunchedEffect(confirmDisconnect) { if (confirmDisconnect) { kotlinx.coroutines.delay(4000); confirmDisconnect = false } }
 }
