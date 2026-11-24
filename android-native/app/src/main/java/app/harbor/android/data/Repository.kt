@@ -330,7 +330,13 @@ class Repository(private val context: Context) {
     internal val profileLoaded = mutableListOf<(Preferences) -> Unit>()
 
     /** A store key for the active profile. The first profile keeps the plain keys, so data from before profiles stays. */
-    internal fun profileKey(name: String): String = if (profileId == MAIN_PROFILE) name else "$name@$profileId"
+    internal fun profileKey(name: String): String = profileKeyFor(profileId, name)
+
+    /** The same key for a given profile, for work that must land in the profile it started under. */
+    internal fun profileKeyFor(id: String, name: String): String = if (id == MAIN_PROFILE) name else "$name@$id"
+
+    /** The profile whose preferences are loaded now. */
+    internal val loadedProfileId: String get() = profileId
 
     private val keyResume get() = stringPreferencesKey(profileKey("resume"))
     private val keyMyList get() = stringPreferencesKey(profileKey("myList"))
