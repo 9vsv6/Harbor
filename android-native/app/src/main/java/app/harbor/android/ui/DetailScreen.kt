@@ -557,7 +557,8 @@ private fun DetailBody(
                 app.harbor.android.ui.tv.TvEpisodes(
                     seasons, counts, season,
                     onSeason = { season = it; seasonPrefs.edit().putInt(meta.id, it).apply() },
-                    episodes = episodes.sortedBy { it.episode ?: 0 },
+                    // The phone's list (TMDB air dates over placeholder ones), not the addon's raw dates.
+                    episodes = remember(shownVideos, season) { shownVideos.filter { it.season == season }.sortedBy { it.episode ?: 0 } },
                     backdrop = details?.backdrop ?: meta.background,
                     rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
