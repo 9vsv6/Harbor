@@ -433,20 +433,31 @@ private fun PeopleTab(repository: Repository, harbor: HarborSession?, onOpen: (S
     }
 }
 
-/** Profile summaries already read, so each card paints its owner's card look once. */
+/**
+ * Profile summaries already read, so each card paints its owner's card look once. They hold your
+ * friend status with that person, so they are kept per signed-in account.
+ */
 private val summaries = mutableStateMapOf<String, HarborPeople.Profile?>()
+
+private fun summaryKey(harbor: HarborSession?, handle: String) = (harbor?.user?.id ?: "") + "|" + handle.lowercase()
+
+/** After a friend request, accept or removal: the remembered card shows the new state, not the one read before. */
+private fun noteRelationship(harbor: HarborSession?, handle: String, status: String) {
+    val key = summaryKey(harbor, handle)
+    summaries[key]?.let { summaries[key] = it.copy(friendStatus = status) }
+}
 
 /** One person in Discover people, as PC's DiscoveryUserCard: their profile card, ratings and the friend button. */
 @Composable
 private fun PersonCard(repository: Repository, p: HarborPeople.Person, harbor: HarborSession?, onOpen: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val key = p.handle.lowercase()
+    val key = summaryKey(harbor, p.handle)
     LaunchedEffect(key, harbor?.token) {
         if (!summaries.containsKey(key)) summaries[key] = runCatching { HarborPeople.profile(p.handle, harbor?.token) }.getOrNull()
     }
     val summary = summaries[key]
-    var relationship by remember(key, summary?.friendStatus) { mutableStateOf(summary?.friendStatus?.takeIf { it != "none" } ?: p.friendStatus) }
+    var relationship by remember(key, summary == null) { mutableStateOf(summary?.friendStatus?.takeIf { it != "none" } ?: p.friendStatus) }
     var busy by remember { mutableStateOf(false) }
     fun act() {
         if (busy || harbor == null || relationship == "friends" || relationship == "blocked") return
@@ -460,7 +471,7 @@ private fun PersonCard(repository: Repository, p: HarborPeople.Person, harbor: H
                         else -> { HarborPeople.requestFriend(p.handle, s.token); "outgoing" }
                     }
                 }
-            }.onSuccess { relationship = it }.onFailure { Toast.makeText(context, it.message ?: "Could not update friendship.", Toast.LENGTH_SHORT).show() }
+            }.onSuccess { relationship = it; noteRelationship(harbor, p.handle, it) }.onFailure { Toast.makeText(context, it.message ?: "Could not update friendship.", Toast.LENGTH_SHORT).show() }
             busy = false
         }
     }
@@ -514,8 +525,8 @@ private fun FriendsTab(repository: Repository, harbor: HarborSession, onOpen: (S
             item { SectionLabel("Friend requests", pending.size) }
             items(pending, key = { "p" + it.edgeId }) { r ->
                 FriendRow(r.avatar, r.name, "@${r.handle}", null, onOpen = { onOpen(r.handle) }) {
-                    Pill(null, "Accept", color = HarborColors.Canvas, background = HarborColors.Accent) { act { HarborPeople.accept(r.edgeId, it) } }
-                    Pill(null, "Decline", color = HarborColors.InkMuted) { act { HarborPeople.decline(r.edgeId, it) } }
+                    Pill(null, "Accept", color = HarborColors.Canvas, background = HarborColors.Accent) { act { HarborPeople.accept(r.edgeId, it); noteRelationship(harbor, r.handle, "friends") } }
+                    Pill(null, "Decline", color = HarborColors.InkMuted) { act { HarborPeople.decline(r.edgeId, it); noteRelationship(harbor, r.handle, "none") } }
                 }
             }
         }
@@ -855,13 +866,13 @@ private fun ProfileDialog(repository: Repository, handle: String, harbor: Harbor
                             "incoming" -> Pill(Icons.Rounded.PersonAdd, "Accept request") {
                                 scope.launch {
                                     runCatching { repository.accounts.withHarbor { s -> HarborPeople.accept(p.friendEdgeId ?: error("Could not update friendship."), s.token) } }
-                                        .onSuccess { relationship = "friends" }.onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                                        .onSuccess { relationship = "friends"; noteRelationship(harbor, p.handle, "friends") }.onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
                                 }
                             }
                             else -> Pill(Icons.Rounded.PersonAdd, "Add") {
                                 scope.launch {
                                     runCatching { repository.accounts.withHarbor { s -> HarborPeople.requestFriend(p.handle, s.token) } }
-                                        .onSuccess { relationship = "outgoing" }.onFailure { Toast.makeText(context, it.message ?: "Could not update friendship.", Toast.LENGTH_SHORT).show() }
+                                        .onSuccess { relationship = "outgoing"; noteRelationship(harbor, p.handle, "outgoing") }.onFailure { Toast.makeText(context, it.message ?: "Could not update friendship.", Toast.LENGTH_SHORT).show() }
                                 }
                             }
                         }
