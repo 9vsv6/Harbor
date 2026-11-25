@@ -75,13 +75,17 @@ object Mal {
         return auth.copy(user = me?.string("name"))
     }
 
-    /** Refreshes the token when it is within a day of expiring. */
     private val refreshing = kotlinx.coroutines.sync.Mutex()
     private var lastRefresh: Pair<String, TrackerAuth>? = null
 
-    suspend fun fresh(auth: TrackerAuth): TrackerAuth {
+    /**
+     * Renews the sign-in when it is within a day of expiring, or now ([force]) after MyAnimeList
+     * refused the token (auth.ts ensureRefreshed). A refused renewal throws [Net.HttpError] (the
+     * refresh token is spent); a network failure throws its IOException and changes nothing.
+     */
+    suspend fun fresh(auth: TrackerAuth, force: Boolean = false): TrackerAuth {
         val refreshToken = auth.refreshToken
-        if (auth.expiresAt - System.currentTimeMillis() > 86_400_000 || refreshToken == null) return auth
+        if (refreshToken == null || !force && auth.expiresAt - System.currentTimeMillis() > 86_400_000) return auth
         // MyAnimeList rotates the refresh token: two refreshes at once would leave one signed out.
         refreshing.lock()
         try {
@@ -155,6 +159,21 @@ object Mal {
         // A first watch that completes the title must not read as a finished rewatch next time.
         if (next == "completed") guard.remember(metaId, episode)
         return TrackerSync.Synced
+    }
+
+    /**
+     * Started watching (sync.ts markMalWatching): a title that isn't on the list, or is only
+     * planned, becomes Watching. Anything else the user set is left alone. True when it was set.
+     */
+    suspend fun markWatching(auth: TrackerAuth, metaId: String): Boolean {
+        val id = malId(metaId) ?: return false
+        val current = Net.json.parseToJsonElement(Net.call(request(auth, "/anime/$id?fields=num_episodes,my_list_status").build())).jsonObject
+        val status = current["my_list_status"] as? JsonObject
+        if (status != null && status.string("status") != "plan_to_watch") return false
+        val total = current["num_episodes"]?.jsonPrimitive?.intOrNull ?: 0
+        if (status != null && total > 0 && (status["num_episodes_watched"]?.jsonPrimitive?.intOrNull ?: 0) >= total) return false
+        Net.call(request(auth, "/anime/$id/my_list_status").patch(FormBody.Builder().add("status", "watching").build()).build())
+        return true
     }
 
     /** One status of the user's anime list ("watching", "plan_to_watch", …) as titles. */
