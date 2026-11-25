@@ -385,6 +385,9 @@ private fun DetailBody(
             v.copy(season = shown.first, episode = shown.second)
         }
     }
+    // TMDB/OMDb text, ratings and air dates are per aired episode: look them up by the aired numbers, never the ordering's.
+    val airedNumbers = remember(airedVideos) { airedVideos.associate { it.id to ((it.season ?: -1) to (it.episode ?: -1)) } }
+    fun aired(v: Video): Pair<Int, Int> = airedNumbers[v.id] ?: ((v.season ?: -1) to (v.episode ?: -1))
     val isSeries = meta.type != "movie" && videos.isNotEmpty()
     // Season 0 holds specials; start on the first real season.
     val seasons = remember(videos) { videos.mapNotNull { it.season }.distinct().sortedWith(compareBy({ it == 0 }, { it })) }
@@ -455,16 +458,32 @@ private fun DetailBody(
         val tv = details?.tmdbId?.takeIf { it > 0 } ?: return@LaunchedEffect
         airDates[s] = runCatching { Tmdb.seasonAirDates(key, tv, s) }.getOrDefault(emptyMap())
     }
+    // With an ordering, the season shown can hold episodes of other aired seasons: read those seasons too.
+    LaunchedEffect(meta.id, season, episodeOrder, omdbKey, tmdbKey, details?.tmdbId, textLanguage) {
+        if (!isSeries || episodeOrder.isNullOrEmpty()) return@LaunchedEffect
+        val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") }
+        val tv = details?.tmdbId?.takeIf { it > 0 }
+        for (s in videos.filter { it.season == season }.map { aired(it).first }.filter { it >= 0 }.distinct()) {
+            if (HarborDisplay.settings.showEpisodeRating && !ratings.containsKey(s)) {
+                val fromOmdb = omdbKey?.takeIf { imdb != null }?.let { k -> runCatching { Omdb.seasonRatings(k, imdb!!, s) }.getOrDefault(emptyMap()) }.orEmpty()
+                val found = fromOmdb.ifEmpty { tmdbKey?.takeIf { tv != null }?.let { k -> runCatching { Tmdb.seasonRatings(k, tv!!, s) }.getOrDefault(emptyMap()) }.orEmpty() }
+                if (found.isNotEmpty()) ratings[s] = found
+            }
+            val key = tmdbKey
+            if (key != null && tv != null && HarborDisplay.settings.showEpisodeDescription && !episodeText.containsKey("$textLanguage|$s"))
+                episodeText["$textLanguage|$s"] = runCatching { Tmdb.seasonEpisodeText(key, tv, s) }.getOrDefault(emptyMap())
+        }
+    }
     val englishText = textLanguage.substringBefore('-').equals("en", ignoreCase = true)
     val datedVideos = remember(videos, airDates.toMap()) {
         if (airDates.isEmpty()) videos else videos.map { v ->
-            val date = airDates[v.season ?: -1]?.get(v.episode ?: -1) ?: return@map v
+            val date = aired(v).let { (s, e) -> airDates[s]?.get(e) } ?: return@map v
             v.copy(released = "${date}T00:00:00.000Z")
         }
     }
     val shownVideos = remember(datedVideos, episodeText.toMap(), textLanguage) {
         if (episodeText.isEmpty()) datedVideos else datedVideos.map { v ->
-            val (name, story) = episodeText["$textLanguage|${v.season}"]?.get(v.episode ?: -1) ?: return@map v
+            val (name, story) = aired(v).let { (s, e) -> episodeText["$textLanguage|$s"]?.get(e) } ?: return@map v
             v.copy(
                 // In another language TMDB's story wins; in English the addon's stays when it has one.
                 overview = (if (englishText) v.overview?.takeIf { it.isNotBlank() && !app.harbor.android.data.EpisodeText.isPlaceholder(it) } else null) ?: story ?: v.overview,
@@ -586,7 +605,7 @@ private fun DetailBody(
                     // The phone's list (TMDB air dates over placeholder ones), not the addon's raw dates.
                     episodes = remember(shownVideos, season) { shownVideos.filter { it.season == season }.sortedBy { it.episode ?: 0 } },
                     backdrop = details?.backdrop ?: meta.background,
-                    rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
+                    rating = { video -> aired(video).let { (s, e) -> ratings[s]?.get(e) } ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
                     reviewMeta = meta,
                     page = episodePage, onPage = selectPage,
@@ -654,7 +673,7 @@ private fun DetailBody(
                     side = side,
                     wide = wide,
                     next = next,
-                    rating = { video -> ratings[video.season ?: -1]?.get(video.episode ?: -1) ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
+                    rating = { video -> aired(video).let { (s, e) -> ratings[s]?.get(e) } ?: video.rating?.takeIf { it.isNotBlank() && it != "0" } },
                     onPlay = { video -> onStreams(video.id, "${meta.name} · ${episodeLabel(video)}") },
                     set = repository::updateSettings,
                     listGap = 30.dp,

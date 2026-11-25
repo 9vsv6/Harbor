@@ -112,10 +112,11 @@ class Accounts(private val repository: Repository) {
         }
         // An expired token is renewed now, not left until a Harbor feature fails (PC 1.0.4's session recovery).
         scope.launch {
+            val profile = repository.loadedProfileId
             val s = _harbor.value ?: return@launch
             val user = HarborAccount.me(s)
-            if (user != null) saveHarbor(s.copy(user = user))
-            else renewHarbor(s)?.let { fresh -> HarborAccount.me(fresh)?.let { saveHarbor(fresh.copy(user = it)) } }
+            if (user != null) saveHarborIfCurrent(profile, s, s.copy(user = user))
+            else renewHarbor(s, profile)?.let { fresh -> HarborAccount.me(fresh)?.let { saveHarborIfCurrent(profile, fresh, fresh.copy(user = it)) } }
         }
     }
 
@@ -154,13 +155,20 @@ class Accounts(private val repository: Repository) {
 
     /** Runs a Harbor account call, renewing the token once when it has expired. */
     suspend fun <T> withHarbor(block: suspend (HarborSession) -> T): T {
+        val profile = repository.loadedProfileId
         val s = _harbor.value ?: error("Sign in first.")
         return try {
             block(s)
         } catch (e: Exception) {
-            val fresh = renewHarbor(s) ?: throw e
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            val fresh = renewHarbor(s, profile) ?: throw e
             block(fresh)
         }
+    }
+
+    /** Saves [next] only while [profile] is still loaded with the session [was] (no switch or sign-out since). */
+    private fun saveHarborIfCurrent(profile: String, was: HarborSession, next: HarborSession) {
+        if (repository.loadedProfileId == profile && _harbor.value?.token == was.token) saveHarbor(next)
     }
 
     private val harborRenewal = kotlinx.coroutines.sync.Mutex()
@@ -170,10 +178,27 @@ class Accounts(private val repository: Repository) {
      * spend it twice and lose the session. A token another call already renewed is just used.
      * A failed renewal (offline, say) keeps the saved session for next time.
      */
-    private suspend fun renewHarbor(stale: HarborSession): HarborSession? = harborRenewal.withLock {
+    private suspend fun renewHarbor(stale: HarborSession, profile: String): HarborSession? = harborRenewal.withLock {
+        // The call began under another profile: never hand it this profile's session.
+        if (repository.loadedProfileId != profile) return@withLock null
         val current = _harbor.value ?: return@withLock null
-        if (current.token != stale.token) return@withLock current
-        HarborAccount.refresh(current)?.also { saveHarbor(it) }
+        // Renewed by another call for the same account: use it. Another account signed in since: give up.
+        if (current.token != stale.token) return@withLock current.takeIf { it.user.id == stale.user.id }
+        val fresh = HarborAccount.refresh(current) ?: return@withLock null
+        when {
+            repository.loadedProfileId == profile ->
+                // Signed out or into another account while renewing: that session stays, this one is dropped.
+                if (_harbor.value?.token == current.token) saveHarbor(fresh) else return@withLock null
+            else -> {
+                // The profile changed while renewing: the spent refresh token is replaced in the profile it belongs to only.
+                val key = stringPreferencesKey(repository.profileKeyFor(profile, "harborAccount"))
+                repository.editStore { prefs ->
+                    if (decode(prefs, key, HarborSession.serializer())?.token == current.token)
+                        prefs[key] = Net.json.encodeToString(HarborSession.serializer(), fresh)
+                }
+            }
+        }
+        fresh
     }
 
     // ---- Nuvio ----
