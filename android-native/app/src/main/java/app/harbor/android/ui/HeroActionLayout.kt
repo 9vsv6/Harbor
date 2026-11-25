@@ -14,6 +14,8 @@ import app.harbor.android.data.heroActionStage
 @Composable
 internal fun HeroActionLayout(
     onStage: (Int) -> Unit,
+    /** Send to a friend didn't fit on the buttons' line, so ⋯ offers it instead. */
+    onShareHidden: (Boolean) -> Unit = {},
     play: @Composable () -> Unit,
     library: @Composable () -> Unit,
     trackers: @Composable () -> Unit,
@@ -36,7 +38,11 @@ internal fun HeroActionLayout(
         val folded = listOf(0, 1, 2, 3, 5, 6)
         val stage = heroActionStage(constraints.maxWidth, width(expanded), width(folded))
         onStage(stage)
-        val slots = visible(when (stage) { 0 -> expanded; 1 -> folded; else -> listOf(0, 1, 3, 5, 6) })
+        val chosen = visible(when (stage) { 0 -> expanded; 1 -> folded; else -> listOf(0, 1, 3, 5, 6) })
+        // One line of buttons: Send to a friend goes into ⋯ rather than wrapping onto a line of its own.
+        val shareHidden = 6 in chosen && width(chosen) > constraints.maxWidth
+        onShareHidden(shareHidden)
+        val slots = if (shareHidden) chosen - 6 else chosen
         var x = 0
         var y = 0
         var rowHeight = 0

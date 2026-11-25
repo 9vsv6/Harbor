@@ -115,11 +115,15 @@ fun HeroActions(
     var shareOpen by remember(meta.id) { mutableStateOf(false) }
     var trackerVersion by remember(meta.id) { mutableIntStateOf(0) }
     var actionStage by remember(meta.id) { mutableIntStateOf(0) }
+    var shareInMenu by remember(meta.id) { mutableStateOf(false) }
     val poster = meta.poster ?: details?.posters?.firstOrNull()
     val queued = queue.any { it.meta.id == meta.id && it.season == null }
     if (!wide) {
         // PC's phone title page (mobile-detail/actions.tsx): Play across the row and ⋯ beside it, on one
         // level; everything else is in the ⋯ sheet.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // Save keeps its label when there's room; on a narrow phone it's the icon and its menu.
+        val narrow = maxWidth < 520.dp
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier.weight(1f).height(48.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = play),
@@ -127,7 +131,16 @@ fun HeroActions(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(painterResource(R.drawable.ui_play_filled), null, tint = HarborColors.Canvas, modifier = Modifier.size(18.dp))
-                Text(playLabel, color = HarborColors.Canvas, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(playLabel, color = HarborColors.Canvas, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+            LibrarySplitButton(repository, meta, listed, compact = narrow) { trackerVersion++ }
+            Box(
+                Modifier.size(48.dp).clip(CircleShape).background(if (rating != null) InkOn else Scrim)
+                    .semantics { contentDescription = I18n.tr("Rate this") }.clickable { rateOpen = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (rating != null) Text("$rating", color = HarborColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                else Icon(painterResource(R.drawable.ui_rate), null, tint = HarborColors.Ink, modifier = Modifier.size(20.dp))
             }
             Box(
                 Modifier.size(48.dp).clip(CircleShape).background(HarborColors.Surface)
@@ -139,17 +152,14 @@ fun HeroActions(
                 if (favourite) Box(Modifier.align(Alignment.TopEnd).padding(top = 11.dp, end = 11.dp).size(6.dp).clip(CircleShape).background(HarborColors.Accent))
             }
         }
+        }
         if (moreOpen) PhoneActionSheet(meta.name, onDismiss = { moreOpen = false }) {
-            Row(Modifier.padding(horizontal = 4.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                LibrarySplitButton(repository, meta, listed) { trackerVersion++ }
-            }
             var trackerRows by remember { mutableStateOf(false) }
             Column(Modifier.onSizeChanged { trackerRows = it.height > 0 }) {
                 HeroTrackerControls(repository, meta, trackerVersion, asMenu = true) { trackerVersion++ }
             }
             if (trackerRows) HorizontalDivider(Modifier.padding(vertical = 4.dp), color = HarborColors.EdgeSoft)
             val tall = 48.dp
-            HeroMenuItem(if (rating != null) "Your rating: $rating" else "Rate this", rating != null, icon = painterResource(R.drawable.ui_rate), height = tall) { moreOpen = false; rateOpen = true }
             HeroMenuItem(if (favourite) "Favorited" else "Favorite", favourite, icon = painterResource(if (favourite) R.drawable.ui_unfavorite else R.drawable.ui_favorite), height = tall) { repository.toggleFavorite(meta) }
             HeroMenuItem("Add to list", icon = painterResource(R.drawable.ui_list), height = tall) { moreOpen = false; listOpen = true }
             HeroMenuItem(if (queued) "In your queue" else "Add to queue", queued, icon = rememberVectorPainter(if (queued) Icons.AutoMirrored.Rounded.PlaylistAddCheck else Icons.AutoMirrored.Rounded.PlaylistAdd), height = tall) { app.harbor.android.data.PlayQueue.toggle(meta) }
@@ -158,7 +168,7 @@ fun HeroActions(
             if (!isSeries) HeroMenuItem("Download for offline", icon = rememberVectorPainter(Icons.Rounded.Download), height = tall) { moreOpen = false; download() }
             HeroMenuItem("Send to a friend", icon = rememberVectorPainter(Icons.AutoMirrored.Rounded.Send), height = tall) { moreOpen = false; shareOpen = true }
         }
-    } else HeroActionLayout(onStage = { actionStage = it }, play = {
+    } else HeroActionLayout(onStage = { actionStage = it }, onShareHidden = { shareInMenu = it }, play = {
         Row(
             Modifier.height(48.dp).clip(CircleShape).background(HarborColors.Ink).clickable(onClick = play).padding(horizontal = 28.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -218,6 +228,7 @@ fun HeroActions(
                 if (!isSeries) HeroMenuItem(if (watched) "Marked watched" else "Mark watched", watched, icon = painterResource(if (watched) R.drawable.ui_mark_unwatched else R.drawable.ui_mark_watched)) { repository.toggleWatched(meta); moreOpen = false }
                 trailer?.let { HeroMenuItem("Watch trailer", icon = painterResource(R.drawable.ui_trailer)) { moreOpen = false; it() } }
                 if (!isSeries) HeroMenuItem("Download for offline", icon = rememberVectorPainter(Icons.Rounded.Download)) { moreOpen = false; download() }
+                if (shareInMenu) HeroMenuItem("Send to a friend", icon = rememberVectorPainter(Icons.AutoMirrored.Rounded.Send)) { moreOpen = false; shareOpen = true }
             }
         }
     }, share = {

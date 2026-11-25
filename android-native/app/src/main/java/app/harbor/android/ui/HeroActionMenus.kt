@@ -112,7 +112,7 @@ private fun LibraryMenuItem(icon: androidx.compose.ui.graphics.vector.ImageVecto
 }
 
 @Composable
-internal fun LibrarySplitButton(repository: Repository, meta: Meta, listed: Boolean, onUpdated: () -> Unit) {
+internal fun LibrarySplitButton(repository: Repository, meta: Meta, listed: Boolean, compact: Boolean = false, onUpdated: () -> Unit) {
     val settings by repository.settings.collectAsState()
     val scope = libraryScope(settings.libraryAddScope)
     val context = LocalContext.current
@@ -138,11 +138,12 @@ internal fun LibrarySplitButton(repository: Repository, meta: Meta, listed: Bool
     }
     Box {
         Row(Modifier.height(48.dp).clip(CircleShape).background(if (listed) HarborColors.Ink.copy(alpha = 0.15f) else HarborColors.Elevated), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f, fill = false).fillMaxHeight().clickable(enabled = !busy) { if (listed) open = !open else run(true, scope) }.padding(horizontal = 20.dp),
+            Row(Modifier.weight(1f, fill = false).fillMaxHeight().clickable(enabled = !busy) { if (listed) open = !open else run(true, scope) }.padding(horizontal = if (compact) 16.dp else 20.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = HarborColors.Ink, strokeWidth = 2.dp)
                 else Icon(if (listed) Icons.Rounded.Check else Icons.AutoMirrored.Rounded.PlaylistAdd, null, tint = HarborColors.Ink, modifier = Modifier.size(if (listed) 18.dp else 17.dp))
-                Text(if (listed) "In library" else if (scope == "all") "Add to all trackers" else "Save to library", color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                // Phones: the icon alone, so Play, Save, the star and ⋯ share one line.
+                if (!compact) Text(if (listed) "In library" else if (scope == "all") "Add to all trackers" else "Save to library", color = HarborColors.Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             }
             Box(Modifier.width(1.dp).height(24.dp).background(HarborColors.EdgeSoft))
             Box(Modifier.width(40.dp).fillMaxHeight().clickable(enabled = !busy) { open = !open }, contentAlignment = Alignment.Center) {
