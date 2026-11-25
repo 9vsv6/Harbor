@@ -109,7 +109,9 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     private var animeMarked = false
     /** Refract got this video (or never will): its "Automatic watch threshold" fires once. */
     private var refractLogged = false
-    private var scrobbling = false
+    /** Trakt and Simkl: this video's scrobble session (start, pause, stop), as PC's scrobble hooks. */
+    private val scrobbleSession = app.harbor.android.data.ScrobbleSession()
+    private var animeWatching = false
     private var audioChecked = false
     private var userPickedAudio = false
     private var audioScope = ""
@@ -387,8 +389,10 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         setSubDelay(0)
         if (state.subChoice is SubChoice.Addon) state.subChoice = SubChoice.Off
 
-        stopScrobble()
+        // Switching to another video closes the last one's session; a source fallback for the same video keeps it.
+        if (!sameVideo) stopScrobble()
         animeMarked = false
+        if (!sameVideo) animeWatching = false
         refractLogged = false
         audioChecked = false
         userPickedAudio = false
@@ -509,8 +513,15 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
                     state.resumedFromMs = target
                 }
             }
-            // AniList: an anime episode counts as watched at 80%.
-            if (!animeMarked && duration > 0 && position >= duration * 0.8 && state.videoId.startsWith("kitsu:")) {
+            // AniList and MyAnimeList: an anime episode counts as watched at 70%, as PC; after 90 s a planned title is Watching.
+            if (!animeWatching && position >= app.harbor.android.data.TrackerPolicy.ANIME_WATCHING_SEC * 1000L && state.videoId.startsWith("kitsu:")) {
+                animeWatching = true
+                repository.markAnimeWatching(state.videoId.split(':')[1])
+            }
+            if (duration > 0) scrobbleSession.progress(position * 100.0 / duration)
+            // Playback that began before its length was known opens the session once it is.
+            if (state.playing && duration > 0 && scrobbleSession.target == null) scrobble("start")
+            if (!animeMarked && duration > 0 && position >= duration * app.harbor.android.data.TrackerPolicy.ANIME_SYNC_RATIO && state.videoId.startsWith("kitsu:")) {
                 animeMarked = true
                 val parts = state.videoId.split(':')
                 parts.lastOrNull()?.toIntOrNull()?.takeIf { parts.size >= 3 }?.let { repository.markAnimeWatched(parts[1], it) }
@@ -658,7 +669,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.ended = true
         // The finish reaches Stremio as "watched".
         syncStremio()
-        stopScrobble()
+        endScrobble()
         // Harbor's "Delete after I finish watching", for a downloaded file.
         if (state.settings.deleteAfterWatching && state.currentUrl.startsWith("file:")) {
             val path = android.net.Uri.parse(state.currentUrl).path
@@ -1419,6 +1430,7 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         state.seekPreviewMs = null
         pendingSeekSentAt = 0L
         engine.seekTo(positionMs)
+        if (byUser && state.playing) engine.durationMs.takeIf { it > 0 }?.let { d -> scrobbleSession.seeked(positionMs * 100.0 / d)?.let(repository::scrobble) }
     }
 
     private fun shownPosition(actual: Long): Long {
@@ -2533,12 +2545,8 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
     // ---- Trackers (Trakt, Simkl) ----
 
     private fun scrobbleTarget(): Scrobble? {
-        val imdb = metaId.substringBefore(':').takeIf { it.startsWith("tt") } ?: return null
         val video = meta?.videos?.firstOrNull { it.id == state.videoId }
-        val parts = state.videoId.split(':')
-        val season = video?.season ?: parts.getOrNull(1)?.toIntOrNull()?.takeIf { parts.size >= 3 }
-        val episode = video?.episode ?: parts.getOrNull(2)?.toIntOrNull()
-        return Scrobble(imdb, null, type, season, episode)
+        return Scrobble.of(metaId, type, state.videoId, video?.season, video?.episode, meta?.name, meta?.year?.toIntOrNull())
     }
 
     private fun progressPercent(): Double {
@@ -2546,19 +2554,22 @@ class PlayerActivity : FragmentActivity(), PlayerActions, EngineListener {
         return (nowMs() * 100.0 / duration).coerceIn(0.0, 100.0)
     }
 
+    /** "start" when playback begins or resumes, "pause" when it stops; the session drops repeats. */
     private fun scrobble(action: String) {
-        val target = scrobbleTarget() ?: return
-        // Trackers want a duration-based progress; skip until the length is known.
-        if (progressPercent() <= 0.0 && action != "start") return
-        scrobbling = action == "start"
-        repository.scrobble(action, target, progressPercent())
+        val duration = engine.durationMs.takeIf { it > 0 } ?: return
+        val step = if (action == "start") scrobbleTarget()?.let { scrobbleSession.play(it, progressPercent(), duration / 1000.0) }
+        else scrobbleSession.pause(progressPercent())
+        step?.let(repository::scrobble)
     }
 
-    /** "stop" ends the session; at 80% or more Trakt and Simkl mark it watched. */
+    /** Played to the end: "stop" with how far it got. */
+    private fun endScrobble() {
+        scrobbleSession.ended(progressPercent())?.let(repository::scrobble)
+    }
+
+    /** Leaving the video: "stop" at 100% once 90% was reached (watched), else "pause" so it stays resumable. */
     private fun stopScrobble() {
-        if (!scrobbling) return
-        scrobbling = false
-        scrobbleTarget()?.let { repository.scrobble("stop", it, progressPercent()) }
+        scrobbleSession.close(progressPercent())?.let(repository::scrobble)
     }
 
     private fun saveResume() {

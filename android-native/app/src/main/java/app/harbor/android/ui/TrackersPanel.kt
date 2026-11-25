@@ -241,7 +241,7 @@ private fun WatchlistMove(repository: Repository, auth: TrackerAuth) {
             HButton(enabled = busy == null, onClick = {
                 busy = "export"
                 scope.launch {
-                    result = runCatching { Trakt.addToWatchlist(auth, repository.myList.value) }
+                    result = runCatching { repository.withTrakt { Trakt.addToWatchlist(it, repository.myList.value) } }
                         .fold({ "Added $it ${if (it == 1) "title" else "titles"} to your Trakt watchlist." }, { "Trakt didn't take the list: ${it.message?.take(80)}" })
                     busy = null
                 }
@@ -250,7 +250,7 @@ private fun WatchlistMove(repository: Repository, auth: TrackerAuth) {
                 busy = "import"
                 scope.launch {
                     result = runCatching {
-                        val incoming = Trakt.watchlist(auth).filter { !repository.inMyList(it.id) }
+                        val incoming = repository.withTrakt { Trakt.watchlist(it) }.filter { !repository.inMyList(it.id) }
                         incoming.forEach { repository.toggleMyList(it) }
                         incoming.size
                     }.fold({ if (it == 0) "Your Harbor watchlist already has everything on Trakt's." else "Added $it ${if (it == 1) "title" else "titles"} from Trakt." }, { "Couldn't read your Trakt watchlist: ${it.message?.take(80)}" })

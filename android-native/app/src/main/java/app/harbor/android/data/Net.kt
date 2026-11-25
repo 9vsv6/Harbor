@@ -82,15 +82,19 @@ object Net {
         }
     }
 
-    /** Runs `request` with Harbor's user agent; non-2xx responses throw with the body's message. */
-    suspend fun call(request: Request): String =
-        client.newCall(request.newBuilder().header("User-Agent", USER_AGENT).build()).await { response ->
+    /**
+     * Runs `request` with Harbor's user agent (or, with [ownUserAgent], the one the request names);
+     * non-2xx responses throw with the body's message.
+     */
+    suspend fun call(request: Request, ownUserAgent: Boolean = false): String =
+        client.newCall(if (ownUserAgent && request.header("User-Agent") != null) request else request.newBuilder().header("User-Agent", USER_AGENT).build()).await { response ->
             val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw HttpError(response.code, body)
+            if (!response.isSuccessful) throw HttpError(response.code, body, response.header("Retry-After"))
             body
         }
 
-    class HttpError(val code: Int, val body: String) : IOException("HTTP $code: ${body.take(200)}")
+    /** A non-2xx answer; `retryAfter` is the response's Retry-After header, for rate limits. */
+    class HttpError(val code: Int, val body: String, val retryAfter: String? = null) : IOException("HTTP $code: ${body.take(200)}")
 
     suspend fun postJson(url: String, body: String): String {
         val request = Request.Builder()

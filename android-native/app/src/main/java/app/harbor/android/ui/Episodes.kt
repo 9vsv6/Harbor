@@ -227,7 +227,7 @@ private fun EpisodesHeader(
             LayoutToggle(display.episodeLayout) { v -> set { it.copy(episodeLayout = v) } }
             SortMenu(display.episodesNewestFirst) { v -> set { it.copy(episodesNewestFirst = v) } }
             ToolButton(Icons.Rounded.DoneAll, if (allWatched) "Mark season as unwatched" else "Mark season as watched", active = allWatched) {
-                repository.setWatched(inSeason.map { it.id }, !allWatched)
+                repository.markEpisodesWatched(meta, inSeason, !allWatched)
             }
             ToolButton(Icons.Rounded.Search, "Search by episode number or title", active = query.value != null) { query.value = if (query.value == null) "" else null }
             if (wide) SeasonMenu(seasons, season, videos, seasonItems, onSeason)
@@ -282,7 +282,7 @@ private fun EpisodePreviewFor(query: EpisodeQuery, repository: Repository, meta:
             Toast.makeText(context, "Finding a source for ${episodeCode(v)}…", Toast.LENGTH_SHORT).show()
             scope.launch { downloadSeason(context, repository, meta, listOf(v)) }
         },
-        onWatched = { repository.setWatched(listOf(v.id), !watched); query.preview = null },
+        onWatched = { repository.markEpisodesWatched(meta, listOf(v), !watched); query.preview = null },
         queued = app.harbor.android.data.PlayQueue.contains(meta, v.season, v.episode),
         onQueue = { app.harbor.android.data.PlayQueue.toggle(meta, v); query.preview = null },
         onReviews = { reviews = true },

@@ -205,7 +205,7 @@ fun LibraryScreen(
                 sectionsFor(tab) {
                     val auth = trackers.simkl ?: return@sectionsFor emptyList()
                     loadAll(listOf("watching" to "Watching", "plantowatch" to "Plan to Watch", "completed" to "Completed").map { (status, title) ->
-                        title to suspend { listOf("shows", "anime", "movies").flatMap { kind -> Simkl.list(auth, kind, status) } }
+                        title to suspend { listOf("shows", "anime", "movies").flatMap { kind -> repository.withSimkl { Simkl.list(it, kind, status) } } }
                     })
                 },
                 onOpen,
@@ -228,9 +228,9 @@ fun LibraryScreen(
             )
             LibTab.Mal -> EntriesTab(
                 tab,
-                load = { trackers.mal?.let { MalLibrary.entries(it) }.orEmpty() },
+                load = { if (trackers.mal == null) emptyList() else repository.withMal { MalLibrary.entries(it) } },
                 statuses = MalLibrary.statuses,
-                save = { e, status, progress -> trackers.mal?.let { runCatching { MalLibrary.save(it, e.mediaId, status, progress) } } },
+                save = { e, status, progress -> trackers.mal?.let { runCatching { repository.withMal { MalLibrary.save(it, e.mediaId, status, progress) } } } },
                 onOpen = onOpen,
             )
         }
