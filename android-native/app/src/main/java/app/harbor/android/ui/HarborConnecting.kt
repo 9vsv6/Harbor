@@ -79,9 +79,13 @@ internal fun HarborConnecting(meta: Meta?, episode: Video?, caption: String = "C
         val pulse by rememberInfiniteTransition(label = "connecting").animateFloat(
             0.42f, 1f, infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pulse",
         )
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        // A phone held sideways (the player) has little height: everything shrinks to fit above Cancel.
+        val short = maxHeight < 520.dp
+        val cancelBottom = if (short) 14.dp else 40.dp
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterVertically),
+            Modifier.fillMaxSize().padding(horizontal = 32.dp).padding(top = if (short) 12.dp else 0.dp, bottom = cancelBottom + 56.dp),
+            verticalArrangement = Arrangement.spacedBy(if (short) 10.dp else 28.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             var badLogo by remember(meta?.id) { mutableStateOf(false) }
@@ -89,10 +93,10 @@ internal fun HarborConnecting(meta: Meta?, episode: Video?, caption: String = "C
             if (logo != null && !badLogo) {
                 AsyncImage(
                     logo, meta.name, contentScale = ContentScale.Fit, onError = { badLogo = true },
-                    modifier = Modifier.fillMaxWidth(0.72f).heightIn(max = 140.dp).alpha(pulse),
+                    modifier = Modifier.fillMaxWidth(if (short) 0.42f else 0.72f).heightIn(max = if (short) 64.dp else 140.dp).alpha(pulse),
                 )
             } else meta?.name?.let {
-                androidx.compose.material3.Text(it, color = Color.White, fontSize = 44.sp, lineHeight = 42.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.alpha(pulse))
+                androidx.compose.material3.Text(it, color = Color.White, fontSize = if (short) 28.sp else 44.sp, lineHeight = if (short) 28.sp else 42.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, modifier = Modifier.alpha(pulse))
             }
             episode?.let { v ->
                 val s = v.season; val e = v.episode
@@ -105,16 +109,17 @@ internal fun HarborConnecting(meta: Meta?, episode: Video?, caption: String = "C
                     )
                 }
             }
-            HarborLoader(caption)
+            HarborLoader(caption, if (short) 72.dp else 128.dp)
         }
 
         Row(
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 40.dp).height(44.dp)
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = cancelBottom).height(44.dp)
                 .clip(CircleShape).background(Color(0xFF34343B)).clickable(onClick = onCancel).padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(Icons.Rounded.Close, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(14.dp))
             Text("Cancel", color = Color.White.copy(alpha = 0.85f), fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
+        }
         }
     }
     androidx.activity.compose.BackHandler(onBack = onCancel)
