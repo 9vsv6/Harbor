@@ -85,7 +85,7 @@ object Letterboxd {
     }
 
     private suspend fun getJson(url: String, token: String? = null): JsonObject =
-        Net.json.parseToJsonElement(Net.call(Request.Builder().url(url).apply { token?.let { header("Authorization", "Bearer $it") } }.build())).jsonObject
+        Net.parseObject(Net.call(Request.Builder().url(url).apply { token?.let { header("Authorization", "Bearer $it") } }.build()))
 
     private suspend fun post(path: String, body: JsonObject): JsonObject =
         Net.json.parseToJsonElement(Net.call(Request.Builder().url(BASE + path).post(body.toString().toRequestBody(jsonType)).build())).jsonObject

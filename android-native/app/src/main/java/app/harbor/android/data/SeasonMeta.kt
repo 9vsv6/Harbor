@@ -11,7 +11,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
 
@@ -55,7 +54,7 @@ object SeasonMeta {
             val bearer = Tvdb.token(key) ?: return null
             Request.Builder().url("$TVDB$path").header("Authorization", "Bearer $bearer").header("Accept", "application/json").build()
         }
-        val value = runCatching { Net.json.parseToJsonElement(Net.call(request)).jsonObject["data"] }.getOrNull() ?: return null
+        val value = runCatching { Net.parseObject(Net.call(request))["data"] }.getOrNull() ?: return null
         synchronized(cache) { cache[cacheKey] = System.currentTimeMillis() to value }
         return value
     }

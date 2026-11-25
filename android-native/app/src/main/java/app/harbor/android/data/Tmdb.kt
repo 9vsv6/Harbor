@@ -769,6 +769,16 @@ object Tmdb {
     }
 
     /** TMDB's episode scores for a season, by episode number (the fallback for episode ratings). */
+    /**
+     * One season's page, shared: a title page asks for the same season for its episode ratings,
+     * air dates and (when the languages match) episode text at the same moment. One request
+     * answers all three, and is kept ten minutes for the next visit.
+     */
+    private val seasons = SharedRequests<String, JsonObject>(max = 24, ttlMs = 10 * 60_000L)
+
+    private suspend fun seasonJson(key: String, tvId: Int, season: Int, lang: String = language): JsonObject? =
+        seasons.get("${key.hashCode()}|$lang|$tvId|$season") { get(key, "/tv/$tvId/season/$season", lang = lang) }
+
     /** The description language TMDB is asked in ("ar-SA", "en-US"); part of a cache key. */
     val descriptionLanguage: String get() = descLang
 
@@ -779,7 +789,7 @@ object Tmdb {
      */
     suspend fun seasonEpisodeText(key: String, tvId: Int, season: Int): Map<Int, Pair<String?, String?>> {
         val lang = descLang
-        val body = runCatching { get(key, "/tv/$tvId/season/$season", lang = lang) }.getOrNull() ?: return emptyMap()
+        val body = seasonJson(key, tvId, season, lang) ?: return emptyMap()
         return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
             val n = o["episode_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
@@ -791,7 +801,7 @@ object Tmdb {
 
     /** A season's episode air dates ("2005-03-24"), by episode number. */
     suspend fun seasonAirDates(key: String, tvId: Int, season: Int): Map<Int, String> {
-        val body = runCatching { get(key, "/tv/$tvId/season/$season") }.getOrNull() ?: return emptyMap()
+        val body = seasonJson(key, tvId, season) ?: return emptyMap()
         return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
             val n = o["episode_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
@@ -801,7 +811,7 @@ object Tmdb {
     }
 
     suspend fun seasonRatings(key: String, tvId: Int, season: Int): Map<Int, String> {
-        val body = runCatching { get(key, "/tv/$tvId/season/$season") }.getOrNull() ?: return emptyMap()
+        val body = seasonJson(key, tvId, season) ?: return emptyMap()
         return (body["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
             val o = e.jsonObject
             val n = o["episode_number"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null

@@ -1,6 +1,7 @@
 package app.harbor.android.data
 
 import android.net.Uri
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -51,11 +52,21 @@ object Tvdb {
     private var token: Pair<String, Long>? = null
     private var tokenKey: String? = null
     private val seriesByImdb = mutableMapOf<String, Int?>()
+    // A title page asks for several things at once: one login and one series lookup serve them all.
+    private val tokenLock = kotlinx.coroutines.sync.Mutex()
+    private val seriesLock = kotlinx.coroutines.sync.Mutex()
 
     data class Episode(val season: Int, val number: Int, val name: String?, val overview: String?, val image: String?, val aired: String?)
 
+    private fun cachedToken(key: String): String? =
+        token?.let { (value, at) -> value.takeIf { tokenKey == key && System.currentTimeMillis() - at < 23 * 3_600_000L } }
+
     suspend fun token(key: String): String? {
-        token?.let { (value, at) -> if (tokenKey == key && System.currentTimeMillis() - at < 23 * 3_600_000L) return value }
+        cachedToken(key)?.let { return it }
+        return tokenLock.withLock { cachedToken(key) ?: login(key) }
+    }
+
+    private suspend fun login(key: String): String? {
         val body = buildJsonObject { put("apikey", key) }.toString()
         val json = runCatching {
             Net.json.parseToJsonElement(
@@ -71,7 +82,8 @@ object Tvdb {
     private suspend fun get(key: String, path: String): JsonObject? {
         val bearer = token(key) ?: return null
         return runCatching {
-            Net.json.parseToJsonElement(Net.call(Request.Builder().url("$BASE$path").header("Authorization", "Bearer $bearer").build())).jsonObject
+            // Episode pages hold up to 500 entries: parsed off the main thread the title page calls from.
+            Net.parseObject(Net.call(Request.Builder().url("$BASE$path").header("Authorization", "Bearer $bearer").build()))
         }.getOrNull()
     }
 
@@ -81,6 +93,10 @@ object Tvdb {
 
     suspend fun seriesId(key: String, imdbId: String): Int? {
         if (imdbId in seriesByImdb) return seriesByImdb[imdbId]
+        return seriesLock.withLock { if (imdbId in seriesByImdb) seriesByImdb[imdbId] else lookUpSeries(key, imdbId) }
+    }
+
+    private suspend fun lookUpSeries(key: String, imdbId: String): Int? {
         val hits = (get(key, "/search/remoteid/$imdbId")?.get("data") as? JsonArray).orEmpty().map { it.jsonObject }
         val id = hits.firstNotNullOfOrNull { it["series"].objectOrNull?.get("id")?.jsonPrimitive?.intOrNull }
         seriesByImdb[imdbId] = id
@@ -172,7 +188,7 @@ object Mdblist {
             "https://mdblist.com/api/?apikey=${Uri.encode(key)}&i=$imdbId",
         )
         for (url in urls) {
-            val json = runCatching { Net.json.parseToJsonElement(Net.get(url)).jsonObject }.getOrNull() ?: continue
+            val json = runCatching { Net.parseObject(Net.get(url)) }.getOrNull() ?: continue
             val ratings = (json["ratings"] as? JsonArray)?.map { it.jsonObject } ?: continue
             fun value(source: String) = ratings.firstOrNull { it.string("source") == source }?.get("value")?.jsonPrimitive?.doubleOrNull?.takeIf { it > 0 }
             fun positive(vararg names: String) = names.firstNotNullOfOrNull { json[it]?.jsonPrimitive?.doubleOrNull?.takeIf { v -> v > 0 } }
@@ -213,7 +229,7 @@ object Fanart {
 
     private suspend fun fetch(key: String, path: String): JsonObject? {
         if (path in cache) return null
-        return runCatching { Net.json.parseToJsonElement(Net.get("$BASE$path?api_key=${Uri.encode(key)}")).jsonObject }.getOrNull()
+        return runCatching { Net.parseObject(Net.get("$BASE$path?api_key=${Uri.encode(key)}")) }.getOrNull()
     }
 
     /** Movies by IMDb or TMDB id. */

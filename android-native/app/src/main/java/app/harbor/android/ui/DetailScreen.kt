@@ -164,16 +164,19 @@ fun DetailScreen(
         if (current.id.substringBefore(':') !in setOf("kitsu", "mal", "anilist")) return@LaunchedEffect
         // AniList's airing times for this entry's episodes (PC 1.0.4): the Kitsu addon's dates are often off.
         // Specials keep their own dates; a page that moved on meanwhile is left alone.
-        val aired = app.harbor.android.data.AniListSchedule.times(current.id)
-        if (aired.isNotEmpty()) meta?.takeIf { it.id == current.id }?.let { now ->
-            meta = now.copy(videos = now.videos?.map { v ->
-                val at = v.episode?.takeIf { (v.season ?: 1) >= 1 }?.let { aired[it] } ?: return@map v
-                v.copy(released = java.time.Instant.ofEpochSecond(at).toString())
-            })
+        // Beside the AniList extras below, not before them.
+        launch {
+            val aired = app.harbor.android.data.AniListSchedule.times(current.id)
+            if (aired.isNotEmpty()) meta?.takeIf { it.id == current.id }?.let { now ->
+                meta = now.copy(videos = now.videos?.map { v ->
+                    val at = v.episode?.takeIf { (v.season ?: 1) >= 1 }?.let { aired[it] } ?: return@map v
+                    v.copy(released = java.time.Instant.ofEpochSecond(at).toString())
+                })
+            }
         }
         val ids = AnimeInfo.ids(current.id) ?: return@LaunchedEffect
-        // The IMDb id behind the anime gives it Wikidata's awards too.
-        ids.imdb?.takeIf { awards.isEmpty() }?.let { imdb -> awards = runCatching { Awards.forTitle(imdb) }.getOrDefault(emptyList()) }
+        // The IMDb id behind the anime gives it Wikidata's awards too (asked alongside the extras).
+        ids.imdb?.takeIf { awards.isEmpty() }?.let { imdb -> launch { awards = runCatching { Awards.forTitle(imdb) }.getOrDefault(emptyList()) } }
         val extra = ids.anilist?.let { AnimeInfo.extra(it) } ?: return@LaunchedEffect
         anime = extra
         relatedKitsu = AnimeInfo.kitsuFor(extra.related.map { it.anilistId })
@@ -207,17 +210,19 @@ fun DetailScreen(
         }
     }
     // Harbor's other providers, each with the user's own key.
-    LaunchedEffect(meta?.id, details?.tvdbId, providerKeys, full) {
+    // Independent answers are asked for at once (MDBList beside TheTVDB, and TheTVDB's ordering,
+    // network and episodes side by side) rather than one after another.
+    LaunchedEffect(meta?.id, providerKeys, full) {
         val current = meta?.takeIf { full } ?: return@LaunchedEffect
         val imdb = current.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return@LaunchedEffect
         val series = current.type != "movie"
-        providerKeys[ProviderKey.MDBLIST]?.let { key -> mdblist = runCatching { Mdblist.scores(key, imdb, current.type) }.getOrNull() }
+        providerKeys[ProviderKey.MDBLIST]?.let { key -> launch { mdblist = runCatching { Mdblist.scores(key, imdb, current.type) }.getOrNull() } }
         val tvdbKey = providerKeys[ProviderKey.TVDB]
         val tvdbId = if (series && tvdbKey != null) runCatching { Tvdb.seriesId(tvdbKey, imdb) }.getOrNull() else null
         // TheTVDB: the network, and episode titles, descriptions and stills in your language.
         if (tvdbKey != null && tvdbId != null) {
-            episodeOrder = runCatching { Tvdb.ordering(tvdbKey, tvdbId, HarborDisplay.settings.tvdbSeasonType) }.getOrNull()
-            network = runCatching { Tvdb.network(tvdbKey, tvdbId) }.getOrNull()
+            launch { episodeOrder = runCatching { Tvdb.ordering(tvdbKey, tvdbId, HarborDisplay.settings.tvdbSeasonType) }.getOrNull() }
+            launch { network = runCatching { Tvdb.network(tvdbKey, tvdbId) }.getOrNull() }
             val lang = HarborDisplay.settings.metadataLanguage.ifEmpty { java.util.Locale.getDefault().language }
             val episodes = runCatching { Tvdb.episodes(tvdbKey, tvdbId, Tvdb.language(lang)) }.getOrDefault(emptyList())
                 .associateBy { it.season to it.number }
@@ -239,12 +244,22 @@ fun DetailScreen(
                 })
             }
         }
-        // Fanart.tv: a logo and backdrop where TMDB has none.
-        providerKeys[ProviderKey.FANART]?.let { key ->
-            art = runCatching {
-                if (series) (details?.tvdbId ?: tvdbId)?.let { Fanart.tv(key, it) } else Fanart.movie(key, imdb)
-            }.getOrNull()
-        }
+    }
+    // Fanart.tv: a logo and backdrop where TMDB has none. Its own effect, started with the one above
+    // rather than after it; TMDB's TheTVDB id arriving later asks Fanart again without asking
+    // TheTVDB and MDBList a second time.
+    LaunchedEffect(meta?.id, details?.tvdbId, providerKeys, full) {
+        val current = meta?.takeIf { full } ?: return@LaunchedEffect
+        val imdb = current.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return@LaunchedEffect
+        val key = providerKeys[ProviderKey.FANART] ?: return@LaunchedEffect
+        val series = current.type != "movie"
+        art = runCatching {
+            if (series) {
+                // The same lookup as above (Tvdb caches it and shares one request between the two).
+                val tvdbId = details?.tvdbId ?: providerKeys[ProviderKey.TVDB]?.let { tvdbKey -> runCatching { Tvdb.seriesId(tvdbKey, imdb) }.getOrNull() }
+                tvdbId?.let { Fanart.tv(key, it) }
+            } else Fanart.movie(key, imdb)
+        }.getOrNull()
     }
     val listState = rememberLazyListState()
     val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
@@ -285,22 +300,33 @@ fun DetailScreen(
     // A TV paints the page colour inside its backdrop's layer (TvAmbient); the window's is the same colour.
     Box(Modifier.fillMaxSize().then(if (app.harbor.android.perf.Perf.isTv) Modifier else Modifier.background(HarborColors.Canvas))) {
         val current = meta
+        // Built once per change of what they're made from: new copies on every recomposition of this
+        // screen (the bar below appearing as the page scrolls, say) made the whole page recompose.
+        val shownMeta = remember(current, art, harborImdb, scores, cinemetaImdb) {
+            current?.let { c ->
+                c.copy(
+                    logo = c.logo ?: art?.logo,
+                    background = c.background ?: art?.backdrop,
+                    imdbRating = harborImdb ?: scores.firstOrNull { it.source == "IMDb" }?.value?.let(::validImdbRating) ?: cinemetaImdb
+                        ?: c.imdbRating?.takeIf { c.id.startsWith("tt") }?.let(::validImdbRating),
+                )
+            }
+        }
+        val shownDetails = remember(details, art, network) {
+            details?.let { d -> d.copy(logo = d.logo ?: art?.logo, backdrop = d.backdrop ?: art?.backdrop, networks = d.networks.ifEmpty { listOfNotNull(network) }) }
+        }
+        val shownScores = remember(scores, mdblist, simklScore) { scores + mdblistScores(mdblist) + listOfNotNull(simklScore) }
         when {
             // With a TMDB key, TMDB's page (its backdrop, logo, credits and cast) is the one shown: the
             // addon's own version first and swapped a moment later looked like a second page loading.
             // Waits at most 2.5 s (detailsSettled), and not at all when the details are cached.
             current != null && waitForTmdb -> Loading(Modifier.padding(top = 160.dp))
-            current != null -> DetailBody(
+            shownMeta != null -> DetailBody(
                 repository,
-                current.copy(
-                    logo = current.logo ?: art?.logo,
-                    background = current.background ?: art?.backdrop,
-                    imdbRating = harborImdb ?: scores.firstOrNull { it.source == "IMDb" }?.value?.let(::validImdbRating) ?: cinemetaImdb
-                        ?: current.imdbRating?.takeIf { current.id.startsWith("tt") }?.let(::validImdbRating),
-                ),
-                details?.let { d -> d.copy(logo = d.logo ?: art?.logo, backdrop = d.backdrop ?: art?.backdrop, networks = d.networks.ifEmpty { listOfNotNull(network) }) },
+                shownMeta,
+                shownDetails,
                 awards,
-                scores + mdblistScores(mdblist) + listOfNotNull(simklScore),
+                shownScores,
                 listState,
                 onStreams,
                 onOpen,

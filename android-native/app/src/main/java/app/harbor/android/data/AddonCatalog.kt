@@ -61,7 +61,7 @@ object AddonCatalog {
         val key = "$sort|$category|$search|$page"
         cache[key]?.let { (at, list) -> if (System.currentTimeMillis() - at < 3_600_000) return list }
         val list = if (sort == Sort.Rising && category == null && search.isNullOrBlank()) {
-            parse(Net.json.parseToJsonElement(Net.get("$API/rising")).jsonObject)
+            parse(Net.parseObject(Net.get("$API/rising")))
         } else {
             val query = buildString {
                 append("limit=30&page=").append(page).append("&nsfw=exclude")
@@ -69,7 +69,7 @@ object AddonCatalog {
                 category?.let { append("&category=").append(it) }
                 search?.takeIf { it.isNotBlank() }?.let { append("&search=").append(Uri.encode(it.trim())) }
             }
-            parse(Net.json.parseToJsonElement(Net.get("$API/addons?$query")).jsonObject)
+            parse(Net.parseObject(Net.get("$API/addons?$query")))
         }
         cache[key] = System.currentTimeMillis() to list
         return list

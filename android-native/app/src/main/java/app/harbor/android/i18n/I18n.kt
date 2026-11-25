@@ -78,13 +78,28 @@ object I18n {
     }
     private val spaces = Regex("""\s+""")
 
+    /** A language's table read ahead by [preload], for [load] to take instead of reading it again. */
+    @Volatile private var preloaded: Pair<String, Map<String, String>>? = null
+
+    private fun read(context: Context, language: String): Map<String, String> = runCatching {
+        val text = context.assets.open("i18n/$language.json").bufferedReader().use { it.readText() }
+        (app.harbor.android.data.Net.json.parseToJsonElement(text) as JsonObject)
+            .mapValues { (_, v) -> (v as JsonPrimitive).content }
+    }.getOrDefault(emptyMap())
+
+    /**
+     * Reads and parses a language's table (about 100 KB of JSON) on the calling thread, a
+     * background one at launch, so the [load] that follows on the main thread finds it ready.
+     */
+    fun preload(context: Context, language: String) {
+        if (language == "en" || preloaded?.first == language || (language == code && table.isNotEmpty())) return
+        preloaded = language to read(context, language)
+    }
+
     fun load(context: Context, language: String) {
         if (language == code && (language == "en" || table.isNotEmpty())) return
-        val next = if (language == "en") emptyMap() else runCatching {
-            val text = context.assets.open("i18n/$language.json").bufferedReader().use { it.readText() }
-            (app.harbor.android.data.Net.json.parseToJsonElement(text) as JsonObject)
-                .mapValues { (_, v) -> (v as JsonPrimitive).content }
-        }.getOrDefault(emptyMap())
+        val next = if (language == "en") emptyMap() else preloaded?.takeIf { it.first == language }?.second ?: read(context, language)
+        preloaded = null
         table = next
         code = language
     }

@@ -361,7 +361,7 @@ object Discover {
             .header("trakt-api-key", clientId?.takeIf { it.isNotBlank() } ?: HARBOR_TRAKT)
             .apply { token?.let { header("Authorization", "Bearer $it") } }
             .build()
-        Net.json.parseToJsonElement(Net.call(request)).jsonArray.mapNotNull { it as? JsonObject }
+        Net.parseElement(Net.call(request)).jsonArray.mapNotNull { it as? JsonObject }
     }.getOrDefault(emptyList())
 
     private fun JsonObject.imdb() = (this["ids"] as? JsonObject)?.string("imdb")

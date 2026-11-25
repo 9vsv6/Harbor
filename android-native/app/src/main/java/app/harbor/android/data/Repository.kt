@@ -297,10 +297,14 @@ class Repository(private val context: Context) {
         _animeNext.value = prefs[stringPreferencesKey(profileKey("animeUpNext"))]?.let { runCatching { Net.json.decodeFromString(animeNextSerializer, it) }.getOrNull() } ?: emptyMap()
         _trackers.value = prefs[keyTrackers]?.let { runCatching { Net.json.decodeFromString(TrackerSettings.serializer(), it) }.getOrNull() } ?: TrackerSettings()
         _traktCw.value = emptyList()
-        _settings.value = prefs[keySettings]?.let { runCatching { savedSettings(it) }.getOrNull() }
+        val profileSettings = prefs[keySettings]?.let { runCatching { savedSettings(it) }.getOrNull() }
             // Backups restored before names were turned into codes still hold "arabic" and the like.
             ?.let { it.copy(subtitleFallbacks = LanguageCodes.codes(it.subtitleFallbacks), audioLanguages = LanguageCodes.codes(it.audioLanguages), secondarySubLanguage = LanguageCodes.code(it.secondarySubLanguage)) }
             ?: AppSettings()
+        // The display language's table is parsed here (off the main thread at launch), before
+        // HarborApp's settings collector loads it on the main thread.
+        app.harbor.android.i18n.I18n.preload(context, profileSettings.appLanguage)
+        _settings.value = profileSettings
         _lastStreams.value = prefs[keyLastStreams]?.let { runCatching { Net.json.decodeFromString(stringMap, it) }.getOrNull() } ?: emptyMap()
         refract.refresh()
         refract.flush()
@@ -1200,7 +1204,12 @@ class Repository(private val context: Context) {
 
     // Last, so every property above exists before the background load reads it.
     init {
-        scope.launch { loadAll() }
+        scope.launch {
+            // The optional anime identity database opens here, off the main thread, and before the
+            // saved progress loads, so Continue watching's first merge already has it.
+            AnimeIdentity.init(context)
+            loadAll()
+        }
         scope.launch { settings.collect { AddonClient.streamTimeoutMs = it.addonTimeoutSec * 1_000L } }
     }
 

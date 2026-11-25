@@ -308,8 +308,10 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
     val watchedIds = HarborDisplay.watchedIds
     fun Entry.isWatched() = watched || meta.id in watchedIds
     var grouped by rememberSaveable { mutableStateOf(true) }
-    val movies = entries.count { it.meta.type == "movie" }
-    val shown = entries
+    val movies = remember(entries) { entries.count { it.meta.type == "movie" } }
+    // Filtered and sorted once per change of what it depends on, not on every recomposition (each
+    // a pass and a sort over the whole library, with a new list that kept the grid from skipping).
+    val shown = remember(entries, kind, query, sort, watchedIds) { entries
         .filter { when (kind) { Kind.All -> true; Kind.Movies -> it.meta.type == "movie"; Kind.Shows -> it.meta.type != "movie" } }
         .filter { query.isBlank() || it.meta.name.contains(query.trim(), ignoreCase = true) }
         .let { list ->
@@ -322,7 +324,7 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
                 Sort.NotWatched -> list.sortedWith(compareBy<Entry> { it.isWatched() }.thenBy { it.meta.name.lowercase() })
                 Sort.Year -> list.sortedByDescending { it.meta.year ?: "0" }
             }
-        }
+        } }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 112.dp * HarborDisplay.settings.posterScale),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 32.dp),
@@ -357,7 +359,7 @@ private fun MetaTab(entries: List<Entry>, onOpen: (Meta) -> Unit, inList: (Strin
 }
 
 private fun LazyGridScope.posters(group: String, list: List<Entry>, onOpen: (Meta) -> Unit, inList: (String) -> Boolean) {
-    items(list, key = { group + it.meta.type + it.meta.id }) { e ->
+    items(list, key = { group + it.meta.type + it.meta.id }, contentType = { "poster" }) { e ->
         Box {
             PosterTile(e.meta) { onOpen(e.meta) }
             // Harbor's watchlist marker at the poster's corner.
