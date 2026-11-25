@@ -192,20 +192,20 @@ internal fun HeroTrackerControls(repository: Repository, meta: Meta, version: In
             }
             trackers.mal?.takeIf { it.accessToken != null }?.let { auth ->
                 HeroTrackerControl("MyAnimeList", asMenu, listOf(meta.id, auth, profile, version), MalLibrary.statuses,
-                    load = { val id = Mal.malId(meta.id) ?: error("MyAnimeList identity unavailable."); id to HeroTrackerActions.malState(auth, id) },
+                    load = { val id = Mal.malId(meta.id) ?: error("MyAnimeList identity unavailable."); id to repository.withMal { HeroTrackerActions.malState(it, id) } },
                     write = { id, _, status ->
-                        if (status == null) HeroTrackerActions.removeMal(auth, id, ::guard)
-                        else { guard(); MalLibrary.save(auth, id, status = status) }
+                        if (status == null) repository.withMal { HeroTrackerActions.removeMal(it, id, ::guard) }
+                        else { guard(); repository.withMal { MalLibrary.save(it, id, status = status) } }
                     }, onUpdated = onUpdated)
             }
         }
         trackers.simkl?.takeIf { it.accessToken != null }?.let { auth ->
             val statuses = HeroTrackerActions.simklStatuses.filter { meta.type != "movie" || it.first in setOf("plantowatch", "completed", "dropped") }
             HeroTrackerControl("Simkl", asMenu, listOf(meta.id, auth, profile, version), statuses,
-                load = { 0 to HeroTrackerActions.simklState(auth, meta) },
+                load = { 0 to repository.withSimkl { HeroTrackerActions.simklState(it, meta) } },
                 write = { _, state, status ->
                     if (status == null) check(!state.watched) { "Unchanged: Simkl removal also deletes watched history. Manage this title in Simkl." }
-                    HeroTrackerActions.setSimkl(auth, meta, status, ::guard)
+                    repository.withSimkl { HeroTrackerActions.setSimkl(it, meta, status, ::guard) }
                 }, onUpdated = onUpdated)
         }
         pmdb?.let { session ->

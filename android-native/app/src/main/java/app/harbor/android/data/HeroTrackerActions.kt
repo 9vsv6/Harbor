@@ -40,15 +40,16 @@ internal object HeroTrackerActions {
         }
     }
 
-    private fun request(provider: String, auth: TrackerAuth, path: String): Request.Builder =
-        Request.Builder().url((if (provider == "Trakt") "https://api.trakt.tv" else "https://api.simkl.com") + path)
-            .header("Authorization", "Bearer ${auth.accessToken}").apply {
-                if (provider == "Trakt") { header("trakt-api-key", auth.clientId); header("trakt-api-version", "2") }
-                else header("simkl-api-key", auth.clientId)
-            }
+    private fun request(provider: String, auth: TrackerAuth, path: String): Request.Builder = if (provider != "Trakt") Simkl.request(auth, path) else
+        Request.Builder().url("https://api.trakt.tv$path")
+            .header("Authorization", "Bearer ${auth.accessToken}")
+            .header("trakt-api-key", auth.clientId).header("trakt-api-version", "2")
+
+    /** Simkl's calls go through its client (app parameters, spacing, retries); Trakt's retry a 429 once. */
+    private suspend fun send(provider: String, request: Request): String = if (provider == "Trakt") traktCall(request) else Simkl.send(request)
 
     private suspend fun post(provider: String, auth: TrackerAuth, path: String, body: JsonObject): JsonObject =
-        Net.parseObject(Net.call(request(provider, auth, path).post(body.toString().toRequestBody(jsonType)).build()))
+        Net.parseObject(send(provider, request(provider, auth, path).post(body.toString().toRequestBody(jsonType)).build()))
 
     private suspend fun simklIds(meta: Meta): JsonObject? =
         if (meta.id.substringBefore(':') in setOf("kitsu", "anilist", "anidb")) Mal.malId(meta.id)?.let { buildJsonObject { put("mal", it) } }
@@ -75,7 +76,7 @@ internal object HeroTrackerActions {
 
     suspend fun simklState(auth: TrackerAuth, meta: Meta): HeroTrackerState {
         val target = simklIds(meta) ?: error("No verified Simkl identity is available for this title.")
-        val data = Net.parseObject(Net.call(request("Simkl", auth, "/sync/all-items/all/all?extended=full_anime_seasons&episode_watched_at=yes").build()))
+        val data = Net.parseObject(Simkl.send(request("Simkl", auth, "/sync/all-items/all/all?extended=full_anime_seasons&episode_watched_at=yes").build()))
         val primary = simklState(data, target, if (meta.type == "movie") "movies" else "shows")
         val anime = simklState(data, target, "anime")
         // The same identity may appear in both feeds. Conflicting statuses must never erase history.
@@ -190,10 +191,11 @@ internal object HeroTrackerActions {
         if (nuvio || !changed) repository.refract.watchlist(meta.id, meta.type, meta.id.takeIf { it.startsWith("tt") }, adding)
         results += HeroActionOutcome("Harbor")
         // PC's base library action syncs these providers; 'all' adds the anime list entries too.
-        trackers.trakt?.takeIf { it.accessToken != null }?.let { auth -> run("Trakt") { setTrakt(auth, meta, adding, ::guard); null } }
-        trackers.simkl?.takeIf { it.accessToken != null }?.let { auth -> run("Simkl") {
+        trackers.trakt?.takeIf { it.accessToken != null }?.let { run("Trakt") { repository.withTrakt { auth -> setTrakt(auth, meta, adding, ::guard) }; null } }
+        trackers.simkl?.takeIf { it.accessToken != null }?.let { run("Simkl") { repository.withSimkl { auth ->
             val state = simklState(auth, meta)
             simklLibraryIssue(state, adding) ?: run { setSimkl(auth, meta, if (adding) "plantowatch" else null, ::guard); null }
+        }
         } }
         pmdb?.let { session -> run("PublicMetaDB") {
             val target = pmdbTarget(session, meta) ?: return@run "No verified PublicMetaDB identity is available for this title."
@@ -211,14 +213,15 @@ internal object HeroTrackerActions {
                     else -> { removeAnilist(auth, state.entryId ?: error("AniList did not confirm removal."), ::guard); null }
                 }
             } }
-            trackers.mal?.takeIf { it.accessToken != null }?.let { auth -> run("MyAnimeList") {
-                val id = Mal.malId(meta.id) ?: return@run "MyAnimeList identity unavailable."
+            trackers.mal?.takeIf { it.accessToken != null }?.let { run("MyAnimeList") { repository.withMal { auth ->
+                val id = Mal.malId(meta.id) ?: return@withMal "MyAnimeList identity unavailable."
                 val state = malState(auth, id)
                 when {
                     adding && state.status != null -> "MyAnimeList already has a status."
                     !adding && state.status == null -> "Not on MyAnimeList."
                     adding -> { guard(); MalLibrary.save(auth, id, status = "plan_to_watch"); null }
                     else -> { removeMal(auth, id, ::guard); null }
+                }
                 }
             } }
         }

@@ -340,34 +340,79 @@ class Repository(private val context: Context) {
     private val keyAutoPlay get() = booleanPreferencesKey(profileKey("autoPlay"))
     private val keyTrackers get() = stringPreferencesKey(profileKey("trackers"))
 
-    /**
-     * Runs a Trakt call with a current sign-in: renewed when close to expiring, and once more when
-     * Trakt refuses it (401: revoked, or renewed on another device). The renewed sign-in is saved.
-     */
     /** Trakt refused the renewal: that sign-in is spent, so Settings offers Connect again (as PC). */
     private fun traktSignedOut(spent: TrackerAuth) {
         updateTrackers { if (it.trakt?.accessToken == spent.accessToken) it.copy(trakt = null) else it }
     }
 
+    /**
+     * Runs a Trakt call with a current sign-in: renewed when close to expiring, and once more when
+     * Trakt refuses it (401: revoked, or renewed on another device). The renewed sign-in is saved.
+     * Only Trakt refusing the renewal (or a sign-in that can't renew) signs you out; a renewal that
+     * fails on the network keeps the sign-in and reports the original 401.
+     */
     suspend fun <T> withTrakt(block: suspend (TrackerAuth) -> T): T {
         val saved = _trackers.value.trakt?.takeIf { it.accessToken != null } ?: error("Sign in to Trakt in Settings → Trakt.")
-        var auth = runCatching { Trakt.fresh(saved) }.getOrDefault(saved)
+        val auth = runCatching { Trakt.fresh(saved) }.getOrDefault(saved)
         if (auth != saved) updateTrackers { if (it.trakt?.refreshToken == saved.refreshToken) it.copy(trakt = auth) else it }
         return try { block(auth) } catch (e: Net.HttpError) {
             if (e.code != 401) throw e
-            val before = auth
-            auth = try { Trakt.fresh(before, force = true) } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (r: Exception) {
-                // As PC: only Trakt refusing the renewal ends the connection (not a network hiccup).
-                if (r is Net.HttpError && r.code in setOf(400, 401, 403)) traktSignedOut(before)
-                before
+            val renewed = renew(e, auth, { Trakt.fresh(it, force = true) }, ::traktSignedOut, "Your Trakt sign-in has expired. Connect Trakt again in Settings → Trakt.")
+            updateTrackers { if (it.trakt?.refreshToken == auth.refreshToken) it.copy(trakt = renewed) else it }
+            block(renewed)
+        }
+    }
+
+    /** The forced renewal after a 401, decided by [TrackerPolicy.afterRefused]. */
+    private suspend fun renew(
+        refused: Exception, auth: TrackerAuth, fresh: suspend (TrackerAuth) -> TrackerAuth,
+        signOut: (TrackerAuth) -> Unit, expired: String,
+    ): TrackerAuth {
+        var renewed: TrackerAuth? = null
+        val failure = try { renewed = fresh(auth); null } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (r: Exception) { r }
+        return when (TrackerPolicy.afterRefused(failure, renewed != null && renewed != auth)) {
+            TrackerPolicy.Renewal.Renewed -> renewed!!
+            TrackerPolicy.Renewal.SignOut -> { signOut(auth); error(expired) }
+            TrackerPolicy.Renewal.KeepAndRethrow -> throw refused
+        }
+    }
+
+    /**
+     * Runs a Simkl call. Simkl answers 401 for more than a dead token, so a 401 asks Simkl about the
+     * token with a harmless read and signs out only when Simkl refuses it there (simkl/client.ts).
+     */
+    suspend fun <T> withSimkl(block: suspend (TrackerAuth) -> T): T {
+        val auth = _trackers.value.simkl?.takeIf { it.accessToken != null } ?: error("Sign in to Simkl in Settings → Simkl.")
+        Simkl.appVersion = appVersion
+        return try { block(auth) } catch (e: Net.HttpError) {
+            if (e.code == 401 && Simkl.tokenRejected(auth)) {
+                updateTrackers { if (it.simkl?.accessToken == auth.accessToken) it.copy(simkl = null) else it }
+                error("Your Simkl sign-in has expired. Connect Simkl again in Settings → Simkl.")
             }
-            if (auth == before) {
-                // Refused and not renewable (no refresh token or app secret saved): the connection is dead.
-                traktSignedOut(before)
-                error("Your Trakt sign-in has expired. Connect Trakt again in Settings → Trakt.")
-            }
-            updateTrackers { if (it.trakt?.refreshToken == before.refreshToken) it.copy(trakt = auth) else it }
-            block(auth)
+            throw e
+        }
+    }
+
+    private val appVersion by lazy {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()?.takeIf { it.isNotBlank() } ?: "1"
+    }
+
+    /**
+     * Runs a MyAnimeList call with a current sign-in (mal/client.ts): renewed when close to
+     * expiring, and on a 401 renewed and tried once more. Only MyAnimeList refusing the renewal
+     * signs you out; a network failure keeps the sign-in.
+     */
+    suspend fun <T> withMal(block: suspend (TrackerAuth) -> T): T {
+        val saved = _trackers.value.mal?.takeIf { it.accessToken != null } ?: error("Sign in to MyAnimeList in Settings → MyAnimeList.")
+        val auth = runCatching { Mal.fresh(saved) }.getOrDefault(saved)
+        if (auth != saved) updateTrackers { if (it.mal?.accessToken == saved.accessToken) it.copy(mal = auth) else it }
+        return try { block(auth) } catch (e: Net.HttpError) {
+            if (e.code != 401) throw e
+            val renewed = renew(e, auth, { Mal.fresh(it, force = true) }, { spent ->
+                updateTrackers { if (it.mal?.accessToken == spent.accessToken) it.copy(mal = null) else it }
+            }, "Your MyAnimeList sign-in has expired. Connect MyAnimeList again in Settings → MyAnimeList.")
+            updateTrackers { if (it.mal?.accessToken == auth.accessToken) it.copy(mal = renewed) else it }
+            block(renewed)
         }
     }
 
@@ -381,6 +426,9 @@ class Repository(private val context: Context) {
         val key = keyTrackers
         queueProfileWrite(key.name) { it[key] = Net.json.encodeToString(TrackerSettings.serializer(), next) }
         if (next.trakt?.accessToken == null) _traktCw.value = emptyList()
+        // A queue belongs to the account that missed the write (pending-sync.ts clearPending…).
+        if (before.trakt?.accessToken != null && next.trakt?.accessToken == null) pending.clear("trakt")
+        if (before.simkl?.accessToken != null && next.simkl?.accessToken == null) pending.clear("simkl")
     }
 
     /**
@@ -422,8 +470,16 @@ class Repository(private val context: Context) {
         if ((current == null || missingFile || fromAccount) && current != url) saveProfile(profile.copy(avatar = url))
     }
 
-    /** Trakt's paused titles join Continue watching; its token is refreshed when due. */
+    /**
+     * Trakt's paused titles join Continue watching; tokens are refreshed when due, and watches a
+     * tracker missed earlier are sent again.
+     */
     suspend fun refreshTrackers() {
+        refreshSignIns()
+        runCatching { flushPendingWatches() }
+    }
+
+    private suspend fun refreshSignIns() {
         val profile = keyTrackers
         val initial = _trackers.value
         initial.mal?.takeIf { it.accessToken != null }?.let { mal ->
@@ -440,8 +496,8 @@ class Repository(private val context: Context) {
         // for good. It goes to the profile still holding the old token.
         if (fresh != trakt && profile == keyTrackers) updateTrackers { if (it.trakt?.refreshToken == trakt.refreshToken) it.copy(trakt = fresh) else it }
         if (profile != keyTrackers || _trackers.value.trakt != fresh) return
-        val playback = if (_settings.value.traktInContinueWatching) runCatching { Trakt.playback(fresh) }.getOrDefault(emptyList()) else emptyList()
-        if (profile == keyTrackers && _trackers.value.trakt == fresh) {
+        val playback = if (_settings.value.traktInContinueWatching) runCatching { withTrakt { Trakt.playback(it) } }.getOrDefault(emptyList()) else emptyList()
+        if (profile == keyTrackers && _trackers.value.trakt?.accessToken != null) {
             _traktCw.value = if (_settings.value.traktInContinueWatching) playback else emptyList()
         }
     }
@@ -464,21 +520,118 @@ class Repository(private val context: Context) {
     /** Where Trakt says `videoId` was paused, as a fraction, when this device has no position. */
     fun traktFraction(videoId: String): Float? = _traktCw.value.firstOrNull { it.videoId == videoId }?.fraction
 
-    /** Tells signed-in trackers what's playing: "start", "pause" or "stop" (stop at 80%+ marks watched). */
-    fun scrobble(action: String, what: Scrobble, progressPercent: Double) {
+    /**
+     * One step of a playback session (see [ScrobbleSession]) sent to the signed-in trackers. A
+     * "stop" Trakt or Simkl doesn't confirm is written to the watch history instead, and failing
+     * that kept and sent again later (trakt/resolve.ts commitWatchedEpisode, simkl/record-watched.ts).
+     */
+    fun scrobble(step: ScrobbleSession.Step) {
         val trackers = _trackers.value
-        scope.launch {
-            // A stop past 80% marks it watched, which the player's sync indicator shows.
-            val label = if (what.season != null && what.episode != null) "Episode ${what.episode}" else "Movie"
-            fun done(service: String) { if (action == "stop" && progressPercent >= 80) syncEvents.tryEmit("$service · $label synced") }
-            trackers.trakt?.takeIf { it.accessToken != null }?.let { auth ->
-                runCatching { Trakt.scrobble(auth, action, what, progressPercent) }.onSuccess {
-                    done("Trakt")
-                    // A confirmed finish drops Trakt's paused card: read the list again rather than show it until restart.
-                    if (action == "stop" && progressPercent >= 80) runCatching { refreshTrackers() }
+        val owner = keyTrackers
+        val (action, what, progress) = step
+        val label = if (what.episode != null && what.type != "movie") "Episode ${what.episode}" else "Movie"
+        // A stop past 80% is a watch on Trakt and Simkl, which the player's sync indicator shows.
+        fun done(service: String) { if (action == "stop" && progress >= TrackerPolicy.TRACKER_COUNTS_PCT) syncEvents.tryEmit("$service · $label synced") }
+        if (trackers.trakt?.accessToken != null && TrackerPolicy.traktIds(what) != null) scope.launch {
+            if (owner != keyTrackers) return@launch
+            if (action != "stop") { runCatching { withTrakt { Trakt.scrobble(it, action, what, progress) } }; return@launch }
+            if (commitTrakt(what, progress)) {
+                done("Trakt")
+                // A confirmed finish drops Trakt's paused card: read the list again rather than show it until restart.
+                if (progress >= TrackerPolicy.TRACKER_COUNTS_PCT) runCatching { refreshTrackers() }
+            } else if (owner == keyTrackers && _trackers.value.trakt?.accessToken != null) {
+                pending.add("trakt", PendingWatch(what, progress, System.currentTimeMillis()))
+                flushPendingSoon()
+            }
+        }
+        if (_settings.value.simklScrobble && trackers.simkl?.accessToken != null) scope.launch {
+            if (owner != keyTrackers) return@launch
+            if (action != "stop") { runCatching { withSimkl { Simkl.scrobble(it, action, what, progress) } }; return@launch }
+            if (commitSimkl(what, progress)) done("Simkl")
+            else if (progress >= TrackerPolicy.WATCHED_PCT && owner == keyTrackers && _trackers.value.simkl?.accessToken != null) {
+                pending.add("simkl", PendingWatch(what, progress, System.currentTimeMillis()))
+                flushPendingSoon()
+            }
+        }
+    }
+
+    /** Trakt's stop, then (from 70%) the history write: true once Trakt has the watch. */
+    private suspend fun commitTrakt(what: Scrobble, progress: Double): Boolean = try {
+        withTrakt { auth ->
+            val outcome = Trakt.scrobble(auth, "stop", what, progress)
+            outcome != ScrobbleOutcome.Failed || progress >= TrackerPolicy.HISTORY_FALLBACK_PCT && Trakt.pushWatched(auth, what)
+        }
+    } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (_: Exception) { false }
+
+    /** Simkl's stop, then (from 90%) the history write as its fallback. */
+    private suspend fun commitSimkl(what: Scrobble, progress: Double): Boolean = try {
+        withSimkl { auth ->
+            Simkl.scrobble(auth, "stop", what, progress) ||
+                progress >= TrackerPolicy.WATCHED_PCT && Simkl.recordWatched(auth, what)
+        }
+    } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (_: Exception) { false }
+
+    /** Watches Trakt or Simkl didn't confirm, per profile (trakt/simkl pending-sync.ts). */
+    private val pending by lazy {
+        TrackerPendingStore(context.getSharedPreferences("tracker-pending", android.content.Context.MODE_PRIVATE)) { profileKey("trackerPending") }
+    }
+    private val flushing = kotlinx.coroutines.sync.Mutex()
+    private var soonFlush: kotlinx.coroutines.Job? = null
+
+    /** A freshly queued watch gets a second chance after Simkl's 20 s scrobble lock, not at the next launch. */
+    private fun flushPendingSoon() {
+        soonFlush?.cancel()
+        soonFlush = scope.launch { kotlinx.coroutines.delay(20_000); flushPendingWatches() }
+    }
+
+    /** Sends the queued watches again: a confirmed one, or one the tracker will never take, leaves the queue. */
+    suspend fun flushPendingWatches() {
+        if (!flushing.tryLock()) return
+        try {
+            val owner = keyTrackers
+            for (provider in listOf("trakt", "simkl")) {
+                for (watch in pending.list(provider)) {
+                    if (owner != keyTrackers) return
+                    val signedIn = if (provider == "trakt") _trackers.value.trakt?.accessToken != null else _trackers.value.simkl?.accessToken != null
+                    if (!signedIn) break
+                    val progress = if (watch.progress >= TrackerPolicy.HISTORY_FALLBACK_PCT) 100.0 else watch.progress
+                    val result = runCatching {
+                        if (provider == "trakt") withTrakt { auth ->
+                            Trakt.scrobble(auth, "stop", watch.target, progress) != ScrobbleOutcome.Failed || Trakt.pushWatched(auth, watch.target)
+                        } else withSimkl { auth ->
+                            Simkl.scrobble(auth, "stop", watch.target, progress) || Simkl.recordWatched(auth, watch.target)
+                        }
+                    }
+                    if (owner != keyTrackers) return
+                    if (result.getOrNull() == true || result.exceptionOrNull()?.let(TrackerPolicy::terminal) == true) pending.remove(provider, watch)
                 }
             }
-            if (_settings.value.simklScrobble) trackers.simkl?.takeIf { it.accessToken != null }?.let { auth -> runCatching { Simkl.scrobble(auth, action, what, progressPercent) }.onSuccess { done("Simkl") } }
+        } finally {
+            flushing.unlock()
+        }
+    }
+
+    /** Runs `block`, trying again after 20 s and 60 s when the network (not the tracker) failed. */
+    private suspend fun <T> retryingNetwork(owner: Any, block: suspend () -> T): T {
+        for (wait in listOf(20_000L, 60_000L)) {
+            try { return block() } catch (c: kotlinx.coroutines.CancellationException) { throw c } catch (e: Exception) {
+                val transient = e is java.io.IOException && (e !is Net.HttpError || e.code >= 500 || e.code == 429)
+                if (!transient || owner != keyTrackers) throw e
+            }
+            kotlinx.coroutines.delay(wait)
+            if (owner != keyTrackers) error("The profile changed.")
+        }
+        return block()
+    }
+
+    /** AniList and MyAnimeList: a planned (or unlisted) anime becomes Watching once it has played a while (markAnimeWatching). */
+    fun markAnimeWatching(kitsuId: String) {
+        val trackers = _trackers.value
+        val settings = _settings.value
+        val anilist = trackers.anilist?.takeIf { it.accessToken != null }
+        if (settings.anilistAutoSync && anilist != null) scope.launch { runCatching { AniList.markWatching(anilist, kitsuId) } }
+        if (settings.malAutoSync && trackers.mal?.accessToken != null) scope.launch {
+            runCatching { withMal { Mal.markWatching(it, "kitsu:$kitsuId") } }
         }
     }
 
@@ -488,10 +641,11 @@ class Repository(private val context: Context) {
         val trackers = _trackers.value
         val settings = _settings.value
         // "Rewatched on AniList", as Harbor's sync toast words a counted rewatch.
-        fun emit(service: String, result: TrackerSync?) = when (result) {
+        fun emit(service: String, result: Result<TrackerSync?>) = when (result.getOrNull()) {
             TrackerSync.Synced -> syncEvents.tryEmit("$service · Episode $episode synced")
             TrackerSync.Rewatched -> syncEvents.tryEmit("Rewatched on $service · Episode $episode")
-            null -> false
+            // As PC's sync indicator: a write that never reached the tracker says so.
+            null -> result.isFailure && profile == keyTrackers && syncEvents.tryEmit("$service · Episode $episode not synced")
         }
         // "Validate tracker scrobble targets": the online id map must agree with the offline database.
         suspend fun agrees(scheme: String): Boolean {
@@ -504,15 +658,13 @@ class Repository(private val context: Context) {
         }
         if (settings.anilistAutoSync) trackers.anilist?.takeIf { it.accessToken != null }?.let { auth ->
             val guard = rewatchGuard("anilist")
-            scope.launch { if (agrees("anilist")) emit("AniList", runCatching { AniList.markWatched(auth, kitsuId, episode, settings.anilistCountRewatches, guard) }.getOrNull()) }
+            scope.launch { if (agrees("anilist")) emit("AniList", runCatching { retryingNetwork(profile) { AniList.markWatched(auth, kitsuId, episode, settings.anilistCountRewatches, guard) } }) }
         }
-        if (settings.malAutoSync) trackers.mal?.takeIf { it.accessToken != null }?.let { auth ->
+        if (settings.malAutoSync && trackers.mal?.accessToken != null) {
             val guard = rewatchGuard("mal")
             scope.launch {
                 if (!agrees("mal")) return@launch
-                val fresh = runCatching { Mal.fresh(auth) }.getOrDefault(auth)
-                if (fresh != auth && profile == keyTrackers && _trackers.value.mal == auth) updateTrackers { it.copy(mal = fresh) }
-                emit("MyAnimeList", runCatching { Mal.markWatched(fresh, "kitsu:$kitsuId", episode, settings.malCountRewatches, guard) }.getOrNull())
+                emit("MyAnimeList", runCatching { retryingNetwork(profile) { withMal { Mal.markWatched(it, "kitsu:$kitsuId", episode, settings.malCountRewatches, guard) } } })
             }
         }
     }
@@ -1005,11 +1157,11 @@ class Repository(private val context: Context) {
     /** Your rating out of 10 (null removes it), sent to Trakt and Simkl when they're connected. */
     fun rate(meta: Meta, rating: Int?) {
         editShelves { s -> s.copy(ratings = if (rating == null) s.ratings - meta.id else s.ratings + (meta.id to rating)) }
-        val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return
+        val id = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: Regex("^tmdb:(?:movie|tv|series):\\d+").find(meta.id)?.value ?: return
         val trackers = _trackers.value
         scope.launch {
-            trackers.trakt?.takeIf { it.accessToken != null }?.let { runCatching { Trakt.rate(it, imdb, meta.type, rating) } }
-            trackers.simkl?.takeIf { it.accessToken != null }?.let { runCatching { Simkl.rate(it, imdb, meta.type, rating) } }
+            if (trackers.trakt?.accessToken != null) runCatching { withTrakt { Trakt.rate(it, id, meta.type, rating) } }
+            if (trackers.simkl?.accessToken != null) runCatching { withSimkl { Simkl.rate(it, id, meta.type, rating) } }
         }
     }
 
@@ -1017,6 +1169,24 @@ class Repository(private val context: Context) {
     fun setWatched(ids: List<String>, on: Boolean) {
         editShelves { s -> s.copy(watched = if (on) s.watched + ids else s.watched - ids.toSet()) }
         if (on) refractEpisodes(ids)
+    }
+
+    /**
+     * "Mark as watched" on episodes or a whole season, by hand: kept here, and (as PC's
+     * use-mark-season.ts) sent to Simkl's history and PublicMetaDB's, season by season.
+     */
+    fun markEpisodesWatched(meta: Meta, videos: List<Video>, on: Boolean) {
+        setWatched(videos.map { it.id }, on)
+        val episodes = videos.filter { it.episode != null && it.season != null }
+        if (episodes.isEmpty()) return
+        accounts.markEpisodesWatched(meta, episodes.map { it.season!! to it.episode!! }, on)
+        if (_trackers.value.simkl?.accessToken == null) return
+        val ids = Scrobble.of(meta.id, meta.type, meta.id, null, null)?.let { TrackerPolicy.animeIds(it) ?: TrackerPolicy.traktIds(it) } ?: return
+        scope.launch {
+            episodes.groupBy({ it.season!! }, { it.episode!! }).forEach { (season, numbers) ->
+                runCatching { withSimkl { Simkl.markEpisodes(it, ids, season, numbers, on) } }
+            }
+        }
     }
 
     /** Sends episodes ("tt…:season:episode") to Refract, grouped by show. Native anime numbering is left out. */
@@ -1055,11 +1225,11 @@ class Repository(private val context: Context) {
         editShelves { s -> s.copy(watched = if (on) s.watched + meta.id else s.watched - meta.id) }
         accounts.markWatched(meta, on)
         if (on && meta.type == "movie") refract.enqueue(meta.id, movie = true)
-        val imdb = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: return
+        val id = meta.id.substringBefore(':').takeIf { it.startsWith("tt") } ?: Regex("^tmdb:(?:movie|tv|series):\\d+").find(meta.id)?.value ?: return
         val trackers = _trackers.value
         scope.launch {
-            trackers.trakt?.takeIf { it.accessToken != null }?.let { runCatching { Trakt.history(it, imdb, meta.type, on) } }
-            trackers.simkl?.takeIf { it.accessToken != null }?.let { runCatching { Simkl.history(it, imdb, meta.type, on) } }
+            if (trackers.trakt?.accessToken != null) runCatching { withTrakt { Trakt.history(it, id, meta.type, on) } }
+            if (trackers.simkl?.accessToken != null) runCatching { withSimkl { Simkl.history(it, id, meta.type, on) } }
         }
     }
 
