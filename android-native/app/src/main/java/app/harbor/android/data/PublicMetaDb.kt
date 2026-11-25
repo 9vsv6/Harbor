@@ -75,20 +75,24 @@ object PublicMetaDb {
             "DELETE" -> if (payload != null) builder.delete(payload) else builder.delete()
             else -> builder.get()
         }
-        // 429 and 5xx get a short backoff and up to three retries (client.ts).
+        // 429 and 5xx wait what PMDB's Retry-After says (else a short backoff), up to three retries (client.ts).
         var attempt = 0
         var result: String? = null
         while (result == null) {
             try {
                 result = Net.call(builder.build())
             } catch (e: Net.HttpError) {
+                if (e.code == 401) onUnauthorized?.invoke(session)
                 if (e.code !in setOf(429, 500, 502, 503) || attempt >= 3) throw ApiError(e.code, e.body)
-                kotlinx.coroutines.delay(minOf(1000L shl attempt, 8000L))
+                kotlinx.coroutines.delay(TrackerPolicy.pmdbRetryDelayMs(e.retryAfter, attempt))
                 attempt++
             }
         }
         result
     }
+
+    /** Told when PMDB refuses a key (401): the key is invalid or revoked, so the connection ends. */
+    @Volatile var onUnauthorized: ((PmdbSession) -> Unit)? = null
 
     private fun parse(text: String): JsonElement? = text.takeIf { it.isNotBlank() }?.let { runCatching { Net.json.parseToJsonElement(it) }.getOrNull() }
     private fun JsonObject.int(key: String) = (this[key] as? JsonPrimitive)?.intOrNull
@@ -380,6 +384,15 @@ object PublicMetaDb {
             runCatching { markWatched(session, target) }
             findResumeId(session, target)?.let { runCatching { request(session, "/api/external/resume/${enc(it)}", "DELETE") } }
         }
+    }
+
+    /**
+     * The title reached 90% (scrobble.ts syncPmdbPlayback): marked watched, then its resume point
+     * dropped. Throws when the watched mark didn't go through, so the finish is sent again.
+     */
+    suspend fun complete(session: PmdbSession, target: PmdbTarget) {
+        markWatched(session, target)
+        findResumeId(session, target)?.let { id -> runCatching { request(session, "/api/external/resume/${enc(id)}", "DELETE") } }
     }
 
     private suspend fun findResumeId(session: PmdbSession, target: PmdbTarget): String? {

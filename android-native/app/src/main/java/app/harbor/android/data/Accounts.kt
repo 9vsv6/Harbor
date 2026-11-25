@@ -317,6 +317,11 @@ class Accounts(private val repository: Repository) {
         save(keyPmdb, PmdbSession.serializer(), next)
     }
 
+    init {
+        // PublicMetaDB refusing the key (401) ends the connection, as PC's client does; a key has no renewal.
+        PublicMetaDb.onUnauthorized = { refused -> if (_pmdb.value?.apiKey == refused.apiKey) pmdbDisconnect() }
+    }
+
     fun pmdbDisconnect() {
         _pmdb.value = null
         save(keyPmdb, PmdbSession.serializer(), null)
@@ -339,37 +344,74 @@ class Accounts(private val repository: Repository) {
         if (_pmdb.value == s) _pmdbCw.value = cw
     }
 
-    /** Videos whose finish was already sent to PMDB/Nuvio in this viewing. */
+    /**
+     * Finishes confirmed by PMDB or Nuvio in this viewing, per profile and provider, and the ones
+     * still being sent. A finish is marked only once it went through, so one that failed offline
+     * is sent again by the next save; going back below 90% re-arms it.
+     */
     private val finishSent = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val finishInFlight = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val lastPush = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Sends one provider's finish unless it was confirmed already or is on its way. */
+    private fun sendFinish(key: String, send: suspend () -> Unit) {
+        if (key in finishSent || !finishInFlight.add(key)) return
+        scope.launch {
+            try {
+                runCatching { send() }.onSuccess { finishSent += key }
+            } finally {
+                finishInFlight -= key
+            }
+        }
+    }
 
     /**
      * A resume point saved on this device: sent on to PMDB (when scrobbling is on) and to the
-     * Nuvio profile (in Nuvio mode). Pauses close together are sent once a minute at most.
+     * Nuvio profile (in Nuvio mode). Pauses close together are sent once a minute at most. At 90%
+     * the title is complete: PMDB marks it watched and drops its resume point (scrobble.ts).
      */
     fun playbackSaved(videoId: String, positionMs: Long, durationMs: Long, meta: Meta?, video: Video?) {
         val now = System.currentTimeMillis()
-        val finished = durationMs > 0 && positionMs >= durationMs * 0.9
-        // The finish goes once per viewing: every later pause or sync past 90% used to send it
-        // again, and PMDB marked the episode watched each time. Going back below 90% re-arms it.
-        if (finished && !finishSent.add(videoId)) return
-        if (!finished) finishSent.remove(videoId)
-        if (!finished && now - (lastPush[videoId] ?: 0) < 60_000) return
-        lastPush[videoId] = now
+        val finished = TrackerPolicy.pmdbComplete(positionMs, durationMs)
+        val owner = repository.profileKey("playback")
         val metaId = meta?.id ?: videoId.substringBefore(':')
         val type = meta?.type ?: if (video?.season != null) "series" else "movie"
         val season = video?.season
         val episode = video?.episode
-        _pmdb.value?.takeIf { repository.settings.value.pmdbScrobble }?.let { s ->
-            scope.launch {
+        if (!finished) {
+            finishSent.removeAll(setOf("$owner|pmdb|$videoId", "$owner|nuvio|$videoId"))
+            if (now - (lastPush["$owner|$videoId"] ?: 0) < 60_000) return
+            lastPush["$owner|$videoId"] = now
+        }
+        _pmdb.value?.takeIf { repository.settings.value.pmdbScrobble && TrackerPolicy.pmdbSaves(positionMs, durationMs) }?.let { s ->
+            if (finished) sendFinish("$owner|pmdb|$videoId") {
+                val target = PublicMetaDb.target(s, metaId, type, season, episode) ?: return@sendFinish
+                PublicMetaDb.complete(s, target)
+                refreshPmdb()
+            } else scope.launch {
                 val target = PublicMetaDb.target(s, metaId, type, season, episode) ?: return@launch
                 runCatching { PublicMetaDb.saveResume(s, target, positionMs, durationMs) }
-                if (finished) refreshPmdb()
             }
         }
-        if (nuvioActive) scope.launch {
-            val s = nuvioSession() ?: return@launch
-            runCatching { Nuvio.pushProgress(s, _nuvioSlot.value, _shared.value.nuvioClientId, metaId, season, episode, positionMs, durationMs) }
+        if (nuvioActive) {
+            val push: suspend () -> Unit = {
+                val s = nuvioSession() ?: error("Nuvio is signed out.")
+                Nuvio.pushProgress(s, _nuvioSlot.value, _shared.value.nuvioClientId, metaId, season, episode, positionMs, durationMs)
+            }
+            if (finished) sendFinish("$owner|nuvio|$videoId", push) else scope.launch { runCatching { push() } }
+        }
+    }
+
+    /** "Mark as watched" on episodes, mirrored to PMDB's history one episode at a time (use-mark-season.ts). */
+    fun markEpisodesWatched(meta: Meta, episodes: List<Pair<Int, Int>>, on: Boolean) {
+        val s = _pmdb.value ?: return
+        scope.launch {
+            for ((season, episode) in episodes) {
+                val target = PublicMetaDb.target(s, meta.id, "series", season, episode) ?: return@launch
+                runCatching { if (on) PublicMetaDb.markWatched(s, target) else PublicMetaDb.unmarkWatched(s, target) }
+                if (_pmdb.value != s) return@launch
+            }
+            runCatching { PublicMetaDb.watchedIds(s) }.getOrNull()?.let { if (_pmdb.value == s) _pmdbWatched.value = it }
         }
     }
 
