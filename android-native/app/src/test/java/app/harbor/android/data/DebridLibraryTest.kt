@@ -242,4 +242,28 @@ class DebridLibraryTest {
             assertEquals(2, cache.get("two"))
         } finally { scope.cancel() }
     }
+
+    @Test fun aLongerTitleIsAnotherShowNotAMatch() {
+        val office = DebridLibrary.Query("series", "The Office", 2005, season = 1, episode = 1)
+        assertNull(match(office, "library", "The.Office.Australia.S01E01.1080p.mkv"))
+        assertNull(match(office, "The.Office.Australia.S01", "The.Office.Australia.S01E01.mkv"))
+        assertNull(match(office, "The.Office.Australia.S01", "S01E01.mkv", "S01E02.mkv"))
+        assertNotNull(match(office, "library", "The.Office.S01E01.1080p.mkv"))
+        assertNull(match(movie, "library", "The.Movie.Returns.2024.mkv"))
+        assertNull(match(DebridLibrary.Query("movie", "The Movie Returns", 2024), "library", "The.Movie.2024.mkv"))
+    }
+
+    @Test fun seriesYearInTheNameMustBeCompatible() {
+        val office = DebridLibrary.Query("series", "The Office", 2005, season = 1, episode = 1)
+        assertNull(match(office, "library", "The.Office.2001.S01E01.mkv"))
+        assertNotNull(match(office, "library", "The.Office.2005.S01E01.mkv"))
+        assertNotNull(match(office.copy(year = null), "library", "The.Office.2001.S01E01.mkv"))
+    }
+
+    @Test fun aliasesMatchExactlyAndAmpersandReadsAsAnd() {
+        val anime = DebridLibrary.Query("series", "Shingeki no Kyojin", season = null, episode = 3, aliases = listOf("Shingeki no Kyojin", "Attack on Titan"))
+        assertNotNull(match(anime, "library", "[Group] Attack on Titan - 03 (1080p).mkv"))
+        assertNull(match(anime, "library", "[Group] Attack on Titan Junior High - 03 (1080p).mkv"))
+        assertNotNull(match(DebridLibrary.Query("series", "Law & Order", season = 1, episode = 2), "library", "Law.and.Order.S01E02.mkv"))
+    }
 }

@@ -18,7 +18,8 @@ internal data class LibraryFile(val id: String, val name: String, val size: Long
 internal data class LibraryEntry(val id: String, val name: String, val files: List<LibraryFile> = emptyList(), val hash: String? = null, val kind: String = "torrents")
 
 internal object DebridLibrary {
-    data class Query(val type: String, val title: String, val year: Int? = null, val season: Int? = null, val episode: Int? = null)
+    /** [aliases]: other names the title is known by (an anime's romaji and English titles), matched exactly like [title]. */
+    data class Query(val type: String, val title: String, val year: Int? = null, val season: Int? = null, val episode: Int? = null, val aliases: List<String> = emptyList())
     data class Match(val fileIndex: Int, val unverified: Boolean = false)
 
     fun query(type: String, id: String, title: String, year: Int?): Query {
@@ -36,7 +37,8 @@ internal object DebridLibrary {
     private val quality = Regex("""(?i)(?<![a-z0-9])(?:2160p|1080[pi]|720p|480p|576p|1440p|4k|uhd|web[ ._-]?(?:dl|rip)|blu[ ._-]?ray|b[dr]rip|hdtv|remux|hdr10?\+?|dovi|dv|hevc|x26[45]|h[ .]?26[45]|av1|aac|dts|ddp?|ac3|10bit|complete|batch)(?![a-z0-9])""")
     private val extra = Regex("""(?i)(?:^|[^a-z0-9])(?:ncop|nced|creditless|opening|ending|preview|trailer|extra|special|sample|menu|bonus|interview|making|scan|booklet|ost)(?:[^a-z0-9]|$)""")
     private val video = Regex("""(?i)\.(mkv|mp4|avi|mov|m4v|webm|ts|flv|wmv|m2ts|mpg|mpeg|ogv|3gp)(?:[?#]|$)""")
-    private data class Parsed(val title: String, val year: Int?, val season: Int?, val episode: Int?)
+    /** [titleYear]: a year before any season or episode code, so part of the name ("The.Show.2019.S01E01"). */
+    private data class Parsed(val title: String, val year: Int?, val season: Int?, val episode: Int?, val titleYear: Int? = null)
 
     private fun parse(text: String): Parsed {
         val name = text.substringAfterLast('/').substringAfterLast('\\').replace(Regex("""^\[[^]]+]\s*"""), "")
@@ -48,30 +50,37 @@ internal object DebridLibrary {
         val year = yearCode.findAll(name).firstOrNull { name.substring(0, it.range.first).any(Char::isLetterOrDigit) }
         val end = listOfNotNull(code?.range?.first, seasonCode.find(name)?.range?.first, episodeOnly.find(name)?.range?.first, absolute?.range?.first, year?.range?.first, quality.find(name)?.range?.first).minOrNull()
         val title = (end?.let { name.take(it) } ?: name.replace(Regex("""\.[a-z0-9]{2,4}$""", RegexOption.IGNORE_CASE), "")).trim(' ', '.', '-', '_', '(', '[', ')', ']')
-        return Parsed(title, year?.value?.toIntOrNull(), season, episode)
+        val codes = listOfNotNull(code?.range?.first, seasonCode.find(name)?.range?.first, episodeOnly.find(name)?.range?.first, absolute?.range?.first)
+        val titleYear = year?.takeIf { y -> codes.all { y.range.first < it } }?.value?.toIntOrNull()
+        return Parsed(title, year?.value?.toIntOrNull(), season, episode, titleYear)
     }
 
-    private fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT), Normalizer.Form.NFKD)
+    private fun normalize(text: String): String = Normalizer.normalize(text.lowercase(Locale.ROOT).replace("&", "and"), Normalizer.Form.NFKD)
         .replace(Regex("""[\p{M}\s.\-_()\[\]:;,!?'"‘’“”–—]+"""), "")
 
-    private fun sameTitle(a: String, b: String): Boolean {
-        val left = normalize(a)
-        val right = normalize(b)
-        return left.length >= 2 && right.length >= 2 && (left.contains(right) || right.contains(left))
+    /**
+     * The whole name must match the title or one of its aliases once case, accents and separators
+     * are set aside: "The Office Australia" is another show than "The Office", not a longer name for it.
+     */
+    private fun sameTitle(query: Query, candidate: String): Boolean {
+        val right = normalize(candidate)
+        return right.length >= 2 && (listOf(query.title) + query.aliases).any { normalize(it).let { left -> left.length >= 2 && left == right } }
     }
 
     fun titleMatches(entry: LibraryEntry, query: Query): Boolean =
-        (listOf(entry.name) + entry.files.map { it.name }).any { sameTitle(query.title, parse(it).title) }
+        (listOf(entry.name) + entry.files.map { it.name }).any { sameTitle(query, parse(it).title) }
 
     private fun check(text: String, query: Query): Boolean {
         val parsed = parse(text)
         if (!compatible(parsed, query)) return false
         if (query.type != "movie" && (query.season != null || query.episode != null) && parsed.season == null && parsed.episode == null) return false
-        return sameTitle(query.title, parsed.title)
+        return sameTitle(query, parsed.title)
     }
 
     private fun compatible(parsed: Parsed, query: Query): Boolean {
         if (query.type == "movie" && query.year != null && parsed.year != null && kotlin.math.abs(query.year - parsed.year) > 1) return false
+        // A series named with its year (The.Office.2001 vs The.Office.2005) must be the one asked for.
+        if (query.type != "movie" && query.year != null && parsed.titleYear != null && kotlin.math.abs(query.year - parsed.titleYear) > 1) return false
         if (query.season != null && parsed.season != null && query.season != parsed.season) return false
         if (query.episode != null && parsed.episode != null && query.episode != parsed.episode) return false
         return true
@@ -82,7 +91,7 @@ internal object DebridLibrary {
         val vids = entry.files.withIndex().filter { video.containsMatchIn(it.value.name) }
         vids.firstOrNull { check(it.value.name, query) }?.let { return Match(it.index) }
         val parent = parse(entry.name)
-        if (sameTitle(query.title, parent.title) && compatible(parent, query) && query.type != "movie") {
+        if (sameTitle(query, parent.title) && compatible(parent, query) && query.type != "movie") {
             vids.firstOrNull {
                 val p = parse(it.value.name)
                 p.episode != null && compatible(p, query)

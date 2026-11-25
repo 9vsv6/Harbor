@@ -59,7 +59,7 @@ object Playback {
                 val name = title.await()
                 val query = (name?.name ?: anime?.titles?.firstOrNull())?.let {
                     DebridLibrary.query(type, id, it, name?.year).let { q ->
-                        if (anime == null) q else q.copy(season = anime.season, episode = anime.episode)
+                        if (anime == null) q else q.copy(season = anime.season, episode = anime.episode, aliases = anime.titles)
                     }
                 }
                 if (accounts.isEmpty() || query == null) emptyList()
